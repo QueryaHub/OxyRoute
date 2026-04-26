@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -14,6 +14,25 @@ use crate::response;
 use crate::schema::json_to_py;
 use crate::state::{map_method_router, methods_matching_path, AppState};
 use crate::token::{build_decoding_key, extract_bearer, extract_cookie_value};
+
+type RouteCallSnapshot = (
+    Py<PyAny>,
+    bool,
+    bool,
+    Option<String>,
+    Vec<jsonwebtoken::Algorithm>,
+    Option<String>,
+    Option<String>,
+    u64,
+    Option<String>,
+    bool,
+    Vec<String>,
+    Vec<Py<PyAny>>,
+    Vec<bool>,
+    Vec<bool>,
+    HashSet<String>,
+    bool,
+);
 
 fn oxyroute_debug() -> bool {
     std::env::var("OXYROUTE_DEBUG")
@@ -96,10 +115,10 @@ pub async fn run_rsgi(
                 .await;
         }
     }
-    let maybe_mw = {
+    let maybe_mw = Python::with_gil(|_py| {
         let st = state.read();
         st.middleware.clone()
-    };
+    });
     if let Some(mw) = maybe_mw {
         let out: Py<PyAny> = match Python::with_gil(|py| {
             let f = mw.bind(py);
@@ -125,7 +144,7 @@ pub async fn run_rsgi(
     let read_fut = Python::with_gil(|py| {
         let p = protocol.bind(py);
         let aw: Bound<PyAny> = p.call0()?;
-        pyo3_asyncio_0_21::tokio::into_future(aw)
+        pyo3_async_runtimes::tokio::into_future(aw)
     })?;
     let body_obj: PyObject = read_fut.await?;
     let body_bytes: Vec<u8> = Python::with_gil(|py| -> PyResult<Vec<u8>> {
@@ -195,13 +214,13 @@ pub async fn run_rsgi(
         dep_wants_request,
         handler_param_names,
         handler_varkw,
-    ) = {
+    ) = Python::with_gil(|_py| -> PyResult<RouteCallSnapshot> {
         let st = state.read();
         let e = st
             .routes
             .get(route_idx)
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("route index"))?;
-        (
+        Ok((
             e.handler.clone(),
             e.is_async,
             e.require_jwt,
@@ -218,8 +237,8 @@ pub async fn run_rsgi(
             e.dep_wants_request.clone(),
             e.handler_param_names.clone(),
             e.handler_varkw,
-        )
-    };
+        ))
+    })?;
     let mut claims_val: Option<JsonValue> = None;
     if require_jwt {
         let key = match jwt_secret {
@@ -362,7 +381,7 @@ pub async fn run_rsgi(
     for (i, fact) in dep_factories.iter().enumerate() {
         if dep_is_async.get(i) == Some(&true) {
             let r = match Python::with_gil(|py| -> PyResult<PyObject> {
-                let kw = PyDict::new_bound(py);
+                let kw = PyDict::new(py);
                 if dep_wants_request.get(i) == Some(&true) {
                     if let Some(ref rc) = request_ctx {
                         kw.set_item("request", rc.bind(py))?;
@@ -385,7 +404,7 @@ pub async fn run_rsgi(
             };
             let fut = match Python::with_gil(|py| {
                 let b = r.bind(py).clone();
-                pyo3_asyncio_0_21::tokio::into_future(b)
+                pyo3_async_runtimes::tokio::into_future(b)
             }) {
                 Ok(f) => f,
                 Err(e) => {
@@ -401,7 +420,7 @@ pub async fn run_rsgi(
             dep_out.push(o);
         } else {
             let o = match Python::with_gil(|py| -> PyResult<PyObject> {
-                let kw = PyDict::new_bound(py);
+                let kw = PyDict::new(py);
                 if dep_wants_request.get(i) == Some(&true) {
                     if let Some(ref rc) = request_ctx {
                         kw.set_item("request", rc.bind(py))?;
@@ -426,13 +445,13 @@ pub async fn run_rsgi(
         }
     }
     let (res, run_async) = match Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
-        let kwargs = PyDict::new_bound(py);
+        let kwargs = PyDict::new(py);
         for (k, v) in param_map {
             let vpy = value_for_path_param(py, &v);
             kwargs.set_item(k, vpy)?;
         }
         if !query_map.is_empty() {
-            let qd = PyDict::new_bound(py);
+            let qd = PyDict::new(py);
             for (k, v) in &query_map {
                 qd.set_item(k, v.as_str())?;
             }
@@ -454,7 +473,7 @@ pub async fn run_rsgi(
             kwargs.set_item("json", pyv)?;
         }
         if !body_bytes.is_empty() && body_json.is_none() {
-            kwargs.set_item("body", PyBytes::new_bound(py, &body_bytes))?;
+            kwargs.set_item("body", PyBytes::new(py, &body_bytes))?;
         }
         let res = handler.bind(py).call((), Some(&kwargs))?.unbind();
         Ok((res, is_async))
@@ -467,7 +486,7 @@ pub async fn run_rsgi(
     let handler_out: PyObject = if run_async {
         let fut = match Python::with_gil(|py| {
             let b = res.bind(py).clone();
-            pyo3_asyncio_0_21::tokio::into_future(b)
+            pyo3_async_runtimes::tokio::into_future(b)
         }) {
             Ok(f) => f,
             Err(e) => {
@@ -548,7 +567,7 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
             }
         }
     }
-    let jmod = py.import_bound("json")?;
+    let jmod = py.import("json")?;
     let dumped = jmod.call_method1("dumps", (b.clone().unbind(),))?;
     let s: String = dumped.extract()?;
     Ok(HandlerMap::Simple {
@@ -682,7 +701,7 @@ fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<
     if let Ok(buf) = b.extract::<Vec<u8>>() {
         return Ok((buf, "application/octet-stream".to_string()));
     }
-    let jmod = py.import_bound("json")?;
+    let jmod = py.import("json")?;
     let dumped = jmod.call_method1("dumps", (b.clone().unbind(),))?;
     let s: String = dumped.extract()?;
     Ok((
