@@ -15,7 +15,6 @@ This file tracks **priority tiers** for items in [bodies/](bodies/). The **next 
 |---|------|-----------|
 | 8 | [08.md](bodies/08.md) | **JWK / JWKS** — [GitHub #8](https://github.com/QueryaHub/OxyRoute/issues/8). |
 | 9 | [09.md](bodies/09.md) | **OpenAPI depth** (optional) — `$ref` / `$defs`. |
-| 24 | [24.md](bodies/24.md) | **CORS helper** — [GitHub #49](https://github.com/QueryaHub/OxyRoute/issues/49). |
 | 28 | [28.md](bodies/28.md) | **CSRF** (optional) — [GitHub #53](https://github.com/QueryaHub/OxyRoute/issues/53). |
 | 29 | [29.md](bodies/29.md) | **Security headers preset** — [GitHub #54](https://github.com/QueryaHub/OxyRoute/issues/54). |
 
@@ -36,11 +35,12 @@ This file tracks **priority tiers** for items in [bodies/](bodies/). The **next 
 - **Form bodies:** 22 / [#47](https://github.com/QueryaHub/OxyRoute/issues/47) — `read_form_body`, `form` / `files` kwargs, `docs/handlers.md`  
 - **HTTPException:** 23 / [#48](https://github.com/QueryaHub/OxyRoute/issues/48) — `oxyroute.exceptions`, `docs/handlers.md` (per-type `register_exception_handler` not in scope)  
 - **Sub-routers:** 21 / [#46](https://github.com/QueryaHub/OxyRoute/issues/46) — `APIRouter`, `include_router`, `docs/routing.md`  
+- **CORS:** 24 / [#49](https://github.com/QueryaHub/OxyRoute/issues/49) — `CORSConfig`, `apply_cors`, `set_cors`, `docs/cors.md`  
 
 ## Roadmap phasing (summary)
 
 1. **P0:** 4, 17; **18** / **#47 (form)** done (order flexible).  
-2. **P1:** 8, 49, 53, 54; **#48** / **#46** done; 9 as polish.  
+2. **P1:** 8, 53, 54; **#48** / **#46** / **#49 (CORS)** done; 9 as polish.  
 3. **Research:** 50, 51, 52 — as capacity allows.  
 
 [← Back to README](README.md)

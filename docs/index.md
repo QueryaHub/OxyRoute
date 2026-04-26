@@ -41,6 +41,7 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 | [RSGI and Granian](rsgi.md) | Why RSGI, `__rsgi__`, lifespan hooks, spec link |
 | [Routing](routing.md) | Path patterns, methods, 404s |
 | [Handlers](handlers.md) | Injected parameters, return types, JSON encoding |
+| [CORS](cors.md) | `CORSConfig`, preflight, `apply_cors` |
 | [JWT](jwt.md) | `require_jwt`, HS* / RSA / EC PEM, `decode_jwt_hs` (HS* tests) |
 | [Dependencies](dependencies.md) | `Depends`, `dependencies=[...]`, `freeze` |
 | [OpenAPI](openapi.md) | `openapi.json` route, title, `openapi_json()` |

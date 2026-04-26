@@ -23,9 +23,9 @@ alwaysApply: true
 4. **Implement** in the branch (Rust/Python/docs as needed).
 
 5. **Validate before commit/push** (match CI in [`.github/workflows/ci.yml`](.github/workflows/ci.yml))
-   - Python: `uv run ruff check oxyroute tests examples` and `uv run ruff format --check oxyroute tests examples` (or format then check).
-   - Rust: `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings`
-   - Tests: `uv run pytest` (or the same isolated pattern as in `docs/development.md` if testing the installed wheel).
+   - **One-shot (recommended):** `make test` from the repo root — runs `uv` sync, ruff, `cargo fmt`/`clippy`, `maturin develop --uv`, and pytest in a temp directory (see [`Makefile`](Makefile)).
+   - **By hand (same as CI / `make test`):** `uv run ruff check` / `ruff format --check` on `oxyroute`, `tests`, `examples`; `cargo fmt --all -- --check`; `cargo clippy --all-targets -- -D warnings`; then build + test as in CI.
+   - **Project owner:** runs `make test` (or equivalent) before push themselves. If something fails locally or in CI, they will report it — then fix the reported problem; do not assume a green run on the agent side unless you actually executed the checks in this environment.
 
 6. **Atomic commits** — one logical change per commit (e.g. `feat:`, `fix:`, `test:`, `docs:`). **Do not** mix product code and [`.github/ISSUE_BACKLOG/`](.github/ISSUE_BACKLOG/) in the same commit; backlog updates: separate `docs:` / `chore:` commit if needed.
 
