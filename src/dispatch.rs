@@ -70,7 +70,8 @@ pub async fn run_rsgi(
                 qs,
             ))
         })?;
-    if method == "GET" && path == "/openapi.json" {
+    let is_head = method == "HEAD";
+    if (method == "GET" || method == "HEAD") && path == "/openapi.json" {
         let (inc, doc) = {
             let st = state.lock().map_err(crate::lock_err)?;
             if !st.include_openapi {
@@ -81,6 +82,15 @@ pub async fn run_rsgi(
             }
         };
         if inc {
+            if is_head {
+                return response::send_head_simple(
+                    &protocol,
+                    200,
+                    doc.len(),
+                    "application/json; charset=utf-8",
+                )
+                .await;
+            }
             return response::send_str(&protocol, 200, &doc, "application/json; charset=utf-8")
                 .await;
         }
@@ -409,17 +419,32 @@ pub async fn run_rsgi(
             return send_internal_error(&protocol, &method, &path, e).await;
         }
     };
-    match mapped {
-        HandlerMap::WithHeaders {
-            status,
-            body,
-            headers,
-        } => response::send_with_headers(&protocol, status, &body, headers).await,
-        HandlerMap::Simple {
-            status,
-            body,
-            content_type,
-        } => response::send_bytes(&protocol, status, &body, &content_type).await,
+    if is_head {
+        match mapped {
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            } => response::send_head_with_headers(&protocol, status, &body, headers).await,
+            HandlerMap::Simple {
+                status,
+                body,
+                content_type,
+            } => response::send_head_simple(&protocol, status, body.len(), &content_type).await,
+        }
+    } else {
+        match mapped {
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            } => response::send_with_headers(&protocol, status, &body, headers).await,
+            HandlerMap::Simple {
+                status,
+                body,
+                content_type,
+            } => response::send_bytes(&protocol, status, &body, &content_type).await,
+        }
     }
 }
 
