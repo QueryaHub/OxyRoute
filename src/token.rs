@@ -1,7 +1,7 @@
 //! JWT: Bearer extraction and HS* verification (aligned with oxyjwt validation defaults where applicable).
 
 use jsonwebtoken::errors::ErrorKind;
-use jsonwebtoken::{DecodingKey, Validation, decode};
+use jsonwebtoken::{decode, DecodingKey, Validation};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use serde_json::Value as JsonValue;
@@ -61,17 +61,15 @@ pub fn decode_jwt_hs(
     if v.is_empty() {
         v.push(jsonwebtoken::Algorithm::HS256);
     }
-    let claims = decode_hs_claims(token, key, &v)
-        .map_err(|e| {
-            if matches!(e.kind(), ErrorKind::ExpiredSignature) {
-                pyo3::exceptions::PyValueError::new_err("expired")
-            } else {
-                pyo3::exceptions::PyValueError::new_err(e.to_string())
-            }
-        })?;
-    let s = serde_json::to_string(&claims).map_err(|e| {
-        pyo3::exceptions::PyValueError::new_err(e.to_string())
+    let claims = decode_hs_claims(token, key, &v).map_err(|e| {
+        if matches!(e.kind(), ErrorKind::ExpiredSignature) {
+            pyo3::exceptions::PyValueError::new_err("expired")
+        } else {
+            pyo3::exceptions::PyValueError::new_err(e.to_string())
+        }
     })?;
+    let s = serde_json::to_string(&claims)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let j = py.import_bound("json")?;
     Ok(j.call_method1("loads", (s,))?.unbind())
 }

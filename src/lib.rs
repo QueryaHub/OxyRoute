@@ -16,6 +16,8 @@ mod token;
 use dispatch::run_rsgi;
 use state::AppState;
 
+type ParsedDependencies = (Vec<String>, Vec<Py<PyAny>>, Vec<bool>, Vec<bool>);
+
 pub(crate) fn lock_err<T>(e: std::sync::PoisonError<T>) -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
 }
@@ -55,15 +57,7 @@ fn parse_algorithm(s: &str) -> PyResult<jsonwebtoken::Algorithm> {
     }
 }
 
-fn parse_dependencies(
-    py: Python<'_>,
-    dep_list: &Bound<PyList>,
-) -> PyResult<(
-    Vec<String>,
-    Vec<Py<PyAny>>,
-    Vec<bool>,
-    Vec<bool>,
-)> {
+fn parse_dependencies(py: Python<'_>, dep_list: &Bound<PyList>) -> PyResult<ParsedDependencies> {
     let inspect = py.import_bound("inspect")?;
     let iscoro = inspect.getattr("iscoroutinefunction")?;
     let n = dep_list.len();
@@ -88,7 +82,7 @@ fn parse_dependencies(
         let f: Py<PyAny> = tup.get_item(1)?.unbind();
         let is_a: bool = iscoro.call1((f.clone_ref(py),))?.extract()?;
         let f_b = f.bind(py);
-        let has_req: bool = dependency_wants_request(py, &f_b)?;
+        let has_req: bool = dependency_wants_request(py, f_b)?;
         names.push(name);
         facts.push(f);
         asy.push(is_a);
@@ -164,7 +158,7 @@ impl App {
         jwt_audience: Option<String>,
         jwt_leeway: Option<u64>,
     ) -> PyResult<()> {
-        let st = self.state.lock().map_err(|e| lock_err(e))?;
+        let st = self.state.lock().map_err(lock_err)?;
         if st.frozen {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "app is frozen; no more add_route",
@@ -173,9 +167,7 @@ impl App {
         drop(st);
         let inspect = py.import_bound("inspect")?;
         let f = inspect.getattr("iscoroutinefunction")?;
-        let is_async: bool = f
-            .call1((handler.clone_ref(py),))?
-            .extract()?;
+        let is_async: bool = f.call1((handler.clone_ref(py),))?.extract()?;
         let algs: Vec<jsonwebtoken::Algorithm> = if let Some(list) = algorithms {
             let n = list.len();
             let mut v = Vec::with_capacity(n);
@@ -188,34 +180,32 @@ impl App {
             vec![jsonwebtoken::Algorithm::HS256]
         };
         if require_jwt {
-            let need = algs
-                .iter()
-                .all(|a| {
-                    matches!(
-                        a,
-                        jsonwebtoken::Algorithm::HS256
-                            | jsonwebtoken::Algorithm::HS384
-                            | jsonwebtoken::Algorithm::HS512
-                    )
-                });
+            let need = algs.iter().all(|a| {
+                matches!(
+                    a,
+                    jsonwebtoken::Algorithm::HS256
+                        | jsonwebtoken::Algorithm::HS384
+                        | jsonwebtoken::Algorithm::HS512
+                )
+            });
             if need && jwt_secret.is_none() {
                 return Err(pyo3::exceptions::PyValueError::new_err(
                     "require_jwt with HMAC needs jwt_secret",
                 ));
             }
         }
-        let (dep_names, dep_factories, dep_is_async, dep_wants_request) = if let Some(d) = dependencies
-        {
-            parse_dependencies(py, &d)?
-        } else {
-            (vec![], vec![], vec![], vec![])
-        };
+        let (dep_names, dep_factories, dep_is_async, dep_wants_request) =
+            if let Some(d) = dependencies {
+                parse_dependencies(py, &d)?
+            } else {
+                (vec![], vec![], vec![], vec![])
+            };
         let op_id: String = handler
             .bind(py)
             .getattr(pyo3::intern!(py, "__name__"))?
             .extract()?;
-        let (handler_param_names, handler_varkw) = handler_signature_kinds(py, &handler.bind(py))?;
-        let mut st = self.state.lock().map_err(|e| lock_err(e))?;
+        let (handler_param_names, handler_varkw) = handler_signature_kinds(py, handler.bind(py))?;
+        let mut st = self.state.lock().map_err(lock_err)?;
         let idx = st.routes.len();
         st.routes.push(state::RouteEntry {
             handler,
@@ -235,12 +225,13 @@ impl App {
             handler_varkw,
         });
         {
-            let mut oa = st.openapi.lock().map_err(|e| lock_err(e))?;
+            let mut oa = st.openapi.lock().map_err(lock_err)?;
             App::openapi_add_path(&mut oa, &method, &path, &op_id);
         }
         {
-            let mut m = state::map_method_router(&*st, &method)
-                .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("unsupported HTTP method"))?;
+            let mut m = state::map_method_router(&st, &method).ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err("unsupported HTTP method")
+            })?;
             m.insert(&path, idx)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))?;
         }
@@ -249,20 +240,20 @@ impl App {
 
     /// Lock route registration. Linear dependency list is a valid topological order (DAG of independent roots).
     fn freeze(&self) -> PyResult<()> {
-        let mut st = self.state.lock().map_err(|e| lock_err(e))?;
+        let mut st = self.state.lock().map_err(lock_err)?;
         st.frozen = true;
         Ok(())
     }
 
     fn set_openapi_served(&self, enabled: bool) -> PyResult<()> {
-        let mut st = self.state.lock().map_err(|e| lock_err(e))?;
+        let mut st = self.state.lock().map_err(lock_err)?;
         st.include_openapi = enabled;
         Ok(())
     }
 
     fn set_openapi_title(&self, title: &str) -> PyResult<()> {
-        let st = self.state.lock().map_err(|e| lock_err(e))?;
-        let mut oa = st.openapi.lock().map_err(|e| lock_err(e))?;
+        let st = self.state.lock().map_err(lock_err)?;
+        let mut oa = st.openapi.lock().map_err(lock_err)?;
         if let Some(info) = oa
             .as_object_mut()
             .and_then(|m| m.get_mut("info"))
@@ -282,12 +273,14 @@ impl App {
         let state = this.state.clone();
         let scope_py: Py<PyAny> = scope.as_any().clone().unbind();
         let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move { run_rsgi(state, scope_py, protocol_py).await })
+        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+            run_rsgi(state, scope_py, protocol_py).await
+        })
     }
 
     fn openapi_json(&self) -> PyResult<String> {
-        let st = self.state.lock().map_err(|e| lock_err(e))?;
-        let oa = st.openapi.lock().map_err(|e| lock_err(e))?;
+        let st = self.state.lock().map_err(lock_err)?;
+        let oa = st.openapi.lock().map_err(lock_err)?;
         Ok(oa.to_string())
     }
 }
