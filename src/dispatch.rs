@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{decode, DecodingKey, Validation};
@@ -50,7 +50,7 @@ async fn send_internal_error(
 }
 
 pub async fn run_rsgi(
-    state: Arc<Mutex<AppState>>,
+    state: Arc<RwLock<AppState>>,
     scope: Py<PyAny>,
     protocol: Py<PyAny>,
 ) -> PyResult<PyObject> {
@@ -74,7 +74,7 @@ pub async fn run_rsgi(
     let is_head = method == "HEAD";
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" {
         let (inc, doc) = {
-            let st = state.lock();
+            let st = state.read();
             if !st.include_openapi {
                 (false, String::new())
             } else {
@@ -97,7 +97,7 @@ pub async fn run_rsgi(
         }
     }
     let maybe_mw = {
-        let st = state.lock();
+        let st = state.read();
         st.middleware.clone()
     };
     if let Some(mw) = maybe_mw {
@@ -148,7 +148,7 @@ pub async fn run_rsgi(
             ))
         })?;
     let route_out: Option<(usize, HashMap<String, String>)> = (|| -> PyResult<_> {
-        let st = state.lock();
+        let st = state.read();
         let g = map_method_router(&st, &method)
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("method"))?;
         Ok(g.at(&path).ok().map(|m| {
@@ -163,7 +163,7 @@ pub async fn run_rsgi(
         Some(x) => x,
         None => {
             let m = {
-                let st = state.lock();
+                let st = state.read();
                 methods_matching_path(&st, &path)
             };
             if m.is_empty() {
@@ -196,7 +196,7 @@ pub async fn run_rsgi(
         handler_param_names,
         handler_varkw,
     ) = {
-        let st = state.lock();
+        let st = state.read();
         let e = st
             .routes
             .get(route_idx)

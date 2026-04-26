@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
@@ -101,7 +101,7 @@ fn dependency_wants_request(py: Python<'_>, f: &Bound<'_, PyAny>) -> PyResult<bo
 
 #[pyclass]
 pub struct App {
-    state: Arc<Mutex<AppState>>,
+    state: Arc<RwLock<AppState>>,
 }
 
 impl App {
@@ -155,7 +155,7 @@ impl App {
         let mut s = AppState::new();
         s.include_openapi = include_openapi;
         Self {
-            state: Arc::new(Mutex::new(s)),
+            state: Arc::new(RwLock::new(s)),
         }
     }
 
@@ -181,13 +181,14 @@ impl App {
         jwt_cookie: Option<String>,
         body_schema_json: Option<String>,
     ) -> PyResult<()> {
-        let st = self.state.lock();
-        if st.frozen {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "app is frozen; no more add_route",
-            ));
+        {
+            let st = self.state.read();
+            if st.frozen {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "app is frozen; no more add_route",
+                ));
+            }
         }
-        drop(st);
         let inspect = py.import_bound("inspect")?;
         let f = inspect.getattr("iscoroutinefunction")?;
         let is_async: bool = f.call1((handler.clone_ref(py),))?.extract()?;
@@ -228,7 +229,7 @@ impl App {
             .getattr(pyo3::intern!(py, "__name__"))?
             .extract()?;
         let (handler_param_names, handler_varkw) = handler_signature_kinds(py, handler.bind(py))?;
-        let mut st = self.state.lock();
+        let mut st = self.state.write();
         let idx = st.routes.len();
         st.routes.push(state::RouteEntry {
             handler,
@@ -273,19 +274,19 @@ impl App {
 
     /// Lock route registration. Linear dependency list is a valid topological order (DAG of independent roots).
     fn freeze(&self) -> PyResult<()> {
-        let mut st = self.state.lock();
+        let mut st = self.state.write();
         st.frozen = true;
         Ok(())
     }
 
     fn set_openapi_served(&self, enabled: bool) -> PyResult<()> {
-        let mut st = self.state.lock();
+        let mut st = self.state.write();
         st.include_openapi = enabled;
         Ok(())
     }
 
     fn set_openapi_title(&self, title: &str) -> PyResult<()> {
-        let st = self.state.lock();
+        let st = self.state.read();
         let mut oa = st.openapi.lock();
         if let Some(info) = oa
             .as_object_mut()
@@ -300,7 +301,7 @@ impl App {
     /// Single optional pre-route hook. Return ``None`` to continue; otherwise the return value
     /// is mapped like a route handler (e.g. :class:`oxyroute.Response`, ``dict`` with ``status`` / ``body`` / ``headers``).
     fn set_middleware(&self, handler: Option<Py<PyAny>>) -> PyResult<()> {
-        let mut st = self.state.lock();
+        let mut st = self.state.write();
         st.middleware = handler;
         Ok(())
     }
@@ -320,7 +321,7 @@ impl App {
     }
 
     fn openapi_json(&self) -> PyResult<String> {
-        let st = self.state.lock();
+        let st = self.state.read();
         let oa = st.openapi.lock();
         Ok(oa.to_string())
     }
