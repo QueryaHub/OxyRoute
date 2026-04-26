@@ -21,6 +21,7 @@ base64 = "0.22"
 once_cell = "1.19"
 # RFC 1738 / WHATWG: percent-decode and + as space in application/x-www-form-urlencoded query
 form_urlencoded = "1.2"
+log = "0.4"
 
 [features]
 default = []

@@ -14,6 +14,46 @@ use crate::schema::json_to_py;
 use crate::state::{map_method_router, AppState};
 use crate::token::extract_bearer;
 
+fn oxyroute_debug() -> bool {
+    std::env::var("OXYROUTE_DEBUG")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Map Python `PyErr` to HTTP 500 with a JSON body (no exception text unless `OXYROUTE_DEBUG=1`).
+async fn send_internal_error(
+    protocol: &Py<PyAny>,
+    method: &str,
+    path: &str,
+    err: PyErr,
+) -> PyResult<PyObject> {
+    let detail_opt = if oxyroute_debug() {
+        let d = Python::with_gil(|_py| format!("{err}"));
+        let d = if d.len() > 4000 {
+            format!("{}…", &d[..4000])
+        } else {
+            d
+        };
+        log::error!(target: "oxyroute", "{method} {path} — {d}");
+        Some(d)
+    } else {
+        log::error!(target: "oxyroute", "{method} {path}: internal error (set OXYROUTE_DEBUG=1 for detail)");
+        None
+    };
+    let body = if let Some(d) = detail_opt {
+        serde_json::json!({ "error": "internal server error", "detail": d }).to_string()
+    } else {
+        r#"{"error":"internal server error"}"#.to_string()
+    };
+    response::send_text(
+        protocol,
+        500,
+        &body,
+        "application/json; charset=utf-8",
+    )
+    .await
+}
+
 pub async fn run_rsgi(
     state: Arc<Mutex<AppState>>,
     scope: Py<PyAny>,
@@ -218,23 +258,43 @@ pub async fn run_rsgi(
     let mut dep_out: Vec<PyObject> = Vec::with_capacity(dep_factories.len());
     for (i, fact) in dep_factories.iter().enumerate() {
         if dep_is_async.get(i) == Some(&true) {
-            let r = Python::with_gil(|py| -> PyResult<PyObject> {
+            let r = match Python::with_gil(|py| -> PyResult<PyObject> {
                 Ok(fact.bind(py).call((), None)?.unbind())
-            })?;
-            let fut = Python::with_gil(|py| {
+            }) {
+                Ok(x) => x,
+                Err(e) => {
+                    return send_internal_error(&protocol, &method, &path, e).await;
+                }
+            };
+            let fut = match Python::with_gil(|py| {
                 let b = r.bind(py).clone();
                 pyo3_asyncio_0_21::tokio::into_future(b)
-            })?;
-            let o = fut.await?;
+            }) {
+                Ok(f) => f,
+                Err(e) => {
+                    return send_internal_error(&protocol, &method, &path, e).await;
+                }
+            };
+            let o = match fut.await {
+                Ok(x) => x,
+                Err(e) => {
+                    return send_internal_error(&protocol, &method, &path, e).await;
+                }
+            };
             dep_out.push(o);
         } else {
-            let o = Python::with_gil(|py| -> PyResult<PyObject> {
+            let o = match Python::with_gil(|py| -> PyResult<PyObject> {
                 Ok(fact.bind(py).call((), None)?.unbind())
-            })?;
+            }) {
+                Ok(x) => x,
+                Err(e) => {
+                    return send_internal_error(&protocol, &method, &path, e).await;
+                }
+            };
             dep_out.push(o);
         }
     }
-    let (res, run_async) = Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
+    let (res, run_async) = match Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
         let kwargs = PyDict::new_bound(py);
         for (k, v) in param_map {
             let vpy = value_for_path_param(py, &v);
@@ -268,17 +328,32 @@ pub async fn run_rsgi(
             .call((), Some(&kwargs))?
             .unbind();
         Ok((res, is_async))
-    })?;
+    }) {
+        Ok(x) => x,
+        Err(e) => {
+            return send_internal_error(&protocol, &method, &path, e).await;
+        }
+    };
     let handler_out: PyObject = if run_async {
-        let fut = Python::with_gil(|py| {
+        let fut = match Python::with_gil(|py| {
             let b = res.bind(py).clone();
             pyo3_asyncio_0_21::tokio::into_future(b)
-        })?;
-        fut.await?
+        }) {
+            Ok(f) => f,
+            Err(e) => {
+                return send_internal_error(&protocol, &method, &path, e).await;
+            }
+        };
+        match fut.await {
+            Ok(x) => x,
+            Err(e) => {
+                return send_internal_error(&protocol, &method, &path, e).await;
+            }
+        }
     } else {
         res
     };
-    let (status, bytes, content_type) = Python::with_gil(|py| -> PyResult<(u16, Vec<u8>, String)> {
+    let (status, bytes, content_type) = match Python::with_gil(|py| -> PyResult<(u16, Vec<u8>, String)> {
         let b = handler_out.bind(py);
         if let Ok(s) = b.extract::<String>() {
             return Ok((200, s.into_bytes(), "text/plain; charset=utf-8".to_string()));
@@ -302,6 +377,11 @@ pub async fn run_rsgi(
         let dumped = jmod.call_method1("dumps", (b.clone().unbind(),))?;
         let s: String = dumped.extract()?;
         Ok((200, s.into_bytes(), "application/json; charset=utf-8".to_string()))
-    })?;
+    }) {
+        Ok(x) => x,
+        Err(e) => {
+            return send_internal_error(&protocol, &method, &path, e).await;
+        }
+    };
     response::send_bytes(&protocol, status, &bytes, &content_type).await
 }
