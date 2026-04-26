@@ -25,10 +25,10 @@ fn handler_signature_kinds(
     py: Python<'_>,
     handler: &Bound<'_, PyAny>,
 ) -> PyResult<(HashSet<String>, bool)> {
-    let d = PyDict::new_bound(py);
+    let d = PyDict::new(py);
     d.set_item("f", handler)?;
-    py.run_bound(
-        "import inspect\n_s = inspect.signature(f)\n_p = []\nfor _n, _param in _s.parameters.items():\n    if _param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):\n        _p.append(_n)\n_w = False\nfor _x in _s.parameters.values():\n    if _x.kind == inspect.Parameter.VAR_KEYWORD:\n        _w = True\n        break",
+    py.run(
+        c"import inspect\n_s = inspect.signature(f)\n_p = []\nfor _n, _param in _s.parameters.items():\n    if _param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):\n        _p.append(_n)\n_w = False\nfor _x in _s.parameters.values():\n    if _x.kind == inspect.Parameter.VAR_KEYWORD:\n        _w = True\n        break",
         None,
         Some(&d),
     )?;
@@ -53,7 +53,7 @@ fn parse_algorithm(s: &str) -> PyResult<jsonwebtoken::Algorithm> {
 }
 
 fn parse_dependencies(py: Python<'_>, dep_list: &Bound<PyList>) -> PyResult<ParsedDependencies> {
-    let inspect = py.import_bound("inspect")?;
+    let inspect = py.import("inspect")?;
     let iscoro = inspect.getattr("iscoroutinefunction")?;
     let n = dep_list.len();
     let mut names = Vec::with_capacity(n);
@@ -88,12 +88,12 @@ fn parse_dependencies(py: Python<'_>, dep_list: &Bound<PyList>) -> PyResult<Pars
 
 /// True if the factory declares a `request` parameter (for the request context dict).
 fn dependency_wants_request(py: Python<'_>, f: &Bound<'_, PyAny>) -> PyResult<bool> {
-    let inspect = py.import_bound("inspect")?;
+    let inspect = py.import("inspect")?;
     let sig = inspect.getattr("signature")?.call1((f,))?;
     let params = sig.getattr("parameters")?;
     params
         .getattr("__contains__")?
-        .call1((pyo3::types::PyString::new_bound(py, "request"),))?
+        .call1((pyo3::types::PyString::new(py, "request"),))?
         .extract()
 }
 
@@ -187,7 +187,7 @@ impl App {
                 ));
             }
         }
-        let inspect = py.import_bound("inspect")?;
+        let inspect = py.import("inspect")?;
         let f = inspect.getattr("iscoroutinefunction")?;
         let is_async: bool = f.call1((handler.clone_ref(py),))?.extract()?;
         let mut algs: Vec<jsonwebtoken::Algorithm> = if let Some(list) = algorithms {
@@ -315,7 +315,7 @@ impl App {
         let state = this.state.clone();
         let scope_py: Py<PyAny> = scope.as_any().clone().unbind();
         let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
-        pyo3_asyncio_0_21::tokio::future_into_py(py, async move {
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
             run_rsgi(state, scope_py, protocol_py).await
         })
     }
