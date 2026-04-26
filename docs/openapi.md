@@ -21,9 +21,9 @@ Served vs built: one flag, two ways to set it.
 
 ## What is in the document today
 
-Per route, the code records path, method, a short `summary` / `operationId` derived from the **handler’s** `__name__`, and a simple `200` response placeholder. Bodies, parameters, and components are not yet deep-modeled on the document.
+Per route, the code records path, method, a short `summary` / `operationId` derived from the **handler’s** `__name__`, and a simple `200` response placeholder.
 
-**Future work** might add richer request/response metadata when the schema story grows in Rust.
+For **`POST`**, **`PUT`**, and **`PATCH`**, you can pass **`body_model=...`** where the value is a **Pydantic v2** `BaseModel` class. OxyRoute calls **`model_json_schema()`** at registration time and stores that JSON Schema under the operation’s **`requestBody` → `content` → `application/json` → `schema`**. Pydantic is optional at runtime: only needed if you use `body_model`. The schema is a plain JSON value in the OpenAPI file (`$defs` and refs may appear as Pydantic emits them).
 
 ## See also
 
