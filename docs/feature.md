@@ -68,7 +68,7 @@
 
 | Тема | Зазор | Комментарий |
 |------|--------|-------------|
-| **Встроенный `app.state` / lifespan** | Слабо | `__rsgi_init__` и общий state — [#18](https://github.com/QueryaHub/OxyRoute/issues/18). |
+| **Встроенный `app.state` / lifespan** | Частично | `App.state` (`SimpleNamespace`), хуки `__rsgi_init__` / `__rsgi_del__`, пример `examples/rsgi_lifespan_app.py` — закрыто в [#18](https://github.com/QueryaHub/OxyRoute/issues/18). |
 | **Сессии (signed cookie, server-side)** | Нет | |
 | **Кэш глобальных настроек** | Нет | Нет первого класса для config. |
 

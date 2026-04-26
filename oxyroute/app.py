@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
+from types import SimpleNamespace
 from typing import Any, TypeVar
 
 from . import _oxyroute
@@ -34,12 +35,18 @@ class App:
     """
     Application object: pass a module instance to Granian, e.g.
     ``granian app:app --interface rsgi`` or for ASGI ``granian app:app --interface asgi``.
+
+    ``state`` is an empty ``types.SimpleNamespace`` for per-process data; set fields in
+    ``__rsgi_init__`` or a factory, or on a subclass. In-memory data is not shared across
+    Granian worker processes.
     """
 
     def __init__(self, title: str = "OxyRoute", *, include_openapi: bool = True) -> None:
         self._app = _oxyroute.App(include_openapi=include_openapi)
         self._app.set_openapi_title(title)
         self.title = title
+        # Per-process mutable bag for ``__rsgi_init__`` / factory setup (DB pool, clients, …).
+        self.state: SimpleNamespace = SimpleNamespace()
         self._asgi3: Callable[..., Any] = build_asgi_caller(self)
 
     def freeze(self) -> None:
