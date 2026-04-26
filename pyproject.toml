@@ -6,9 +6,16 @@ build-backend = "maturin"
 name = "oxyroute"
 version = "0.1.0"
 description = "RSGI-first web framework: routing, JSON, and JWT in Rust (PyO3), Python handlers"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
 license = { text = "MIT" }
 keywords = ["rsgi", "granian", "web", "async", "rust"]
+
+[project.urls]
+Homepage = "https://github.com/QueryaHub/OxyRoute"
+Documentation = "https://github.com/QueryaHub/OxyRoute/blob/main/docs/index.md"
+Repository = "https://github.com/QueryaHub/OxyRoute"
+Issues = "https://github.com/QueryaHub/OxyRoute/issues"
 
 [project.optional-dependencies]
 dev = [
