@@ -41,15 +41,8 @@ pub async fn parse_multipart(body: Vec<u8>, boundary: &str) -> Result<ParsedForm
     let mut form: HashMap<String, String> = HashMap::new();
     let mut files: Vec<ParsedFile> = Vec::new();
 
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| e.to_string())?
-    {
-        let name = field
-            .name()
-            .unwrap_or("field")
-            .to_string();
+    while let Some(mut field) = multipart.next_field().await.map_err(|e| e.to_string())? {
+        let name = field.name().unwrap_or("field").to_string();
         if field.file_name().is_some() {
             let filename = field.file_name().map(str::to_string);
             let content_type = field
@@ -57,11 +50,7 @@ pub async fn parse_multipart(body: Vec<u8>, boundary: &str) -> Result<ParsedForm
                 .map(|m| m.essence_str().to_string())
                 .unwrap_or_else(|| "application/octet-stream".to_string());
             let mut data = Vec::<u8>::new();
-            while let Some(chunk) = field
-                .chunk()
-                .await
-                .map_err(|e| e.to_string())?
-            {
+            while let Some(chunk) = field.chunk().await.map_err(|e| e.to_string())? {
                 data.extend_from_slice(&chunk);
             }
             files.push(ParsedFile {
