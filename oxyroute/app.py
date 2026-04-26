@@ -50,9 +50,7 @@ class App:
         """Enable or disable the built-in ``GET /openapi.json`` route."""
         self._app.set_openapi_served(enabled)
 
-    def set_middleware(
-        self, handler: Callable[..., Any] | None
-    ) -> None:
+    def set_middleware(self, handler: Callable[..., Any] | None) -> None:
         """
         One optional pre-route callback ``(scope, protocol)`` — return ``None`` to pass through.
 
