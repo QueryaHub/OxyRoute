@@ -13,9 +13,9 @@ __all__ = [
     "CORSConfig",
     "Depends",
     "HTTPException",
-    "apply_cors",
     "Response",
     "__version__",
+    "apply_cors",
     "decode_jwt_hs",
 ]
 __version__ = "0.1.0"
