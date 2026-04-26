@@ -3,6 +3,8 @@ name = "oxyroute"
 version = "0.1.0"
 edition = "2021"
 description = "RSGI web framework: Rust hot path, Python handlers"
+license = "MIT"
+repository = "https://github.com/QueryaHub/OxyRoute"
 
 [lib]
 name = "_oxyroute"

@@ -53,14 +53,13 @@ The workflow at `.github/workflows/ci.yml` (job name: **ci**):
 
 ## Releasing to PyPI
 
-Tag a release with a **`v`-prefixed** semver tag (example: `v0.2.0`). That triggers `.github/workflows/release-pypi.yml`, which builds an **sdist**, **manylinux** x86_64 wheels, **Windows** x64, and **macOS** arm64 + x86_64 wheels, then uploads everything to **PyPI** using [trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC — no long-lived API token in the workflow).
+Tag a release with a **`v`-prefixed** semver tag (example: **`v0.1.0`**). That triggers `.github/workflows/release-pypi.yml`, which builds an **sdist**, **manylinux** x86_64 wheels, **Windows** x64, and **macOS** arm64 + x86_64 wheels, then uploads to **PyPI** using a **project-scoped API token** stored in GitHub as **`PYPI_API_TOKEN`** (Secret or Environment variable) on the **`pypi`** environment. The publish step uses `secrets` first, then `vars` (so you can start with a variable and move the value to a **Secret** later).
 
 **Before the first upload:**
 
-1. Keep **`pyproject.toml`** / **`Cargo.toml`** versions in sync with the tag you push.
-2. On **PyPI**, register the project (if new) and add a **trusted publisher** for this repo: GitHub → org/repo → workflow **`release-pypi.yml`** → job **`publish`**, and the GitHub **environment** name **`pypi`** (see [PyPI: adding a publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/)).
-3. In the GitHub repository, create an **environment** named **`pypi`** (Settings → Environments). You can leave protection rules empty or require reviewers for production safety.
-4. Optionally dry-run on [TestPyPI](https://test.pypi.org/) first: add a second trusted publisher for Test PyPI and either a separate workflow or a manual `twine upload` — the stock release workflow targets production PyPI only.
+1. Keep **`pyproject.toml`**, **`Cargo.toml`**, and **`oxyroute/__init__.py`** `__version__` in sync with the version you are releasing, and with the tag (e.g. `0.1.0` → tag `v0.1.0`).
+2. On [PyPI](https://pypi.org), create a **scoped API token** for this project, then in GitHub → **Settings → Environments** create the **`pypi`** environment and add **`PYPI_API_TOKEN`** (strongly prefer an **Environment secret** over a **Variable**; tokens in Variables are visible to people with access to the environment).
+3. Optional alternative to API tokens: [trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) — no long-lived token; then the workflow’s publish job should omit `with.password` and set `id-token: write` (see the PyPA action README).
 
 Build jobs set **`CARGO_INCREMENTAL=0`** for more reproducible release artifacts; wheel builds use **`--locked`** with the committed **`Cargo.lock`**.
 
