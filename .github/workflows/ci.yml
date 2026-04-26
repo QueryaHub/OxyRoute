@@ -55,8 +55,19 @@ jobs:
         run: |
           set -euo pipefail
           uv sync --frozen --extra dev
+          # `uv sync` can leave a prior wheel; `maturin build` adds another (different platform tag).
+          # `uv pip install` with two file URLs errors with "conflicting URLs for package oxyroute".
+          rm -f target/wheels/oxyroute-*.whl
           uv run maturin build --release
-          uv pip install --force-reinstall target/wheels/oxyroute-*.whl
+          shopt -s nullglob
+          wheels=(target/wheels/oxyroute-*.whl)
+          shopt -u nullglob
+          if [ "${#wheels[@]}" -ne 1 ] || [ ! -f "${wheels[0]}" ]; then
+            echo "expected exactly one oxyroute wheel, got: ${#wheels[@]}"
+            ls -la target/wheels/ 2>/dev/null || true
+            exit 1
+          fi
+          uv pip install --force-reinstall "${wheels[0]}"
       - name: Pytest (isolated dir so repo tree does not shadow the installed package)
         run: |
           cd "$(mktemp -d)"
