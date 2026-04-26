@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::Mutex;
+
+use parking_lot::Mutex;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
@@ -17,10 +18,6 @@ use dispatch::run_rsgi;
 use state::AppState;
 
 type ParsedDependencies = (Vec<String>, Vec<Py<PyAny>>, Vec<bool>, Vec<bool>);
-
-pub(crate) fn lock_err<T>(e: std::sync::PoisonError<T>) -> PyErr {
-    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-}
 
 /// Parameter names the route handler accepts, plus whether it has `**kwargs`.
 fn handler_signature_kinds(
@@ -184,7 +181,7 @@ impl App {
         jwt_cookie: Option<String>,
         body_schema_json: Option<String>,
     ) -> PyResult<()> {
-        let st = self.state.lock().map_err(lock_err)?;
+        let st = self.state.lock();
         if st.frozen {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "app is frozen; no more add_route",
@@ -231,7 +228,7 @@ impl App {
             .getattr(pyo3::intern!(py, "__name__"))?
             .extract()?;
         let (handler_param_names, handler_varkw) = handler_signature_kinds(py, handler.bind(py))?;
-        let mut st = self.state.lock().map_err(lock_err)?;
+        let mut st = self.state.lock();
         let idx = st.routes.len();
         st.routes.push(state::RouteEntry {
             handler,
@@ -261,7 +258,7 @@ impl App {
             })?),
         };
         {
-            let mut oa = st.openapi.lock().map_err(lock_err)?;
+            let mut oa = st.openapi.lock();
             App::openapi_add_path(&mut oa, &method, &path, &op_id, request_schema);
         }
         {
@@ -276,20 +273,20 @@ impl App {
 
     /// Lock route registration. Linear dependency list is a valid topological order (DAG of independent roots).
     fn freeze(&self) -> PyResult<()> {
-        let mut st = self.state.lock().map_err(lock_err)?;
+        let mut st = self.state.lock();
         st.frozen = true;
         Ok(())
     }
 
     fn set_openapi_served(&self, enabled: bool) -> PyResult<()> {
-        let mut st = self.state.lock().map_err(lock_err)?;
+        let mut st = self.state.lock();
         st.include_openapi = enabled;
         Ok(())
     }
 
     fn set_openapi_title(&self, title: &str) -> PyResult<()> {
-        let st = self.state.lock().map_err(lock_err)?;
-        let mut oa = st.openapi.lock().map_err(lock_err)?;
+        let st = self.state.lock();
+        let mut oa = st.openapi.lock();
         if let Some(info) = oa
             .as_object_mut()
             .and_then(|m| m.get_mut("info"))
@@ -315,8 +312,8 @@ impl App {
     }
 
     fn openapi_json(&self) -> PyResult<String> {
-        let st = self.state.lock().map_err(lock_err)?;
-        let oa = st.openapi.lock().map_err(lock_err)?;
+        let st = self.state.lock();
+        let oa = st.openapi.lock();
         Ok(oa.to_string())
     }
 }
