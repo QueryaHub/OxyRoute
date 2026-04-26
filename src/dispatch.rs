@@ -12,7 +12,7 @@ use serde_json::Value as JsonValue;
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
 use crate::response;
 use crate::schema::json_to_py;
-use crate::state::{map_method_router, methods_matching_path, AppState};
+use crate::state::{match_route, methods_matching_path, AppState};
 use crate::token::{build_decoding_key, extract_bearer, extract_cookie_value};
 
 type RouteCallSnapshot = (
@@ -166,18 +166,13 @@ pub async fn run_rsgi(
                 header_get_lax(&headers, "cookie"),
             ))
         })?;
-    let route_out: Option<(usize, HashMap<String, String>)> = (|| -> PyResult<_> {
+    let route_out: Option<(usize, HashMap<String, String>)> = {
         let st = state.read();
-        let g = map_method_router(&st, &method)
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("method"))?;
-        Ok(g.at(&path).ok().map(|m| {
-            let mut pmap = HashMap::new();
-            for (k, v) in m.params.iter() {
-                pmap.insert(k.to_string(), v.to_string());
-            }
-            (*m.value, pmap)
-        }))
-    })()?;
+        match match_route(&st, &method, &path) {
+            None => Err(pyo3::exceptions::PyValueError::new_err("method")),
+            Some(m) => Ok(m),
+        }
+    }?;
     let (route_idx, param_map) = match route_out {
         Some(x) => x,
         None => {
