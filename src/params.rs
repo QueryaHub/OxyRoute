@@ -2,21 +2,23 @@
 
 use std::collections::HashMap;
 
+use form_urlencoded::parse as parse_urlencoded;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::IntoPy;
 
+/// Parse an HTTP `query` string (the part after `?`, without the `?`).
+/// Uses [`form_urlencoded`] so keys and values are **percent-decoded** and `+` in values is
+/// treated as a space, consistent with `application/x-www-form-urlencoded` / URLSearchParams
+/// (see [WHATWG](https://url.spec.whatwg.org/#application/x-www-form-urlencoded)). Duplicate keys
+/// are **last-wins** in the returned `HashMap` (not a multimap).
 pub fn parse_query(q: &str) -> HashMap<String, String> {
     let mut m = HashMap::new();
     if q.is_empty() {
         return m;
     }
-    for pair in q.split('&') {
-        if let Some((k, v)) = pair.split_once('=') {
-            m.insert(k.to_string(), v.to_string());
-        } else {
-            m.insert(pair.to_string(), String::new());
-        }
+    for (k, v) in parse_urlencoded(q.as_bytes()) {
+        m.insert(k.into_owned(), v.into_owned());
     }
     m
 }
@@ -66,4 +68,44 @@ pub fn header_get_lax(headers: &Bound<'_, PyAny>, name: &str) -> Option<String> 
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_query;
+
+    #[test]
+    fn decodes_percent_encoded_space() {
+        let m = parse_query("q=hello%20world");
+        assert_eq!(m.get("q").map(String::as_str), Some("hello world"));
+    }
+
+    #[test]
+    fn decodes_utf8_in_value() {
+        let m = parse_query("x=%C3%A9");
+        assert_eq!(m.get("x").map(String::as_str), Some("é"));
+    }
+
+    #[test]
+    fn plus_treated_as_space() {
+        let m = parse_query("q=a+b");
+        assert_eq!(m.get("q").map(String::as_str), Some("a b"));
+    }
+
+    #[test]
+    fn duplicate_keys_last_wins() {
+        let m = parse_query("a=1&a=2");
+        assert_eq!(m.get("a").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn empty_string_yields_empty_map() {
+        assert!(parse_query("").is_empty());
+    }
+
+    #[test]
+    fn decodes_key_and_value() {
+        let m = parse_query("k%3Dey=v%3Dalue");
+        assert_eq!(m.get("k=ey").map(String::as_str), Some("v=alue"));
+    }
 }
