@@ -63,6 +63,7 @@ def test_payload_too_large_413() -> None:
     old = os.environ.get("OXYROUTE_MAX_BODY_BYTES")
     os.environ["OXYROUTE_MAX_BODY_BYTES"] = "20"
     try:
+
         async def _run() -> None:
             transport = httpx.ASGITransport(app=app)
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
@@ -72,7 +73,9 @@ def test_payload_too_large_413() -> None:
                     headers={"content-type": "application/x-www-form-urlencoded"},
                 )
             assert r.status_code == 413
-            err = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            err = (
+                r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+            )
             assert err.get("error") == "payload too large" or "payload" in (r.text or "")
 
         asyncio.run(_run())
