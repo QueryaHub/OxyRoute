@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
+
+use parking_lot::Mutex;
 
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{decode, DecodingKey, Validation};
@@ -73,11 +74,11 @@ pub async fn run_rsgi(
     let is_head = method == "HEAD";
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" {
         let (inc, doc) = {
-            let st = state.lock().map_err(crate::lock_err)?;
+            let st = state.lock();
             if !st.include_openapi {
                 (false, String::new())
             } else {
-                let oa = st.openapi.lock().map_err(crate::lock_err)?;
+                let oa = st.openapi.lock();
                 (true, oa.to_string())
             }
         };
@@ -121,7 +122,7 @@ pub async fn run_rsgi(
             ))
         })?;
     let route_out: Option<(usize, HashMap<String, String>)> = (|| -> PyResult<_> {
-        let st = state.lock().map_err(crate::lock_err)?;
+        let st = state.lock();
         let g = map_method_router(&st, &method)
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("method"))?;
         Ok(g.at(&path).ok().map(|m| {
@@ -136,7 +137,7 @@ pub async fn run_rsgi(
         Some(x) => x,
         None => {
             let m = {
-                let st = state.lock().map_err(crate::lock_err)?;
+                let st = state.lock();
                 methods_matching_path(&st, &path)
             };
             if m.is_empty() {
@@ -169,7 +170,7 @@ pub async fn run_rsgi(
         handler_param_names,
         handler_varkw,
     ) = {
-        let st = state.lock().map_err(crate::lock_err)?;
+        let st = state.lock();
         let e = st
             .routes
             .get(route_idx)
