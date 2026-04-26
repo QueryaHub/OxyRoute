@@ -47,6 +47,7 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 | [ASGI bridge](asgi.md) | Optional `__call__` for ASGI 3, limitations |
 | [Development](development.md) | Tests, CI, PyPI releases (tag `v*`), clippy, pytest |
 | [Branching and PRs](development-workflow.md) | `dev` as base, issue branches, `Closes #N`, no mixing code with `ISSUE_BACKLOG` in one commit |
+| [Feature gaps (research)](feature.md) | What is missing vs a “full” HTTP framework (multipart, WS, sub-routers, etc.) — Russian |
 | [Contributing](../CONTRIBUTING.md) | Local setup, issue backlog, GitHub `gh` workflow |
 
 [← Back to project README](../README.md)
