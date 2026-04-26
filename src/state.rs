@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 use matchit::Router;
@@ -20,6 +21,13 @@ pub struct RouteEntry {
     pub dep_names: Vec<String>,
     pub dep_factories: Vec<Py<PyAny>>,
     pub dep_is_async: Vec<bool>,
+    /// Per factory: pass a `request` context dict (see `build_request_context` in dispatch).
+    pub dep_wants_request: Vec<bool>,
+    /// From `inspect.signature(handler)`: which parameter names the handler accepts (excluding
+    /// `*args` / only `*`-only); used to forward only matching dependency results.
+    pub handler_param_names: HashSet<String>,
+    /// Handler has `**kwargs` (pass all dependency kwargs).
+    pub handler_varkw: bool,
 }
 
 pub struct AppState {

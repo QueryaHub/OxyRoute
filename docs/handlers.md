@@ -19,7 +19,7 @@ handler(**kwargs)
 | `json` | `read_json_body` is true and body parses as JSON | `dict`/list/values as converted from `serde_json` to Python |
 | `body` | Raw body bytes, when JSON is not used or empty | `bytes` |
 | `claims` | `require_jwt` is true and the JWT validates | The decoded JSON claims as a Python object (typically a `dict`) |
-| Named dependencies | `dependencies=[("name", factory), ...]` | Return value of each factory, in order (see [dependencies.md](dependencies.md)) |
+| Named dependencies | `dependencies=[("name", factory), ...]` | Return value of each factory, in order (see [dependencies.md](dependencies.md)). Only dependencies whose **names** appear on the route handler’s signature (or `**kwargs`) are passed to the handler—intermediate-only dependencies are not forwarded |
 
 **JWT:** if `require_jwt` is set but validation fails, the **handler is not called**; the response is 401 (or a dedicated “Expired” string for expired signature when applicable). See [jwt.md](jwt.md).
 

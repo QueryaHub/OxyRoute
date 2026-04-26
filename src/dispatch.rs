@@ -3,12 +3,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use jsonwebtoken::errors::ErrorKind;
-use jsonwebtoken::{DecodingKey, Validation, decode};
+use jsonwebtoken::{decode, DecodingKey, Validation};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use serde_json::Value as JsonValue;
 
-use crate::params::{header_get_lax, parse_query, value_for_path_param};
+use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
 use crate::response;
 use crate::schema::json_to_py;
 use crate::state::{map_method_router, AppState};
@@ -45,13 +45,7 @@ async fn send_internal_error(
     } else {
         r#"{"error":"internal server error"}"#.to_string()
     };
-    response::send_text(
-        protocol,
-        500,
-        &body,
-        "application/json; charset=utf-8",
-    )
-    .await
+    response::send_text(protocol, 500, &body, "application/json; charset=utf-8").await
 }
 
 pub async fn run_rsgi(
@@ -63,18 +57,19 @@ pub async fn run_rsgi(
     if proto != "http" {
         return Ok(Python::with_gil(|py| py.None()));
     }
-    let (method, path, query_string) = Python::with_gil(|py| -> PyResult<(String, String, String)> {
-        let s = scope.bind(py);
-        let qs: String = s
-            .getattr("query_string")
-            .and_then(|x| x.extract())
-            .unwrap_or_default();
-        Ok((
-            s.getattr("method")?.extract()?,
-            s.getattr("path")?.extract()?,
-            qs,
-        ))
-    })?;
+    let (method, path, query_string) =
+        Python::with_gil(|py| -> PyResult<(String, String, String)> {
+            let s = scope.bind(py);
+            let qs: String = s
+                .getattr("query_string")
+                .and_then(|x| x.extract())
+                .unwrap_or_default();
+            Ok((
+                s.getattr("method")?.extract()?,
+                s.getattr("path")?.extract()?,
+                qs,
+            ))
+        })?;
     if method == "GET" && path == "/openapi.json" {
         let (inc, doc) = {
             let st = state.lock().map_err(crate::lock_err)?;
@@ -86,13 +81,8 @@ pub async fn run_rsgi(
             }
         };
         if inc {
-            return response::send_str(
-                &protocol,
-                200,
-                &doc,
-                "application/json; charset=utf-8",
-            )
-            .await;
+            return response::send_str(&protocol, 200, &doc, "application/json; charset=utf-8")
+                .await;
         }
     }
     let read_fut = Python::with_gil(|py| {
@@ -118,7 +108,7 @@ pub async fn run_rsgi(
     })?;
     let route_out: Option<(usize, HashMap<String, String>)> = (|| -> PyResult<_> {
         let st = state.lock().map_err(crate::lock_err)?;
-        let g = map_method_router(&*st, &method)
+        let g = map_method_router(&st, &method)
             .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("method"))?;
         Ok(g.at(&path).ok().map(|m| {
             let mut pmap = HashMap::new();
@@ -131,13 +121,8 @@ pub async fn run_rsgi(
     let (route_idx, param_map) = match route_out {
         Some(x) => x,
         None => {
-            return response::send_text(
-                &protocol,
-                404,
-                "Not Found",
-                "text/plain; charset=utf-8",
-            )
-            .await
+            return response::send_text(&protocol, 404, "Not Found", "text/plain; charset=utf-8")
+                .await
         }
     };
     let (
@@ -153,6 +138,9 @@ pub async fn run_rsgi(
         dep_names,
         dep_factories,
         dep_is_async,
+        dep_wants_request,
+        handler_param_names,
+        handler_varkw,
     ) = {
         let st = state.lock().map_err(crate::lock_err)?;
         let e = st
@@ -172,6 +160,9 @@ pub async fn run_rsgi(
             e.dep_names.clone(),
             e.dep_factories.clone(),
             e.dep_is_async.clone(),
+            e.dep_wants_request.clone(),
+            e.handler_param_names.clone(),
+            e.handler_varkw,
         )
     };
     let mut claims_val: Option<JsonValue> = None;
@@ -237,7 +228,7 @@ pub async fn run_rsgi(
                         "Expired",
                         "text/plain; charset=utf-8",
                     )
-                    .await
+                    .await;
                 }
                 return response::send_text(
                     &protocol,
@@ -245,7 +236,7 @@ pub async fn run_rsgi(
                     "Unauthorized",
                     "text/plain; charset=utf-8",
                 )
-                .await
+                .await;
             }
         }
     }
@@ -272,11 +263,40 @@ pub async fn run_rsgi(
     } else {
         None
     };
+    let need_req_ctx = dep_wants_request.iter().any(|&x| x);
+    let request_ctx: Option<Py<PyAny>> = if need_req_ctx {
+        match Python::with_gil(|py| -> PyResult<Py<PyAny>> {
+            let s = scope.bind(py);
+            let d = build_request_context(py, s, &method, &path, &query_string)?;
+            Ok(d.unbind().into())
+        }) {
+            Ok(o) => Some(o),
+            Err(e) => {
+                return send_internal_error(&protocol, &method, &path, e).await;
+            }
+        }
+    } else {
+        None
+    };
     let mut dep_out: Vec<PyObject> = Vec::with_capacity(dep_factories.len());
     for (i, fact) in dep_factories.iter().enumerate() {
         if dep_is_async.get(i) == Some(&true) {
             let r = match Python::with_gil(|py| -> PyResult<PyObject> {
-                Ok(fact.bind(py).call((), None)?.unbind())
+                let kw = PyDict::new_bound(py);
+                if dep_wants_request.get(i) == Some(&true) {
+                    if let Some(ref rc) = request_ctx {
+                        kw.set_item("request", rc.bind(py))?;
+                    }
+                }
+                for j in 0..i {
+                    kw.set_item(dep_names[j].as_str(), dep_out[j].bind(py))?;
+                }
+                let f = fact.bind(py);
+                if kw.is_empty() {
+                    Ok(f.call((), None)?.unbind())
+                } else {
+                    Ok(f.call((), Some(&kw))?.unbind())
+                }
             }) {
                 Ok(x) => x,
                 Err(e) => {
@@ -301,7 +321,21 @@ pub async fn run_rsgi(
             dep_out.push(o);
         } else {
             let o = match Python::with_gil(|py| -> PyResult<PyObject> {
-                Ok(fact.bind(py).call((), None)?.unbind())
+                let kw = PyDict::new_bound(py);
+                if dep_wants_request.get(i) == Some(&true) {
+                    if let Some(ref rc) = request_ctx {
+                        kw.set_item("request", rc.bind(py))?;
+                    }
+                }
+                for j in 0..i {
+                    kw.set_item(dep_names[j].as_str(), dep_out[j].bind(py))?;
+                }
+                let f = fact.bind(py);
+                if kw.is_empty() {
+                    Ok(f.call((), None)?.unbind())
+                } else {
+                    Ok(f.call((), Some(&kw))?.unbind())
+                }
             }) {
                 Ok(x) => x,
                 Err(e) => {
@@ -326,7 +360,9 @@ pub async fn run_rsgi(
         }
         for (i, name) in dep_names.iter().enumerate() {
             if let Some(oo) = dep_out.get(i) {
-                kwargs.set_item(name, oo.bind(py))?;
+                if handler_varkw || handler_param_names.contains(name) {
+                    kwargs.set_item(name, oo.bind(py))?;
+                }
             }
         }
         if let Some(c) = claims_val {
@@ -340,10 +376,7 @@ pub async fn run_rsgi(
         if !body_bytes.is_empty() && body_json.is_none() {
             kwargs.set_item("body", PyBytes::new_bound(py, &body_bytes))?;
         }
-        let res = handler
-            .bind(py)
-            .call((), Some(&kwargs))?
-            .unbind();
+        let res = handler.bind(py).call((), Some(&kwargs))?.unbind();
         Ok((res, is_async))
     }) {
         Ok(x) => x,
@@ -377,12 +410,16 @@ pub async fn run_rsgi(
         }
     };
     match mapped {
-        HandlerMap::WithHeaders { status, body, headers } => {
-            response::send_with_headers(&protocol, status, &body, headers).await
-        }
-        HandlerMap::Simple { status, body, content_type } => {
-            response::send_bytes(&protocol, status, &body, &content_type).await
-        }
+        HandlerMap::WithHeaders {
+            status,
+            body,
+            headers,
+        } => response::send_with_headers(&protocol, status, &body, headers).await,
+        HandlerMap::Simple {
+            status,
+            body,
+            content_type,
+        } => response::send_bytes(&protocol, status, &body, &content_type).await,
     }
 }
 
@@ -475,21 +512,12 @@ fn is_oxyroute_response(_py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<bool>
     Ok(b.hasattr("status")? && b.hasattr("body")? && b.hasattr("headers")?)
 }
 
-fn structured_from_response_attrs(
-    py: Python<'_>,
-    b: &Bound<'_, PyAny>,
-) -> PyResult<HandlerMap> {
+fn structured_from_response_attrs(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<HandlerMap> {
     let st = b.getattr("status")?;
     let body = b.getattr("body")?;
     let headers = b.getattr("headers")?;
     let cookies = b.getattr("cookies")?;
-    structured_from_status_body(
-        py,
-        &st,
-        &body,
-        Some(headers),
-        Some(cookies),
-    )
+    structured_from_status_body(py, &st, &body, Some(headers), Some(cookies))
 }
 
 fn structured_from_status_body(
@@ -527,22 +555,20 @@ fn structured_from_status_body(
             }
         }
     }
-    Ok(HandlerMap::WithHeaders { status, body, headers: pairs })
+    Ok(HandlerMap::WithHeaders {
+        status,
+        body,
+        headers: pairs,
+    })
 }
 
 /// JSON body, etc.
 fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<u8>, String)> {
     if b.is_none() {
-        return Ok((
-            Vec::new(),
-            "text/plain; charset=utf-8".to_string(),
-        ));
+        return Ok((Vec::new(), "text/plain; charset=utf-8".to_string()));
     }
     if let Ok(s) = b.extract::<String>() {
-        return Ok((
-            s.into_bytes(),
-            "text/plain; charset=utf-8".to_string(),
-        ));
+        return Ok((s.into_bytes(), "text/plain; charset=utf-8".to_string()));
     }
     if let Ok(s) = b.extract::<&str>() {
         return Ok((
@@ -551,10 +577,7 @@ fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<
         ));
     }
     if let Ok(buf) = b.extract::<Vec<u8>>() {
-        return Ok((
-            buf,
-            "application/octet-stream".to_string(),
-        ));
+        return Ok((buf, "application/octet-stream".to_string()));
     }
     let jmod = py.import_bound("json")?;
     let dumped = jmod.call_method1("dumps", (b.clone().unbind(),))?;

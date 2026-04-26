@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-
 from oxyroute import App, Response
 
 
 def test_asgi_get_plain_text() -> None:
     app = App()
+
     @app.get("/p")
     def p() -> str:
         return "x"
@@ -29,7 +29,7 @@ def test_asgi_patch_json_body() -> None:
     app = App()
 
     @app.patch("/x")
-    def patch_x(json: dict) -> str:  # noqa: A002 — injected JSON body
+    def patch_x(json: dict) -> str:
         return f"p:{json.get('a')}"
 
     async def _run() -> None:
