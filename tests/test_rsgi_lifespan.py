@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from oxyroute import App
+
+
+def test_app_state_is_simple_namespace() -> None:
+    a = App()
+    assert isinstance(a.state, SimpleNamespace)
+    a.state.pool = "mock"
+    assert a.state.pool == "mock"
 
 
 def test_base_rsgi_init_and_del_are_noop() -> None:
