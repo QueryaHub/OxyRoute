@@ -35,6 +35,8 @@ The Rust layer maps the return value to an HTTP response:
 - **`bytes`:** **200**, `application/octet-stream`
 - **Any other object (dict, list, custom):** if not a special dict, the value is serialized with **`json.dumps`** and returned as **200** with `application/json; charset=utf-8`
 - **`dict` with `status` and `body` keys:** if both are present in a way the native code recognizes, a **custom status code** and body (as string) is returned for plain responses (content type fixed in the current path—see `src/dispatch.rs` for the exact check)
+- **`dict` with `status`, `body`, and optional `headers` / `cookies`:** same as structured `Response` below; body is encoded like `json` / `str` / `bytes` (not only `str(body)`). `cookies` is a list of raw `Set-Cookie` header values
+- **`Response` (from `oxyroute`):** `status`, `body` (optional; `str`, `bytes`, JSON-serializable, or `None` for empty), optional `headers` (`str` → `str`), optional `cookies` (list of strings for `Set-Cookie` lines). If `headers` does not set `content-type`, it is derived from the body type. The RSGI response is built with the full header list
 
 For precise behavior and edge cases, refer to the implementation in the repository’s `src/dispatch.rs` and `src/response.rs`.
 
