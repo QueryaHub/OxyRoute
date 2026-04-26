@@ -146,6 +146,9 @@ pub async fn run_rsgi(
         require_jwt,
         jwt_secret,
         algs,
+        jwt_issuer,
+        jwt_audience,
+        jwt_leeway,
         read_json_body,
         dep_names,
         dep_factories,
@@ -162,6 +165,9 @@ pub async fn run_rsgi(
             e.require_jwt,
             e.jwt_secret.clone(),
             e.algs.clone(),
+            e.jwt_issuer.clone(),
+            e.jwt_audience.clone(),
+            e.jwt_leeway,
             e.read_json_body,
             e.dep_names.clone(),
             e.dep_factories.clone(),
@@ -207,6 +213,17 @@ pub async fn run_rsgi(
         };
         val.algorithms = algs;
         val.validate_nbf = true;
+        val.leeway = jwt_leeway;
+        if let Some(ref iss) = jwt_issuer {
+            val.set_issuer(&[iss]);
+        }
+        if let Some(ref aud) = jwt_audience {
+            val.set_audience(&[aud]);
+        } else {
+            // jsonwebtoken 9: with validate_aud + aud=None, a token that includes `aud` fails
+            // (InvalidAudience). Disable unless the route opts in to an expected audience.
+            val.validate_aud = false;
+        }
         let dk = DecodingKey::from_secret(key.as_bytes());
         match decode::<JsonValue>(&token, &dk, &val) {
             Ok(data) => {
