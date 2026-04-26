@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{decode, Validation};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use serde_json::Value as JsonValue;
 
 use crate::form::{self, ParsedFile};
@@ -15,6 +15,8 @@ use crate::response;
 use crate::schema::json_to_py;
 use crate::state::{match_route, methods_matching_path, AppState};
 use crate::token::{build_decoding_key, extract_bearer, extract_cookie_value};
+
+type HttpExceptionPayload = (u16, Vec<u8>, Vec<(String, String)>);
 
 type RouteCallSnapshot = (
     Py<PyAny>,
@@ -68,6 +70,68 @@ async fn send_internal_error(
         r#"{"error":"internal server error"}"#.to_string()
     };
     response::send_text(protocol, 500, &body, "application/json; charset=utf-8").await
+}
+
+/// If ``err`` is :class:`oxyroute.exceptions.HTTPException`, send status/body/headers; else ``None``.
+async fn try_http_exception(protocol: &Py<PyAny>, err: &PyErr) -> PyResult<Option<PyObject>> {
+    let payload: Option<HttpExceptionPayload> =
+        Python::with_gil(|py| -> PyResult<Option<HttpExceptionPayload>> {
+            let m = py.import("oxyroute.exceptions")?;
+            let f = m.getattr("_http_exception_payload")?;
+            let exc = err.value(py);
+            let r = f.call1((exc,))?;
+            if r.is_none() {
+                return Ok(None);
+            }
+            let tup = r.downcast::<PyTuple>()?;
+            if tup.len() != 3 {
+                return Ok(None);
+            }
+            let status: u16 = tup.get_item(0)?.extract()?;
+            let b = tup.get_item(1)?;
+            let body: Vec<u8> = b.extract()?;
+            let h = tup.get_item(2)?;
+            let list = h.downcast::<PyList>()?;
+            let mut headers = Vec::new();
+            for i in 0..list.len() {
+                let item = list.get_item(i)?;
+                let pair = item.downcast::<PyTuple>()?;
+                let k: String = pair.get_item(0)?.extract()?;
+                let v: String = pair.get_item(1)?.extract()?;
+                headers.push((k, v));
+            }
+            Ok(Some((status, body, headers)))
+        })?;
+    let Some((st, body, mut headers)) = payload else {
+        return Ok(None);
+    };
+    let has_ct = headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+    if !has_ct {
+        headers.insert(
+            0,
+            (
+                "content-type".to_string(),
+                "application/json; charset=utf-8".to_string(),
+            ),
+        );
+    }
+    let out = response::send_with_headers(protocol, st, &body, headers).await?;
+    Ok(Some(out))
+}
+
+/// Like [`send_internal_error`], but maps :class:`HTTPException` to its status and body.
+async fn send_python_error(
+    protocol: &Py<PyAny>,
+    method: &str,
+    path: &str,
+    err: PyErr,
+) -> PyResult<PyObject> {
+    if let Some(res) = try_http_exception(protocol, &err).await? {
+        return Ok(res);
+    }
+    send_internal_error(protocol, method, path, err).await
 }
 
 pub async fn run_rsgi(
@@ -129,7 +193,7 @@ pub async fn run_rsgi(
         }) {
             Ok(x) => x,
             Err(e) => {
-                return send_internal_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e).await;
             }
         };
         let skip = Python::with_gil(|py| out.bind(py).is_none());
@@ -137,7 +201,7 @@ pub async fn run_rsgi(
             let mapped = match Python::with_gil(|py| map_handler_return(py, &out)) {
                 Ok(m) => m,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             return send_handler_map(&protocol, is_head, mapped).await;
@@ -386,7 +450,7 @@ pub async fn run_rsgi(
             let ct = match ct {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             if ct.as_deref().map(str::is_empty) != Some(false) {
@@ -450,7 +514,7 @@ pub async fn run_rsgi(
         }) {
             Ok(o) => Some(o),
             Err(e) => {
-                return send_internal_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e).await;
             }
         }
     } else {
@@ -478,7 +542,7 @@ pub async fn run_rsgi(
             }) {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             let fut = match Python::with_gil(|py| {
@@ -487,13 +551,13 @@ pub async fn run_rsgi(
             }) {
                 Ok(f) => f,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             let o = match fut.await {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             dep_out.push(o);
@@ -517,7 +581,7 @@ pub async fn run_rsgi(
             }) {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             dep_out.push(o);
@@ -582,7 +646,7 @@ pub async fn run_rsgi(
     }) {
         Ok(x) => x,
         Err(e) => {
-            return send_internal_error(&protocol, &method, &path, e).await;
+            return send_python_error(&protocol, &method, &path, e).await;
         }
     };
     let handler_out: PyObject = if run_async {
@@ -592,13 +656,13 @@ pub async fn run_rsgi(
         }) {
             Ok(f) => f,
             Err(e) => {
-                return send_internal_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e).await;
             }
         };
         match fut.await {
             Ok(x) => x,
             Err(e) => {
-                return send_internal_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e).await;
             }
         }
     } else {
@@ -607,7 +671,7 @@ pub async fn run_rsgi(
     let mapped = match Python::with_gil(|py| map_handler_return(py, &handler_out)) {
         Ok(m) => m,
         Err(e) => {
-            return send_internal_error(&protocol, &method, &path, e).await;
+            return send_python_error(&protocol, &method, &path, e).await;
         }
     };
     send_handler_map(&protocol, is_head, mapped).await
