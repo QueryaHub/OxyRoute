@@ -15,7 +15,7 @@ handler(**kwargs)
 | Name | When present | Meaning |
 |------|----------------|--------|
 | Path parameters | Matched from the route, e.g. `id` for `/items/:id` | String-like values, with coercion for `int` / `float` / `bool` / `str` in the Rust layer where applicable |
-| `query` | Request has a query string | A Python `dict` of string keys/values (see implementation for parsing rules) |
+| `query` | Request has a query string | A Python `dict` of string keys and values, **percent-decoded**; `+` in values is treated as a space, matching `application/x-www-form-urlencoded` / URLSearchParams ([WHATWG](https://url.spec.whatwg.org/#urlencoded-parsing)). **Duplicate keys** are last-wins (a plain `dict`, not a multimap) |
 | `json` | `read_json_body` is true and body parses as JSON | `dict`/list/values as converted from `serde_json` to Python |
 | `body` | Raw body bytes, when JSON is not used or empty | `bytes` |
 | `claims` | `require_jwt` is true and the JWT validates | The decoded JSON claims as a Python object (typically a `dict`) |
