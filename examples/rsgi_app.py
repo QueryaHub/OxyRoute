@@ -1,6 +1,8 @@
 """
 Run: ``granian --interface rsgi examples.rsgi_app:app`` from the project root
 (after ``pip install -e .`` or ``pip install oxyroute granian``).
+
+See https://github.com/QueryaHub/OxyRoute/blob/main/docs/rsgi.md
 """
 
 from oxyroute import App
