@@ -1,7 +1,7 @@
 use std::collections::HashSet;
-use std::sync::Mutex;
 
 use matchit::Router;
+use parking_lot::Mutex;
 use pyo3::prelude::*;
 
 pub struct RouteEntry {
@@ -72,15 +72,15 @@ impl AppState {
 pub fn map_method_router<'a>(
     state: &'a AppState,
     method: &str,
-) -> Option<std::sync::MutexGuard<'a, matchit::Router<usize>>> {
+) -> Option<parking_lot::MutexGuard<'a, matchit::Router<usize>>> {
     match method {
         // RFC 9110: HEAD shares URI with GET; same handler, no body in the response.
-        "GET" | "HEAD" => state.get.lock().ok(),
-        "POST" => state.post.lock().ok(),
-        "PUT" => state.put.lock().ok(),
-        "PATCH" => state.patch.lock().ok(),
-        "DELETE" => state.delete.lock().ok(),
-        "OPTIONS" => state.options.lock().ok(),
+        "GET" | "HEAD" => Some(state.get.lock()),
+        "POST" => Some(state.post.lock()),
+        "PUT" => Some(state.put.lock()),
+        "PATCH" => Some(state.patch.lock()),
+        "DELETE" => Some(state.delete.lock()),
+        "OPTIONS" => Some(state.options.lock()),
         _ => None,
     }
 }
@@ -92,33 +92,39 @@ pub fn map_method_router<'a>(
 pub fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
     const ORDER: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
     let mut have = [false; 7];
-    if let Ok(g) = state.get.lock() {
+    {
+        let g = state.get.lock();
         if g.at(path).is_ok() {
             have[0] = true;
             have[1] = true;
         }
     }
-    if let Ok(r) = state.post.lock() {
+    {
+        let r = state.post.lock();
         if r.at(path).is_ok() {
             have[2] = true;
         }
     }
-    if let Ok(r) = state.put.lock() {
+    {
+        let r = state.put.lock();
         if r.at(path).is_ok() {
             have[3] = true;
         }
     }
-    if let Ok(r) = state.patch.lock() {
+    {
+        let r = state.patch.lock();
         if r.at(path).is_ok() {
             have[4] = true;
         }
     }
-    if let Ok(r) = state.delete.lock() {
+    {
+        let r = state.delete.lock();
         if r.at(path).is_ok() {
             have[5] = true;
         }
     }
-    if let Ok(r) = state.options.lock() {
+    {
+        let r = state.options.lock();
         if r.at(path).is_ok() {
             have[6] = true;
         }
