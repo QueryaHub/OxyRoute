@@ -147,10 +147,7 @@ fn build_header_list_from_pairs<'py>(
         };
         let pair = PyTuple::new(
             py,
-            [
-                PyString::new(py, &name),
-                PyString::new(py, v.as_str()),
-            ],
+            [PyString::new(py, &name), PyString::new(py, v.as_str())],
         )?;
         out.append(pair)?;
     }
