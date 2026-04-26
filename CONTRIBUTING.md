@@ -40,11 +40,13 @@ cargo build
 cargo clippy
 ```
 
-## Branches and commits
+## Branches, PRs, and atomic commits
 
-- Use **topic branches** off `main` (e.g. `fix/query-decode`, `feat/patch-decorator`).
-- Prefer **conventional commits** where possible: `feat:`, `fix:`, `docs:`, `ci:`, `chore:`, `test:`.
-- For larger work, open a **draft PR** early and link a GitHub **issue** if one exists.
+- **Integration branch is `dev`:** create your branch from `dev`, open PRs with **base = `dev`**. The maintainer merges to `dev` and later promotes to `main` for releases as needed.
+- **One issue, one PR (when possible):** name the branch with the issue number, e.g. `issue-2-query-decode` or `feat/2-query-decode`.
+- Use **atomic commits** (one logical change per commit). **Do not** put `.github/ISSUE_BACKLOG/` changes in the same commit as product code—backlog/templating updates should be a separate `docs:` (or `chore:`) commit, or a separate PR.
+- Prefer **conventional commits**: `feat:`, `fix:`, `docs:`, `ci:`, `chore:`, `test:`.
+- Full step-by-step: [docs/development-workflow.md](docs/development-workflow.md).
 
 ## Creating GitHub issues from the template backlog
 

@@ -6,19 +6,30 @@ OxyRoute maintains a small **OpenAPI 3.0**-shaped JSON document in Rust while ro
 
 ## Constructor and toggles
 
-- **`App(..., include_openapi=True)`** (Python) maps to the native `App` constructor. When `include_openapi` is false, the special **`GET /openapi.json`** response from the engine is not served, and the document may be empty in those modes depending on the implementation.
-- **`set_openapi_served(False)`** can disable serving the document at runtime by flipping the same flag in state (naming mirrors the native `set_openapi_served`).
+Served vs built: one flag, two ways to set it.
+
+- **`include_openapi`** (constructor) and **`set_openapi_served(enabled)`** both update the same native field (`AppState::include_openapi`). Use the constructor to choose the default; use **`set_openapi_served(False)`** to turn off HTTP serving later (or `True` to re-enable) without recreating the app.
+- **Order does not change the in-memory spec:** routes are merged into the OpenAPI document as you register them, no matter when you flip the serving toggle. You can call **`set_openapi_served` before or after** adding routes; only HTTP exposure of `GET/HEAD /openapi.json` changes.
+- **Re-enable:** an app created with **`include_openapi=False`** can still call **`set_openapi_served(True)`** to start serving the spec at `GET/HEAD /openapi.json` (same for turning back on after `set_openapi_served(False)`).
+- **When serving is on** (`include_openapi=True` and not since disabled): the dispatcher answers **`GET /openapi.json`** and **`HEAD /openapi.json`** in an early check, **before** the normal router. A user-registered route on exactly `/openapi.json` will **not** run for those methods while the built-in is active.
+- **While serving is off** (`include_openapi=False` at build time, or after `set_openapi_served(False)`):
+  - The engine does **not** return the spec for **`GET /openapi.json`** or **`HEAD /openapi.json`**. The request is **not** special-cased, so it goes through normal routing. Unless you add your own handler for that path, the client usually gets **404 Not Found**. If you **do** register a handler for `/openapi.json`, that handler can serve a custom response.
+  - Route registration still **merges** operations into the in-memory OpenAPI document. The document is not discarded.
+- **Export:** **`openapi_json()`** on the Python `App` still returns the current JSON as a string (handy in tests, admin tools, or a custom response), regardless of the serving toggle.
 
 ## Title and export
 
 - **`set_openapi_title`** is applied from `App(..., title="...")` at construction.
-- **`openapi_json()`** on the Python `App` returns the current document as a **string** (for debugging or an alternate transport).
+- **`openapi_json()`** is described above; it is independent of whether `/openapi.json` is exposed over HTTP.
 
 ## What is in the document today
 
-Per route, the code records path, method, a short `summary` / `operationId` derived from the **handler’s** `__name__`, and a simple `200` response placeholder. Bodies, parameters, and components are not yet deep-modeled on the document.
+Per route, the code records path, method, a short `summary` / `operationId` derived from the **handler’s** `__name__`, and a simple `200` response placeholder.
 
-**Future work** might add richer request/response metadata when the schema story grows in Rust.
+For **`POST`**, **`PUT`**, and **`PATCH`**, you can document the JSON request body in OpenAPI in two ways (pass **at most one**):
+
+- **`body_model=...`**: a **Pydantic v2** `BaseModel` class. OxyRoute calls **`model_json_schema()`** at registration time and stores the result under **`requestBody` → `content` → `application/json` → `schema`**. Pydantic is optional at runtime: only needed if you use `body_model` (`$defs` / `$ref` appear as Pydantic emits them).
+- **`body_schema=...`**: a plain **JSON Schema** object (`dict` / mapping), e.g. from hand-written spec or another library. It is **JSON-serialized** at registration time and used the same way in OpenAPI. No Pydantic import required.
 
 ## See also
 

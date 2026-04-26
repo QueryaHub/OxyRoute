@@ -15,11 +15,11 @@ handler(**kwargs)
 | Name | When present | Meaning |
 |------|----------------|--------|
 | Path parameters | Matched from the route, e.g. `id` for `/items/:id` | String-like values, with coercion for `int` / `float` / `bool` / `str` in the Rust layer where applicable |
-| `query` | Request has a query string | A Python `dict` of string keys/values (see implementation for parsing rules) |
+| `query` | Request has a query string | A Python `dict` of string keys and values, **percent-decoded**; `+` in values is treated as a space, matching `application/x-www-form-urlencoded` / URLSearchParams ([WHATWG](https://url.spec.whatwg.org/#urlencoded-parsing)). **Duplicate keys** are last-wins (a plain `dict`, not a multimap) |
 | `json` | `read_json_body` is true and body parses as JSON | `dict`/list/values as converted from `serde_json` to Python |
 | `body` | Raw body bytes, when JSON is not used or empty | `bytes` |
 | `claims` | `require_jwt` is true and the JWT validates | The decoded JSON claims as a Python object (typically a `dict`) |
-| Named dependencies | `dependencies=[("name", factory), ...]` | Return value of each factory, in order (see [dependencies.md](dependencies.md)) |
+| Named dependencies | `dependencies=[("name", factory), ...]` | Return value of each factory, in order (see [dependencies.md](dependencies.md)). Only dependencies whose **names** appear on the route handler’s signature (or `**kwargs`) are passed to the handler—intermediate-only dependencies are not forwarded |
 
 **JWT:** if `require_jwt` is set but validation fails, the **handler is not called**; the response is 401 (or a dedicated “Expired” string for expired signature when applicable). See [jwt.md](jwt.md).
 
@@ -35,8 +35,23 @@ The Rust layer maps the return value to an HTTP response:
 - **`bytes`:** **200**, `application/octet-stream`
 - **Any other object (dict, list, custom):** if not a special dict, the value is serialized with **`json.dumps`** and returned as **200** with `application/json; charset=utf-8`
 - **`dict` with `status` and `body` keys:** if both are present in a way the native code recognizes, a **custom status code** and body (as string) is returned for plain responses (content type fixed in the current path—see `src/dispatch.rs` for the exact check)
+- **`dict` with `status`, `body`, and optional `headers` / `cookies`:** same as structured `Response` below; body is encoded like `json` / `str` / `bytes` (not only `str(body)`). `cookies` is a list of raw `Set-Cookie` header values
+- **`Response` (from `oxyroute`):** `status`, `body` (optional; `str`, `bytes`, JSON-serializable, or `None` for empty), optional `headers` (`str` → `str`), optional `cookies` (list of strings for `Set-Cookie` lines). If `headers` does not set `content-type`, it is derived from the body type. The RSGI response is built with the full header list
 
 For precise behavior and edge cases, refer to the implementation in the repository’s `src/dispatch.rs` and `src/response.rs`.
+
+## Errors in handlers and dependencies
+
+If a **dependency factory** or the **route handler** raises a Python exception (or building the response fails), the server answers with **500** and a small **JSON** body: `{"error":"internal server error"}`. Exception text and tracebacks are **not** included in the response by default (to avoid leaking internals to clients).
+
+Set the environment variable **`OXYROUTE_DEBUG=1`** (or `true`) to include a **`detail`** string in that JSON for the same error and to log more at the `log` crate target **`oxyroute`** (see `RUST_LOG`, e.g. `RUST_LOG=oxyroute=error`).
+
+## Pre-route hook (`set_middleware`)
+
+`App.set_middleware(f)` sets an **optional** callable taking `(scope, protocol)` (same RSGI-like objects as the rest of the stack). It runs **after** the path and method are known, **before** the request body is read or routes are matched.
+
+- Return **`None`**: continue with normal routing and body read.
+- Return **any other value**: use the same mapping as a route return value (`Response`, dict, `str`, etc.); the response is sent and **the route handler and body are skipped** (e.g. cheap CORS preflight on `OPTIONS` without consuming a `POST` body).
 
 ## See also
 
