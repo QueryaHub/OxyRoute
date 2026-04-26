@@ -59,6 +59,23 @@ pub async fn send_bytes(
     })
 }
 
+/// 405 with [`Allow`][1] and a small plain body (RFC 9110 §15.5.6).
+///
+/// [1]: https://www.rfc-editor.org/rfc/rfc9110#name-allow
+pub async fn send_405_method_not_allowed(
+    protocol: &Py<PyAny>,
+    allow: &[String],
+) -> PyResult<PyObject> {
+    let headers = vec![
+        ("allow".to_string(), allow.join(", ")),
+        (
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        ),
+    ];
+    send_with_headers(protocol, 405, b"Method Not Allowed", headers).await
+}
+
 /// RSGI `response_bytes` / `response_empty` with a full `[(name, value), ...]` header list.
 pub async fn send_with_headers(
     protocol: &Py<PyAny>,

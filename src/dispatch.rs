@@ -11,7 +11,7 @@ use serde_json::Value as JsonValue;
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
 use crate::response;
 use crate::schema::json_to_py;
-use crate::state::{map_method_router, AppState};
+use crate::state::{map_method_router, methods_matching_path, AppState};
 use crate::token::extract_bearer;
 
 fn oxyroute_debug() -> bool {
@@ -131,8 +131,20 @@ pub async fn run_rsgi(
     let (route_idx, param_map) = match route_out {
         Some(x) => x,
         None => {
-            return response::send_text(&protocol, 404, "Not Found", "text/plain; charset=utf-8")
-                .await
+            let m = {
+                let st = state.lock().map_err(crate::lock_err)?;
+                methods_matching_path(&st, &path)
+            };
+            if m.is_empty() {
+                return response::send_text(
+                    &protocol,
+                    404,
+                    "Not Found",
+                    "text/plain; charset=utf-8",
+                )
+                .await;
+            }
+            return response::send_405_method_not_allowed(&protocol, &m).await;
         }
     };
     let (
