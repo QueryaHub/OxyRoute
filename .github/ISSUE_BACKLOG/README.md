@@ -1,11 +1,11 @@
 # GitHub issue backlog (batch-ready)
 
-This directory holds **20 issue bodies** ([bodies/](bodies/)) and a [PRIORITIES.md](PRIORITIES.md) file. They were generated from the OxyRoute roadmap for **QueryaHub/OxyRoute**.
+This directory holds **20 + N issue bodies** ([bodies/](bodies/)) and a [PRIORITIES.md](PRIORITIES.md) file. The first batch was generated from the OxyRoute roadmap; **21+** are follow-ups from [docs/feature.md](../../docs/feature.md).
 
 ## Status and GitHub (living backlog)
 
 - **Closed milestone [v0.2.0](https://github.com/QueryaHub/OxyRoute/milestone/1):** the original **20-issue** batch is **shipped** in `main`/`dev` (PyPI 0.1.x, CI, RSGI/OpenAPI surface, PyO3 upgrade, etc.).  
-- **Active milestone [v0.3.0](https://github.com/QueryaHub/OxyRoute/milestone/2):** remaining **open** work — [#4](https://github.com/QueryaHub/OxyRoute/issues/4) (perf), [#8](https://github.com/QueryaHub/OxyRoute/issues/8) (JWK/oxyjwt), [#17](https://github.com/QueryaHub/OxyRoute/issues/17) (ASGI), [#18](https://github.com/QueryaHub/OxyRoute/issues/18) (lifespan/state). Optional OpenAPI depth (`$ref` / `$defs`): [09.md](bodies/09.md); issue #9 is closed — open a new issue if you pick this up.  
+- **Active milestone [v0.3.0](https://github.com/QueryaHub/OxyRoute/milestone/2):** **open** work — [#4](https://github.com/QueryaHub/OxyRoute/issues/4) (perf), [#8](https://github.com/QueryaHub/OxyRoute/issues/8) (JWK/oxyjwt), [#17](https://github.com/QueryaHub/OxyRoute/issues/17) (ASGI), [#18](https://github.com/QueryaHub/OxyRoute/issues/18) (lifespan/state), **critical modules** — [#46](https://github.com/QueryaHub/OxyRoute/issues/46) (sub-routers), [#47](https://github.com/QueryaHub/OxyRoute/issues/47) (multipart/form), [#48](https://github.com/QueryaHub/OxyRoute/issues/48) (HTTPException), [#49](https://github.com/QueryaHub/OxyRoute/issues/49) (CORS). Optional OpenAPI depth (`$ref` / `$defs`): [09.md](bodies/09.md); issue #9 is closed — open a new issue if you pick this up.  
 - **Do not re-run** `./scripts/create-github-issues.sh` on an already-populated repo (duplicates). Check open work with: `gh issue list -R QueryaHub/OxyRoute --state open`.
 
 ## Prerequisites
@@ -62,6 +62,15 @@ gh issue create --title "feat: expose PATCH routes on Python App" \
 | 18 | [bodies/18.md](bodies/18.md) | feat: pass app state / lifespan for shared resources (optional design) | `enhancement` | v0.2.0 |
 | 19 | [bodies/19.md](bodies/19.md) | feat: return 405 when path exists for another method | `enhancement` | v0.2.0 |
 | 20 | [bodies/20.md](bodies/20.md) | feat: register HEAD/OPTIONS and sensible defaults | `enhancement` | v0.2.0 |
+
+### Follow-up issues (v0.3.0, [feature research](../../docs/feature.md))
+
+| # | GitHub | Body file | Title |
+|---|--------|-----------|--------|
+| 46 | [issue](https://github.com/QueryaHub/OxyRoute/issues/46) | [bodies/21.md](bodies/21.md) | feat: sub-routers and route prefix composition (include_router) |
+| 47 | [issue](https://github.com/QueryaHub/OxyRoute/issues/47) | [bodies/22.md](bodies/22.md) | feat: multipart/form-data and urlencoded request bodies |
+| 48 | [issue](https://github.com/QueryaHub/OxyRoute/issues/48) | [bodies/23.md](bodies/23.md) | feat: global HTTPException and exception handlers |
+| 49 | [issue](https://github.com/QueryaHub/OxyRoute/issues/49) | [bodies/24.md](bodies/24.md) | feat: first-class CORS helper (middleware / preflight) |
 
 ## Priority tier (P0 / P1)
 

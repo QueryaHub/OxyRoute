@@ -10,12 +10,16 @@ This file tracks **priority tiers** for items in [bodies/](bodies/). Use it with
 | 17 | [17.md](bodies/17.md) | **ASGI bridge** — `run_coroutine_threadsafe` / thread safety under concurrent load. |
 | 18 | [18.md](bodies/18.md) | **App state / lifespan** — documented pattern and optional native `State` for shared resources. |
 
-## P1 (next: auth and API polish)
+## P1 (next: auth, API composition, and HTTP ergonomics)
 
 | # | File | Rationale |
 |---|------|-----------|
 | 8 | [08.md](bodies/08.md) | **JWK / JWKS / OxyJWT alignment** — beyond current PEM/RS256; key rotation, docs. |
 | 9 | [09.md](bodies/09.md) | **OpenAPI depth** (optional) — `$ref` / `$defs` and richer `requestBody` where needed. |
+| 21 | [21.md](bodies/21.md) | **Sub-routers** — [GitHub #46](https://github.com/QueryaHub/OxyRoute/issues/46). |
+| 22 | [22.md](bodies/22.md) | **Multipart / form body** (P0 on GitHub) — [GitHub #47](https://github.com/QueryaHub/OxyRoute/issues/47). |
+| 23 | [23.md](bodies/23.md) | **HTTPException / handlers** — [GitHub #48](https://github.com/QueryaHub/OxyRoute/issues/48). |
+| 24 | [24.md](bodies/24.md) | **CORS helper** — [GitHub #49](https://github.com/QueryaHub/OxyRoute/issues/49). |
 
 ## Done (shipped; keep bodies for history)
 
