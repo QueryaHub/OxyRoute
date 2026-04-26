@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{DecodingKey, Validation, decode};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::{PyBytes, PyDict, PyList};
 use serde_json::Value as JsonValue;
 
 use crate::params::{header_get_lax, parse_query, value_for_path_param};
@@ -353,35 +353,197 @@ pub async fn run_rsgi(
     } else {
         res
     };
-    let (status, bytes, content_type) = match Python::with_gil(|py| -> PyResult<(u16, Vec<u8>, String)> {
-        let b = handler_out.bind(py);
-        if let Ok(s) = b.extract::<String>() {
-            return Ok((200, s.into_bytes(), "text/plain; charset=utf-8".to_string()));
-        }
-        if let Ok(s) = b.extract::<&str>() {
-            return Ok((200, s.as_bytes().to_vec(), "text/plain; charset=utf-8".to_string()));
-        }
-        if let Ok(buf) = b.extract::<Vec<u8>>() {
-            return Ok((200, buf, "application/octet-stream".to_string()));
-        }
-        if let Ok(d) = b.downcast::<PyDict>() {
-            let st = d.get_item("status")?;
-            let bd = d.get_item("body")?;
-            if let (Some(sc), Some(body)) = (st, bd) {
-                if let (Ok(code), Ok(bstr)) = (sc.extract::<u16>(), body.str()) {
-                    return Ok((code, bstr.to_string().into_bytes(), "text/plain; charset=utf-8".to_string()));
-                }
-            }
-        }
-        let jmod = py.import_bound("json")?;
-        let dumped = jmod.call_method1("dumps", (b.clone().unbind(),))?;
-        let s: String = dumped.extract()?;
-        Ok((200, s.into_bytes(), "application/json; charset=utf-8".to_string()))
-    }) {
-        Ok(x) => x,
+    let mapped = match Python::with_gil(|py| map_handler_return(py, &handler_out)) {
+        Ok(m) => m,
         Err(e) => {
             return send_internal_error(&protocol, &method, &path, e).await;
         }
     };
-    response::send_bytes(&protocol, status, &bytes, &content_type).await
+    match mapped {
+        HandlerMap::WithHeaders { status, body, headers } => {
+            response::send_with_headers(&protocol, status, &body, headers).await
+        }
+        HandlerMap::Simple { status, body, content_type } => {
+            response::send_bytes(&protocol, status, &body, &content_type).await
+        }
+    }
+}
+
+/// Return value of a user handler, mapped to an HTTP body and headers.
+fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
+    let b = out.bind(py);
+    // Before `extract::<String>`: some non-`str` objects may still coerce in edge cases;
+    // `Response` must be recognized first.
+    if is_oxyroute_response(py, b)? {
+        return structured_from_response_attrs(py, b);
+    }
+    if let Ok(s) = b.extract::<String>() {
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: s.into_bytes(),
+            content_type: "text/plain; charset=utf-8".to_string(),
+        });
+    }
+    if let Ok(s) = b.extract::<&str>() {
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: s.as_bytes().to_vec(),
+            content_type: "text/plain; charset=utf-8".to_string(),
+        });
+    }
+    if let Ok(buf) = b.extract::<Vec<u8>>() {
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: buf,
+            content_type: "application/octet-stream".to_string(),
+        });
+    }
+    if let Ok(d) = b.downcast::<PyDict>() {
+        let h = d.get_item("headers")?;
+        let c = d.get_item("cookies")?;
+        let has_structured = h.is_some() || c.is_some();
+        if has_structured {
+            if let (Some(st), Some(bd)) = (d.get_item("status")?, d.get_item("body")?) {
+                return structured_from_status_body(
+                    py,
+                    &st,
+                    &bd,
+                    d.get_item("headers")?,
+                    d.get_item("cookies")?,
+                );
+            }
+        }
+        let st = d.get_item("status")?;
+        let bd = d.get_item("body")?;
+        if let (Some(sc), Some(body)) = (st, bd) {
+            if let (Ok(code), Ok(bstr)) = (sc.extract::<u16>(), body.str()) {
+                return Ok(HandlerMap::Simple {
+                    status: code,
+                    body: bstr.to_string().into_bytes(),
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                });
+            }
+        }
+    }
+    let jmod = py.import_bound("json")?;
+    let dumped = jmod.call_method1("dumps", (b.clone().unbind(),))?;
+    let s: String = dumped.extract()?;
+    Ok(HandlerMap::Simple {
+        status: 200,
+        body: s.into_bytes(),
+        content_type: "application/json; charset=utf-8".to_string(),
+    })
+}
+
+enum HandlerMap {
+    WithHeaders {
+        status: u16,
+        body: Vec<u8>,
+        headers: Vec<(String, String)>,
+    },
+    Simple {
+        status: u16,
+        body: Vec<u8>,
+        content_type: String,
+    },
+}
+
+fn is_oxyroute_response(_py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<bool> {
+    // `oxyroute.Response` (dataclass): not a plain dict; has instance attributes
+    // `status` / `body` / `headers` (and optional `cookies`). Avoid `isinstance` /
+    // `import oxyroute` from the shared library — ABI / import subtleties can differ.
+    if b.is_instance_of::<PyDict>() {
+        return Ok(false);
+    }
+    Ok(b.hasattr("status")? && b.hasattr("body")? && b.hasattr("headers")?)
+}
+
+fn structured_from_response_attrs(
+    py: Python<'_>,
+    b: &Bound<'_, PyAny>,
+) -> PyResult<HandlerMap> {
+    let st = b.getattr("status")?;
+    let body = b.getattr("body")?;
+    let headers = b.getattr("headers")?;
+    let cookies = b.getattr("cookies")?;
+    structured_from_status_body(
+        py,
+        &st,
+        &body,
+        Some(headers),
+        Some(cookies),
+    )
+}
+
+fn structured_from_status_body(
+    py: Python<'_>,
+    st: &Bound<'_, PyAny>,
+    body_val: &Bound<'_, PyAny>,
+    headers: Option<Bound<'_, PyAny>>,
+    cookies: Option<Bound<'_, PyAny>>,
+) -> PyResult<HandlerMap> {
+    let status: u16 = st.extract()?;
+    let (body, default_ct) = value_to_bytes_and_ct(py, body_val)?;
+    let mut has_ct = false;
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    if let Some(h) = headers {
+        if !h.is_none() {
+            let d = h.downcast::<PyDict>()?;
+            for (k, v) in d.iter() {
+                let key: String = k.extract()?;
+                let val: String = v.extract()?;
+                if key.eq_ignore_ascii_case("content-type") {
+                    has_ct = true;
+                }
+                pairs.push((key, val));
+            }
+        }
+    }
+    if !has_ct {
+        pairs.insert(0, ("content-type".to_string(), default_ct));
+    }
+    if let Some(c) = cookies {
+        if !c.is_none() {
+            for item in c.downcast::<PyList>()?.iter() {
+                let s: String = item.extract()?;
+                pairs.push(("set-cookie".to_string(), s));
+            }
+        }
+    }
+    Ok(HandlerMap::WithHeaders { status, body, headers: pairs })
+}
+
+/// JSON body, etc.
+fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<u8>, String)> {
+    if b.is_none() {
+        return Ok((
+            Vec::new(),
+            "text/plain; charset=utf-8".to_string(),
+        ));
+    }
+    if let Ok(s) = b.extract::<String>() {
+        return Ok((
+            s.into_bytes(),
+            "text/plain; charset=utf-8".to_string(),
+        ));
+    }
+    if let Ok(s) = b.extract::<&str>() {
+        return Ok((
+            s.as_bytes().to_vec(),
+            "text/plain; charset=utf-8".to_string(),
+        ));
+    }
+    if let Ok(buf) = b.extract::<Vec<u8>>() {
+        return Ok((
+            buf,
+            "application/octet-stream".to_string(),
+        ));
+    }
+    let jmod = py.import_bound("json")?;
+    let dumped = jmod.call_method1("dumps", (b.clone().unbind(),))?;
+    let s: String = dumped.extract()?;
+    Ok((
+        s.into_bytes(),
+        "application/json; charset=utf-8".to_string(),
+    ))
 }

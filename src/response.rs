@@ -62,6 +62,62 @@ pub async fn send_bytes(
     })
 }
 
+/// RSGI `response_bytes` / `response_empty` with a full `[(name, value), ...]` header list.
+pub async fn send_with_headers(
+    protocol: &Py<PyAny>,
+    status: u16,
+    body: &[u8],
+    headers: Vec<(String, String)>,
+) -> PyResult<PyObject> {
+    if body.is_empty() {
+        return send_empty_with_header_pairs(protocol, status, headers).await;
+    }
+    Python::with_gil(|py| {
+        let p = protocol.bind(py);
+        let h = build_header_list_from_pairs(py, &headers)?;
+        p.getattr("response_bytes")?
+            .call1((u16::from(status), h, body))?;
+        Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
+    })
+}
+
+async fn send_empty_with_header_pairs(
+    protocol: &Py<PyAny>,
+    status: u16,
+    headers: Vec<(String, String)>,
+) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let p = protocol.bind(py);
+        let h = build_header_list_from_pairs(py, &headers)?;
+        p.getattr("response_empty")?
+            .call1((u16::from(status), h))?;
+        Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
+    })
+}
+
+fn build_header_list_from_pairs<'py>(
+    py: Python<'py>,
+    pairs: &[(String, String)],
+) -> PyResult<Bound<'py, PyList>> {
+    let out = PyList::empty_bound(py);
+    for (k, v) in pairs {
+        let name: String = if k.eq_ignore_ascii_case("set-cookie") {
+            "set-cookie".to_string()
+        } else {
+            k.to_ascii_lowercase()
+        };
+        let pair = PyTuple::new_bound(
+            py,
+            [
+                PyString::new_bound(py, &name),
+                PyString::new_bound(py, v.as_str()),
+            ],
+        );
+        out.append(pair)?;
+    }
+    Ok(out)
+}
+
 fn build_headers_ct<'py>(
     py: Python<'py>,
     content_type: Option<&str>,
