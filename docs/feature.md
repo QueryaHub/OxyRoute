@@ -59,7 +59,7 @@
 | **CORS** | `CORSConfig` + `apply_cors` / `set_cors` | Preflight и заголовки на ответах; см. [cors.md](cors.md). |
 | **CSRF** | Нет | Для cookie-сессий и форм часто нужны токены. |
 | **Rate limiting** | Нет | |
-| **Security headers** (HSTS, CSP, …) | Ручные заголовки | Нет пресетов. |
+| **Security headers** (HSTS, CSP, …) | `SecurityHeadersConfig` + `set_security_headers` | [security-headers.md](security-headers.md); merge не перезаписывает уже заданные в `Response` имена. |
 | **JWKS / ротация ключей** | Частично | В бэклоге [#8](https://github.com/QueryaHub/OxyRoute/issues/8). |
 
 ---
@@ -128,7 +128,7 @@ OxyRoute осознанно **уже** в нише: **быстрый маршр�
 - [#51](https://github.com/QueryaHub/OxyRoute/issues/51) — SSE ([`26.md`](../.github/ISSUE_BACKLOG/bodies/26.md))  
 - [#52](https://github.com/QueryaHub/OxyRoute/issues/52) — WebSocket ([`27.md`](../.github/ISSUE_BACKLOG/bodies/27.md))  
 - [#53](https://github.com/QueryaHub/OxyRoute/issues/53) — CSRF ([`28.md`](../.github/ISSUE_BACKLOG/bodies/28.md))  
-- [#54](https://github.com/QueryaHub/OxyRoute/issues/54) — security headers ([`29.md`](../.github/ISSUE_BACKLOG/bodies/29.md))  
+- [#54](https://github.com/QueryaHub/OxyRoute/issues/54) — security headers ([`29.md`](../.github/ISSUE_BACKLOG/bodies/29.md), [security-headers.md](security-headers.md)) — **сделано**  
 
 ---
 

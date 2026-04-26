@@ -6,6 +6,7 @@ from oxyroute.cors import CORSConfig, apply_cors
 from oxyroute.exceptions import HTTPException
 from oxyroute.response import Response
 from oxyroute.router import APIRouter
+from oxyroute.security_headers import SecurityHeadersConfig
 
 __all__ = [
     "APIRouter",
@@ -14,6 +15,7 @@ __all__ = [
     "Depends",
     "HTTPException",
     "Response",
+    "SecurityHeadersConfig",
     "__version__",
     "apply_cors",
     "decode_jwt_hs",
