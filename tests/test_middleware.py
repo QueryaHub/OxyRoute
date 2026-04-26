@@ -12,10 +12,7 @@ def test_middleware_cors_preflight_204_no_route_ran() -> None:
     n = 0
 
     def mw(scope, _protocol) -> Response | None:
-        if (
-            scope.method == "OPTIONS"
-            and scope.headers.get("access-control-request-method", "")
-        ):
+        if scope.method == "OPTIONS" and scope.headers.get("access-control-request-method", ""):
             return Response(
                 status=204,
                 body=None,
