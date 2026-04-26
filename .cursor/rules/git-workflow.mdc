@@ -1,0 +1,26 @@
+---
+description: Feature branches and PRs for GitHub issues — never land feature work by committing straight to dev/main
+alwaysApply: true
+---
+
+# Git and GitHub workflow (OxyRoute)
+
+When implementing a **feature, fix, or issue** (including backlog / issue numbers in `.github/ISSUE_BACKLOG`):
+
+1. **Branch**  
+   - Do **not** commit or push feature work directly to `dev` or `main`.  
+   - Create a branch from the current base (usually `dev`): `git fetch origin` then `git checkout -b <branch>`.  
+   - Prefer names like: `feat/<short-slug>`, or `issue-<N>-<short-slug>` (e.g. `issue-20-head-options`).
+
+2. **Pull request**  
+   - Push the branch: `git push -u origin <branch>`.  
+   - Open a **PR** into `dev` (or the repo’s default integration branch).  
+   - In the PR title or description, **link the issue**: `Closes #N` / `Fixes #N` / `Ref #N` as appropriate so GitHub closes or tracks the work.
+
+3. **Before coding**  
+   - Confirm whether an issue already exists; if the user only gave a topic, match it to a backlog file or open an issue, then use the same branch+PR flow.
+
+4. **Exceptions**  
+   - Tiny doc typo or rule-only changes may still use a small branch+PR, or a single “chore:” PR if the team agrees — default is **always branch + PR** for any code or test change.
+
+This applies to all agents and humans working in this repo.
