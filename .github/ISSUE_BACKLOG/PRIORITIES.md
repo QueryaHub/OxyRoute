@@ -1,35 +1,46 @@
 # Priority and sequencing (OxyRoute backlog)
 
-This file tracks **priority tiers** for items in [bodies/](bodies/). Use it with the GitHub milestone (see [README](README.md)). The **v0.2.0** issue batch (issues 1–3, 5–7, 9–16, 19–20, 15) is **shipped**; follow-up work is on milestone **[v0.3.0](https://github.com/QueryaHub/OxyRoute/milestone/2)** (issues **4, 8, 17, 18** on GitHub).
+This file tracks **priority tiers** for items in [bodies/](bodies/). The **next PyPI and GitHub milestone** is **[v0.2.0](https://github.com/QueryaHub/OxyRoute/milestone/1)** (release **0.2.0**). The first **20-issue** batch (01–20, plus shipped items) is in `main`/`dev` at **0.1.x**; everything below targets **0.2.0** unless noted.
 
-## P0 (active: performance and integration hardening)
+## P0 (performance and core reliability)
 
 | # | File | Rationale |
 |---|------|-----------|
 | 4 | [04.md](bodies/04.md) | **Route hot path** — reduce lock contention / route snapshot after `freeze()`. |
 | 17 | [17.md](bodies/17.md) | **ASGI bridge** — `run_coroutine_threadsafe` / thread safety under concurrent load. |
-| 18 | [18.md](bodies/18.md) | **App state / lifespan** — documented pattern and optional native `State` for shared resources. |
+| 18 | [18.md](bodies/18.md) | **App state / lifespan** — shared resources across workers. |
+| 22 | [22.md](bodies/22.md) | **Multipart / urlencoded body** — [GitHub #47](https://github.com/QueryaHub/OxyRoute/issues/47). |
 
-## P1 (next: auth, API composition, and HTTP ergonomics)
+## P1 (API ergonomics, security helpers, protocol features)
 
 | # | File | Rationale |
 |---|------|-----------|
-| 8 | [08.md](bodies/08.md) | **JWK / JWKS / OxyJWT alignment** — beyond current PEM/RS256; key rotation, docs. |
-| 9 | [09.md](bodies/09.md) | **OpenAPI depth** (optional) — `$ref` / `$defs` and richer `requestBody` where needed. |
+| 8 | [08.md](bodies/08.md) | **JWK / JWKS** — [GitHub #8](https://github.com/QueryaHub/OxyRoute/issues/8). |
+| 9 | [09.md](bodies/09.md) | **OpenAPI depth** (optional) — `$ref` / `$defs`. |
 | 21 | [21.md](bodies/21.md) | **Sub-routers** — [GitHub #46](https://github.com/QueryaHub/OxyRoute/issues/46). |
-| 22 | [22.md](bodies/22.md) | **Multipart / form body** (P0 on GitHub) — [GitHub #47](https://github.com/QueryaHub/OxyRoute/issues/47). |
-| 23 | [23.md](bodies/23.md) | **HTTPException / handlers** — [GitHub #48](https://github.com/QueryaHub/OxyRoute/issues/48). |
+| 23 | [23.md](bodies/23.md) | **HTTPException + global exception handlers** — [GitHub #48](https://github.com/QueryaHub/OxyRoute/issues/48). |
 | 24 | [24.md](bodies/24.md) | **CORS helper** — [GitHub #49](https://github.com/QueryaHub/OxyRoute/issues/49). |
+| 28 | [28.md](bodies/28.md) | **CSRF** (optional) — [GitHub #53](https://github.com/QueryaHub/OxyRoute/issues/53). |
+| 29 | [29.md](bodies/29.md) | **Security headers preset** — [GitHub #54](https://github.com/QueryaHub/OxyRoute/issues/54). |
 
-## Done (shipped; keep bodies for history)
+## Research / heavier (may slip past 0.2.0)
+
+| # | File | Rationale |
+|---|------|-----------|
+| 25 | [25.md](bodies/25.md) | **HTTP/2** — docs + deployment guarantees — [GitHub #50](https://github.com/QueryaHub/OxyRoute/issues/50). |
+| 26 | [26.md](bodies/26.md) | **SSE** streaming — [GitHub #51](https://github.com/QueryaHub/OxyRoute/issues/51). |
+| 27 | [27.md](bodies/27.md) | **WebSockets** — [GitHub #52](https://github.com/QueryaHub/OxyRoute/issues/52). |
+
+## Done (0.1.x; keep bodies for history)
 
 - **Query, errors, E2E:** 2, 3, 12  
 - **API surface:** 1, 5, 6, 7, 10, 11, 19, 20  
-- **CI / release / docs:** 13, 14, 15, 16  
+- **CI / release / docs / PyO3:** 13, 14, 15, 16  
 
 ## Roadmap phasing (summary)
 
-1. **P0:** 4 → 17 → 18 (order can overlap by contributor capacity).  
-2. **P1:** 8 when product needs JWKS; 9 as polish.  
+1. **P0:** 4, 17, 18, 47 (order flexible).  
+2. **P1:** 8, 46, 48, 49, 53, 54; 9 as polish.  
+3. **Research:** 50, 51, 52 — as capacity allows.  
 
 [← Back to README](README.md)
