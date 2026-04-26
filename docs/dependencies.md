@@ -44,7 +44,7 @@ The underlying callables are unwrapped in Python and passed to the native `add_r
 
 ## Freezing route registration
 
-Calling **`app.freeze()`** (forwarded to the native `App`) sets the app to **no longer accept** new routes—use this when you want a final route table before serving (future-proofing for DI graphs and similar).
+Calling **`app.freeze()`** (forwarded to the native `App`) sets the app to **no longer accept** new routes—use this when you want a final route table before serving (future-proofing for DI graphs and similar). The native layer also **clones the per-method `matchit` routers** into a read-only snapshot so that **path matching no longer takes per-router mutexes** on the hot request path (the mutable copies remain for introspection alignment with the snapshot).
 
 ## See also
 
