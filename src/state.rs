@@ -76,6 +76,8 @@ pub struct AppState {
     pub include_openapi: bool,
     /// Optional `(scope, protocol) ->` hook; return ``None`` to continue to routing (see `docs/handlers.md`).
     pub middleware: Option<Py<PyAny>>,
+    /// Optional Python CORS config (e.g. :class:`oxyroute.cors.CORSConfig`) for response headers.
+    pub cors: Option<Py<PyAny>>,
 }
 
 impl AppState {
@@ -98,6 +100,7 @@ impl AppState {
             frozen: false,
             include_openapi: true,
             middleware: None,
+            cors: None,
         }
     }
 

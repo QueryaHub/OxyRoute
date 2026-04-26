@@ -317,6 +317,13 @@ impl App {
         Ok(())
     }
 
+    /// Optional Python CORS config with ``response_header_pairs(scope)`` (see ``oxyroute.cors``).
+    fn set_cors(&self, config: Option<Py<PyAny>>) -> PyResult<()> {
+        let mut st = self.state.write();
+        st.cors = config;
+        Ok(())
+    }
+
     fn handle_rsgi<'py>(
         this: PyRef<'py, Self>,
         py: Python<'py>,

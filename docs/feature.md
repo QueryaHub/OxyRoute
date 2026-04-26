@@ -56,7 +56,7 @@
 
 | Тема | Зазор | Комментарий |
 |------|--------|-------------|
-| **CORS** | Ручной | В доках упомянут preflight через `set_middleware`; нет готового `CORSMiddleware` с настройками. |
+| **CORS** | `CORSConfig` + `apply_cors` / `set_cors` | Preflight и заголовки на ответах; см. [cors.md](cors.md). |
 | **CSRF** | Нет | Для cookie-сессий и форм часто нужны токены. |
 | **Rate limiting** | Нет | |
 | **Security headers** (HSTS, CSP, …) | Ручные заголовки | Нет пресетов. |
@@ -112,7 +112,7 @@ OxyRoute осознанно **уже** в нише: **быстрый маршр�
 3. **Перф роутера** [#4](https://github.com/QueryaHub/OxyRoute/issues/4) — при росте нагрузки.  
 4. **Sub-routers или префиксы** — резко повышают пригодность для крупных приложений.  
 5. **Multipart + form body** — если не только JSON API.  
-6. **CORS / exception handlers** — быстрые победы на Python-стороне без ломки RSGI.
+6. **Exception handlers (глобальные)** — быстрые победы на Python-стороне без ломки RSGI. **CORS** — см. [cors.md](cors.md) / [#49](https://github.com/QueryaHub/OxyRoute/issues/49).
 
 ## Связанные GitHub-issues (milestone v0.2.0)
 
@@ -121,7 +121,6 @@ OxyRoute осознанно **уже** в нише: **быстрый маршр�
 - [#46](https://github.com/QueryaHub/OxyRoute/issues/46) — sub-routers ([`21.md`](../.github/ISSUE_BACKLOG/bodies/21.md))  
 - [#47](https://github.com/QueryaHub/OxyRoute/issues/47) — multipart / urlencoded ([`22.md`](../.github/ISSUE_BACKLOG/bodies/22.md))  
 - [#48](https://github.com/QueryaHub/OxyRoute/issues/48) — **глобальные исключения** / `HTTPException` ([`23.md`](../.github/ISSUE_BACKLOG/bodies/23.md))  
-- [#49](https://github.com/QueryaHub/OxyRoute/issues/49) — CORS ([`24.md`](../.github/ISSUE_BACKLOG/bodies/24.md))  
 
 **Протокол и безопасность**
 

@@ -87,8 +87,11 @@ There is no **`register_exception_handler`** API yet; map custom exception types
 - Return **`None`**: continue with normal routing and body read.
 - Return **any other value**: use the same mapping as a route return value (`Response`, dict, `str`, etc.); the response is sent and **the route handler and body are skipped** (e.g. cheap CORS preflight on `OPTIONS` without consuming a `POST` body).
 
+For a configurable **`allow_origins` / `allow_methods` / `allow_headers`** flow plus native merging of CORS headers into normal responses, use **`CORSConfig`** and **`apply_cors`** (see [cors.md](cors.md)).
+
 ## See also
 
 - [Routing](routing.md)
 - [JWT](jwt.md)
 - [Dependencies](dependencies.md)
+- [CORS](cors.md)

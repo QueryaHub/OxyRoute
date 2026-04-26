@@ -96,6 +96,14 @@ class App:
         """
         self._app.set_middleware(handler)
 
+    def set_cors(self, config: Any | None) -> None:
+        """
+        Optional CORS object (e.g. :class:`oxyroute.cors.CORSConfig`) for merging response
+        headers. Used together with :func:`oxyroute.cors.apply_cors` or a custom
+        :meth:`set_middleware` for preflight. Pass ``None`` to disable.
+        """
+        self._app.set_cors(config)
+
     def get(
         self,
         path: str,
