@@ -25,6 +25,8 @@ The Python `oxyroute.app.App` class implements the async RSGI entry that Granian
 
 You can **override** these in a **subclass** of `App` to open DB pools, HTTP clients, `asyncio` primitives, etc. The default base implementation does nothing.
 
+Every `App` exposes **`app.state`**, a `types.SimpleNamespace` for attaching **per-process** objects. Use it in `__rsgi_init__` (or a factory) instead of ad hoc attributes on `self` if you want a single obvious place for shared services; it is the same not-shared-across-processes story as any other in-memory `App` data.
+
 ### Workers and shared state (Granian)
 
 - With **`granian --workers N`**, the server runs **N independent worker processes** (typical for CPU-bound HTTP). Each process loads your module, constructs your `app`, and may call `__rsgi_init__` **once per worker** (exact call pattern is defined by the server; see [Granian’s docs](https://github.com/emmett-framework/granian)). **In-memory** attributes you set in `__rsgi_init__` are **not** shared between workers: two requests may hit different processes and see different `self.foo`.
