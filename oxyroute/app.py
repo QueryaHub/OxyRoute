@@ -273,11 +273,14 @@ class App:
         return wrap
 
     async def __rsgi_init__(self, *args: Any, **kwargs: Any) -> None:
-        """Lifespan hook (no-op). Granian may pass extra positional args; accept **kwargs."""
+        """
+        RSGI worker startup (no-op in the base class). Subclass to open pools/clients; see
+        ``docs/rsgi.md`` (Lifespan) and ``examples/rsgi_lifespan_app.py``.
+        """
         return None
 
     async def __rsgi_del__(self, *args: Any, **kwargs: Any) -> None:
-        """Lifespan teardown (no-op). Accept extra args for Granian compatibility."""
+        """RSGI worker teardown (no-op in the base class)."""
         return None
 
     async def __rsgi__(self, scope: Any, protocol: Any) -> None:
