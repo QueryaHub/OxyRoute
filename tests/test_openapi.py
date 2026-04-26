@@ -70,6 +70,26 @@ def test_set_openapi_served_false_stops_serving_still_exports_json() -> None:
     assert "/z" in json.loads(app.openapi_json())["paths"]
 
 
+def test_include_openapi_false_reenabled_with_set_openapi_served_get_200() -> None:
+    app = App(title="R", include_openapi=False)
+    app.set_openapi_served(True)
+
+    @app.get("/b")
+    def b() -> str:
+        return "b"
+
+    async def _run() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.get("/openapi.json")
+        assert r.status_code == 200, r.text
+        doc = r.json()
+        assert doc["info"]["title"] == "R"
+        assert "/b" in doc["paths"]
+
+    asyncio.run(_run())
+
+
 def test_openapi_post_request_body_from_pydantic() -> None:
     pydantic = pytest.importorskip("pydantic")
 
