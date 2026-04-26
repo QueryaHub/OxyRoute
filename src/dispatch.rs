@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use serde_json::Value as JsonValue;
 
-use crate::params::{header_get_lax, parse_query, value_for_path_param};
+use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
 use crate::response;
 use crate::schema::json_to_py;
 use crate::state::{map_method_router, AppState};
@@ -153,6 +153,9 @@ pub async fn run_rsgi(
         dep_names,
         dep_factories,
         dep_is_async,
+        dep_wants_request,
+        handler_param_names,
+        handler_varkw,
     ) = {
         let st = state.lock().map_err(crate::lock_err)?;
         let e = st
@@ -172,6 +175,9 @@ pub async fn run_rsgi(
             e.dep_names.clone(),
             e.dep_factories.clone(),
             e.dep_is_async.clone(),
+            e.dep_wants_request.clone(),
+            e.handler_param_names.clone(),
+            e.handler_varkw,
         )
     };
     let mut claims_val: Option<JsonValue> = None;
@@ -272,11 +278,40 @@ pub async fn run_rsgi(
     } else {
         None
     };
+    let need_req_ctx = dep_wants_request.iter().any(|&x| x);
+    let request_ctx: Option<Py<PyAny>> = if need_req_ctx {
+        match Python::with_gil(|py| -> PyResult<Py<PyAny>> {
+            let s = scope.bind(py);
+            let d = build_request_context(py, &s, &method, &path, &query_string)?;
+            Ok(d.unbind().into())
+        }) {
+            Ok(o) => Some(o),
+            Err(e) => {
+                return send_internal_error(&protocol, &method, &path, e).await;
+            }
+        }
+    } else {
+        None
+    };
     let mut dep_out: Vec<PyObject> = Vec::with_capacity(dep_factories.len());
     for (i, fact) in dep_factories.iter().enumerate() {
         if dep_is_async.get(i) == Some(&true) {
             let r = match Python::with_gil(|py| -> PyResult<PyObject> {
-                Ok(fact.bind(py).call((), None)?.unbind())
+                let kw = PyDict::new_bound(py);
+                if dep_wants_request.get(i) == Some(&true) {
+                    if let Some(ref rc) = request_ctx {
+                        kw.set_item("request", rc.bind(py))?;
+                    }
+                }
+                for j in 0..i {
+                    kw.set_item(dep_names[j].as_str(), dep_out[j].bind(py))?;
+                }
+                let f = fact.bind(py);
+                if kw.is_empty() {
+                    Ok(f.call((), None)?.unbind())
+                } else {
+                    Ok(f.call((), Some(&kw))?.unbind())
+                }
             }) {
                 Ok(x) => x,
                 Err(e) => {
@@ -301,7 +336,21 @@ pub async fn run_rsgi(
             dep_out.push(o);
         } else {
             let o = match Python::with_gil(|py| -> PyResult<PyObject> {
-                Ok(fact.bind(py).call((), None)?.unbind())
+                let kw = PyDict::new_bound(py);
+                if dep_wants_request.get(i) == Some(&true) {
+                    if let Some(ref rc) = request_ctx {
+                        kw.set_item("request", rc.bind(py))?;
+                    }
+                }
+                for j in 0..i {
+                    kw.set_item(dep_names[j].as_str(), dep_out[j].bind(py))?;
+                }
+                let f = fact.bind(py);
+                if kw.is_empty() {
+                    Ok(f.call((), None)?.unbind())
+                } else {
+                    Ok(f.call((), Some(&kw))?.unbind())
+                }
             }) {
                 Ok(x) => x,
                 Err(e) => {
@@ -326,7 +375,9 @@ pub async fn run_rsgi(
         }
         for (i, name) in dep_names.iter().enumerate() {
             if let Some(oo) = dep_out.get(i) {
-                kwargs.set_item(name, oo.bind(py))?;
+                if handler_varkw || handler_param_names.contains(name) {
+                    kwargs.set_item(name, oo.bind(py))?;
+                }
             }
         }
         if let Some(c) = claims_val {
