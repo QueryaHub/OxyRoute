@@ -7,7 +7,6 @@ import time
 
 import httpx
 import pytest
-
 from oxyroute import App
 
 oxyjwt = pytest.importorskip("oxyjwt")
@@ -33,7 +32,7 @@ def test_jwt_route_iss_and_aud_match() -> None:
         jwt_issuer=ISS,
         jwt_audience=AUD,
     )
-    def ok(claims: dict) -> str:  # noqa: ARG001
+    def ok(claims: dict) -> str:
         return "yes"
 
     tok = _token(sub="u1", iss=ISS, aud=AUD, exp=now + 3600)
@@ -60,7 +59,7 @@ def test_jwt_route_wrong_iss_401() -> None:
         jwt_issuer=ISS,
         jwt_audience=AUD,
     )
-    def p(claims: dict) -> str:  # noqa: ARG001
+    def p(claims: dict) -> str:
         return "x"
 
     tok = _token(sub="u1", iss="https://other", aud=AUD, exp=now + 3600)
@@ -86,7 +85,7 @@ def test_jwt_route_wrong_aud_401() -> None:
         jwt_issuer=ISS,
         jwt_audience=AUD,
     )
-    def p(claims: dict) -> str:  # noqa: ARG001
+    def p(claims: dict) -> str:
         return "x"
 
     tok = _token(sub="u1", iss=ISS, aud="other-aud", exp=now + 3600)

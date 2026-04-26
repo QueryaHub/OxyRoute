@@ -7,7 +7,6 @@ import json
 import os
 
 import httpx
-
 from oxyroute import App
 
 

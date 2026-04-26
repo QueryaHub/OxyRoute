@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Callable, List, Optional, Tuple, TypeVar, Union
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from . import _oxyroute
 from .asgi import build_asgi_caller
 
 F = TypeVar("F", bound=Callable[..., Any])
-Dep = Union[Callable[..., Any], _oxyroute.PyDepends]
+Dep = Callable[..., Any] | _oxyroute.PyDepends
 
 
 def _unwrap_dep(f: Dep) -> Any:
@@ -16,8 +17,8 @@ def _unwrap_dep(f: Dep) -> Any:
 
 
 def _norm_dependencies(
-    deps: Optional[List[Tuple[str, Dep]]],
-) -> Optional[List[Tuple[str, Any]]]:
+    deps: list[tuple[str, Dep]] | None,
+) -> list[tuple[str, Any]] | None:
     if not deps:
         return None
     return [(n, _unwrap_dep(c)) for n, c in deps]
@@ -53,12 +54,12 @@ class App:
         path: str,
         *,
         require_jwt: bool = False,
-        jwt_secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
-        jwt_issuer: Optional[str] = None,
-        jwt_audience: Optional[str] = None,
-        jwt_leeway: Optional[int] = None,
-        dependencies: Optional[List[Tuple[str, Dep]]] = None,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "GET",
@@ -78,13 +79,13 @@ class App:
         path: str,
         *,
         require_jwt: bool = False,
-        jwt_secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
         read_json_body: bool = True,
-        jwt_issuer: Optional[str] = None,
-        jwt_audience: Optional[str] = None,
-        jwt_leeway: Optional[int] = None,
-        dependencies: Optional[List[Tuple[str, Dep]]] = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "POST",
@@ -104,12 +105,12 @@ class App:
         path: str,
         *,
         require_jwt: bool = False,
-        jwt_secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
-        jwt_issuer: Optional[str] = None,
-        jwt_audience: Optional[str] = None,
-        jwt_leeway: Optional[int] = None,
-        dependencies: Optional[List[Tuple[str, Dep]]] = None,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "PUT",
@@ -129,13 +130,13 @@ class App:
         path: str,
         *,
         require_jwt: bool = False,
-        jwt_secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
         read_json_body: bool = True,
-        jwt_issuer: Optional[str] = None,
-        jwt_audience: Optional[str] = None,
-        jwt_leeway: Optional[int] = None,
-        dependencies: Optional[List[Tuple[str, Dep]]] = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "PATCH",
@@ -155,12 +156,12 @@ class App:
         path: str,
         *,
         require_jwt: bool = False,
-        jwt_secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
-        jwt_issuer: Optional[str] = None,
-        jwt_audience: Optional[str] = None,
-        jwt_leeway: Optional[int] = None,
-        dependencies: Optional[List[Tuple[str, Dep]]] = None,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "DELETE",
@@ -180,14 +181,14 @@ class App:
         method: str,
         path: str,
         require_jwt: bool,
-        jwt_secret: Optional[str],
-        algorithms: Optional[List[str]],
+        jwt_secret: str | None,
+        algorithms: list[str] | None,
         read_json_body: bool,
-        dependencies: Optional[List[Tuple[str, Dep]]],
+        dependencies: list[tuple[str, Dep]] | None,
         *,
-        jwt_issuer: Optional[str] = None,
-        jwt_audience: Optional[str] = None,
-        jwt_leeway: Optional[int] = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
     ) -> Callable[[F], F]:
         dlist = _norm_dependencies(dependencies)
 
@@ -209,11 +210,11 @@ class App:
 
         return wrap
 
-    async def __rsgi_init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401
+    async def __rsgi_init__(self, *args: Any, **kwargs: Any) -> None:
         """Lifespan hook (no-op). Granian may pass extra positional args; accept **kwargs."""
         return None
 
-    async def __rsgi_del__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401
+    async def __rsgi_del__(self, *args: Any, **kwargs: Any) -> None:
         """Lifespan teardown (no-op). Accept extra args for Granian compatibility."""
         return None
 

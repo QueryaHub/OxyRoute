@@ -13,7 +13,6 @@ import sys
 import tempfile
 import textwrap
 import time
-from typing import List
 
 import httpx
 import pytest
@@ -48,7 +47,7 @@ def test_granian_rsgi_returns_handler_body() -> None:
     port = _free_port()
     env = os.environ.copy()
     env["PYTHONPATH"] = d
-    cmd: List[str] = [
+    cmd: list[str] = [
         sys.executable,
         "-m",
         "granian",
@@ -87,9 +86,7 @@ def test_granian_rsgi_returns_handler_body() -> None:
                     f"granian exited early: code={proc.returncode} stderr={err!r} last={last_err!r}"
                 )
         err = proc.stderr.read() if proc.stderr else ""
-        raise AssertionError(
-            f"server did not become ready. last={last_err!r} stderr={err!r}"
-        )
+        raise AssertionError(f"server did not become ready. last={last_err!r} stderr={err!r}")
     finally:
         proc.terminate()
         try:

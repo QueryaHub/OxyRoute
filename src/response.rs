@@ -24,8 +24,7 @@ pub async fn send_str(
     Python::with_gil(|py| {
         let p = protocol.bind(py);
         let h = build_headers_ct(py, Some(content_type))?;
-        p.getattr("response_str")?
-            .call1((u16::from(status), h, text))?;
+        p.getattr("response_str")?.call1((status, h, text))?;
         Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
     })
 }
@@ -38,8 +37,7 @@ pub async fn send_empty(
     Python::with_gil(|py| {
         let p = protocol.bind(py);
         let h = build_headers_ct(py, content_type)?;
-        p.getattr("response_empty")?
-            .call1((u16::from(status), h))?;
+        p.getattr("response_empty")?.call1((status, h))?;
         Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
     })
 }
@@ -56,8 +54,7 @@ pub async fn send_bytes(
     Python::with_gil(|py| {
         let p = protocol.bind(py);
         let h = build_headers_ct(py, Some(content_type))?;
-        p.getattr("response_bytes")?
-            .call1((u16::from(status), h, body))?;
+        p.getattr("response_bytes")?.call1((status, h, body))?;
         Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
     })
 }
@@ -75,8 +72,7 @@ pub async fn send_with_headers(
     Python::with_gil(|py| {
         let p = protocol.bind(py);
         let h = build_header_list_from_pairs(py, &headers)?;
-        p.getattr("response_bytes")?
-            .call1((u16::from(status), h, body))?;
+        p.getattr("response_bytes")?.call1((status, h, body))?;
         Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
     })
 }
@@ -89,8 +85,7 @@ async fn send_empty_with_header_pairs(
     Python::with_gil(|py| {
         let p = protocol.bind(py);
         let h = build_header_list_from_pairs(py, &headers)?;
-        p.getattr("response_empty")?
-            .call1((u16::from(status), h))?;
+        p.getattr("response_empty")?.call1((status, h))?;
         Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
     })
 }
