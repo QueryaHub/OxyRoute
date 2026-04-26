@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use serde_json::Value as JsonValue;
 
+use crate::form::{self, ParsedFile};
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
 use crate::response;
 use crate::schema::json_to_py;
@@ -25,7 +26,8 @@ type RouteCallSnapshot = (
     Option<String>,
     u64,
     Option<String>,
-    bool,
+    bool, // read_json_body
+    bool, // read_form_body
     Vec<String>,
     Vec<Py<PyAny>>,
     Vec<bool>,
@@ -157,6 +159,16 @@ pub async fn run_rsgi(
         }
         Ok(Vec::new())
     })?;
+    let max = form::max_body_bytes();
+    if (body_bytes.len() as u64) > max {
+        return response::send_text(
+            &protocol,
+            413,
+            r#"{"error":"payload too large"}"#,
+            "application/json; charset=utf-8",
+        )
+        .await;
+    }
     let (auth, cookie_raw) =
         Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
             let s = scope.bind(py);
@@ -203,6 +215,7 @@ pub async fn run_rsgi(
         jwt_leeway,
         jwt_cookie,
         read_json_body,
+        read_form_body,
         dep_names,
         dep_factories,
         dep_is_async,
@@ -226,6 +239,7 @@ pub async fn run_rsgi(
             e.jwt_leeway,
             e.jwt_cookie.clone(),
             e.read_json_body,
+            e.read_form_body,
             e.dep_names.clone(),
             e.dep_factories.clone(),
             e.dep_is_async.clone(),
@@ -336,6 +350,7 @@ pub async fn run_rsgi(
     }
     let query_map = parse_query(&query_string);
     let body_json: Option<JsonValue> = if read_json_body
+        && !read_form_body
         && (method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE")
     {
         if body_bytes.is_empty() {
@@ -356,6 +371,75 @@ pub async fn run_rsgi(
         }
     } else {
         None
+    };
+    let (form_map, form_files): (HashMap<String, String>, Vec<ParsedFile>) = if read_form_body
+        && (method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE")
+    {
+        if body_bytes.is_empty() {
+            (HashMap::new(), vec![])
+        } else {
+            let ct: PyResult<Option<String>> = Python::with_gil(|py| {
+                let s = scope.bind(py);
+                let headers = s.getattr("headers")?;
+                Ok(header_get_lax(&headers, "content-type"))
+            });
+            let ct = match ct {
+                Ok(x) => x,
+                Err(e) => {
+                    return send_internal_error(&protocol, &method, &path, e).await;
+                }
+            };
+            if ct.as_deref().map(str::is_empty) != Some(false) {
+                return response::send_text(
+                    &protocol,
+                    400,
+                    r#"{"error":"missing content-type"}"#,
+                    "application/json; charset=utf-8",
+                )
+                .await;
+            }
+            let cts = ct.unwrap();
+            let lower = cts.to_ascii_lowercase();
+            if lower.starts_with("application/x-www-form-urlencoded") {
+                (form::parse_urlencoded_form(&body_bytes), vec![])
+            } else if lower.starts_with("multipart/form-data") {
+                let boundary = match multer::parse_boundary(&cts) {
+                    Ok(b) => b,
+                    Err(_) => {
+                        return response::send_text(
+                            &protocol,
+                            400,
+                            r#"{"error":"invalid multipart boundary"}"#,
+                            "application/json; charset=utf-8",
+                        )
+                        .await
+                    }
+                };
+                let parsed = match form::parse_multipart(body_bytes.clone(), &boundary).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return response::send_text(
+                            &protocol,
+                            400,
+                            &format!(r#"{{"error":"multipart: {e}"}}"#),
+                            "application/json; charset=utf-8",
+                        )
+                        .await
+                    }
+                };
+                (parsed.form, parsed.files)
+            } else {
+                return response::send_text(
+                    &protocol,
+                    415,
+                    r#"{"error":"expected application/x-www-form-urlencoded or multipart/form-data"}"#,
+                    "application/json; charset=utf-8",
+                )
+                .await;
+            }
+        }
+    } else {
+        (HashMap::new(), vec![])
     };
     let need_req_ctx = dep_wants_request.iter().any(|&x| x);
     let request_ctx: Option<Py<PyAny>> = if need_req_ctx {
@@ -467,7 +551,30 @@ pub async fn run_rsgi(
             let pyv = json_to_py(py, j.clone())?;
             kwargs.set_item("json", pyv)?;
         }
-        if !body_bytes.is_empty() && body_json.is_none() {
+        if read_form_body {
+            if handler_varkw || handler_param_names.contains("form") {
+                let fd = PyDict::new(py);
+                for (k, v) in &form_map {
+                    fd.set_item(k, v.as_str())?;
+                }
+                kwargs.set_item("form", fd)?;
+            }
+            if handler_varkw || handler_param_names.contains("files") {
+                let fl = PyList::empty(py);
+                for f in &form_files {
+                    let d = PyDict::new(py);
+                    d.set_item("name", f.name.as_str())?;
+                    match &f.filename {
+                        Some(n) => d.set_item("filename", n.as_str())?,
+                        None => d.set_item("filename", py.None())?,
+                    }
+                    d.set_item("content_type", f.content_type.as_str())?;
+                    d.set_item("data", PyBytes::new(py, &f.data))?;
+                    fl.append(d)?;
+                }
+                kwargs.set_item("files", fl)?;
+            }
+        } else if !body_bytes.is_empty() && body_json.is_none() {
             kwargs.set_item("body", PyBytes::new(py, &body_bytes))?;
         }
         let res = handler.bind(py).call((), Some(&kwargs))?.unbind();

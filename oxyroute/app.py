@@ -89,6 +89,7 @@ class App:
             algorithms,
             read_json_body=False,
             dependencies=dependencies,
+            read_form_body=False,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -103,6 +104,7 @@ class App:
         jwt_secret: str | None = None,
         algorithms: list[str] | None = None,
         read_json_body: bool = True,
+        read_form_body: bool = False,
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
@@ -119,6 +121,7 @@ class App:
             algorithms,
             read_json_body,
             dependencies=dependencies,
+            read_form_body=read_form_body,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -134,6 +137,8 @@ class App:
         require_jwt: bool = False,
         jwt_secret: str | None = None,
         algorithms: list[str] | None = None,
+        read_json_body: bool = True,
+        read_form_body: bool = False,
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
@@ -148,8 +153,9 @@ class App:
             require_jwt,
             jwt_secret,
             algorithms,
-            read_json_body=True,
+            read_json_body,
             dependencies=dependencies,
+            read_form_body=read_form_body,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -166,6 +172,7 @@ class App:
         jwt_secret: str | None = None,
         algorithms: list[str] | None = None,
         read_json_body: bool = True,
+        read_form_body: bool = False,
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
@@ -182,6 +189,7 @@ class App:
             algorithms,
             read_json_body,
             dependencies=dependencies,
+            read_form_body=read_form_body,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -211,6 +219,7 @@ class App:
             algorithms,
             read_json_body=False,
             dependencies=dependencies,
+            read_form_body=False,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -238,6 +247,7 @@ class App:
             algorithms,
             read_json_body=False,
             dependencies=dependencies,
+            read_form_body=False,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -254,6 +264,7 @@ class App:
         read_json_body: bool,
         dependencies: list[tuple[str, Dep]] | None,
         *,
+        read_form_body: bool = False,
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
@@ -266,6 +277,9 @@ class App:
         def wrap(handler: F) -> F:
             if body_model is not None and body_schema is not None:
                 raise TypeError("use only one of body_model and body_schema")
+            rj = read_json_body
+            if read_form_body:
+                rj = False
             body_schema_json: str | None = None
             if body_model is not None:
                 body_schema_json = json.dumps(body_model.model_json_schema())
@@ -278,7 +292,8 @@ class App:
                 require_jwt,
                 jwt_secret,
                 algorithms,
-                read_json_body,
+                rj,
+                read_form_body,
                 dlist,
                 jwt_issuer,
                 jwt_audience,

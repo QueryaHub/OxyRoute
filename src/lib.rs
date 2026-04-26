@@ -9,6 +9,7 @@ use pyo3::types::{PyDict, PyList, PyTuple};
 use serde_json::json;
 
 mod dispatch;
+mod form;
 mod params;
 mod response;
 mod schema;
@@ -159,7 +160,7 @@ impl App {
 
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
-        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None)
+        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None)
     )]
     #[allow(clippy::too_many_arguments)]
     fn add_route(
@@ -172,6 +173,7 @@ impl App {
         jwt_secret: Option<String>,
         algorithms: Option<Bound<'_, PyList>>,
         read_json_body: bool,
+        read_form_body: bool,
         dependencies: Option<Bound<'_, PyList>>,
         jwt_issuer: Option<String>,
         jwt_audience: Option<String>,
@@ -203,6 +205,11 @@ impl App {
         };
         if algs.is_empty() {
             algs.push(jsonwebtoken::Algorithm::HS256);
+        }
+        if read_json_body && read_form_body {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "read_json_body and read_form_body are mutually exclusive",
+            ));
         }
         if require_jwt && jwt_secret.is_none() {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -242,6 +249,7 @@ impl App {
             jwt_leeway: jwt_leeway.unwrap_or(60),
             jwt_cookie,
             read_json_body,
+            read_form_body,
             dep_names,
             dep_factories,
             dep_is_async,

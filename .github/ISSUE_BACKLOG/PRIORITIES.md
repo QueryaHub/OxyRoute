@@ -8,7 +8,6 @@ This file tracks **priority tiers** for items in [bodies/](bodies/). The **next 
 |---|------|-----------|
 | 4 | [04.md](bodies/04.md) | **Route hot path** — reduce lock contention / route snapshot after `freeze()`. |
 | 17 | [17.md](bodies/17.md) | **ASGI bridge** — `run_coroutine_threadsafe` / thread safety under concurrent load. |
-| 22 | [22.md](bodies/22.md) | **Multipart / urlencoded body** — [GitHub #47](https://github.com/QueryaHub/OxyRoute/issues/47). |
 
 ## P1 (API ergonomics, security helpers, protocol features)
 
@@ -36,10 +35,11 @@ This file tracks **priority tiers** for items in [bodies/](bodies/). The **next 
 - **API surface:** 1, 5, 6, 7, 10, 11, 19, 20  
 - **CI / release / docs / PyO3:** 13, 14, 15, 16  
 - **Lifespan / `app.state`:** 18 (see `App.state`, `examples/rsgi_lifespan_app.py`, `docs/rsgi.md`)  
+- **Form bodies:** 22 / [#47](https://github.com/QueryaHub/OxyRoute/issues/47) — `read_form_body`, `form` / `files` kwargs, `docs/handlers.md`  
 
 ## Roadmap phasing (summary)
 
-1. **P0:** 4, 17, 47; **18** done — `app.state` + lifespan docs (order flexible).  
+1. **P0:** 4, 17; **18** / **#47 (form)** done (order flexible).  
 2. **P1:** 8, 46, 48, 49, 53, 54; 9 as polish.  
 3. **Research:** 50, 51, 52 — as capacity allows.  
 
