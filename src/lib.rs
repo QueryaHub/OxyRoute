@@ -108,7 +108,13 @@ pub struct App {
 }
 
 impl App {
-    fn openapi_add_path(oa: &mut serde_json::Value, method: &str, path: &str, op_id: &str) {
+    fn openapi_add_path(
+        oa: &mut serde_json::Value,
+        method: &str,
+        path: &str,
+        op_id: &str,
+        request_schema: Option<serde_json::Value>,
+    ) {
         if let Some(paths) = oa
             .as_object_mut()
             .and_then(|m| m.get_mut("paths"))
@@ -117,10 +123,28 @@ impl App {
             let method_lc = method.to_lowercase();
             let path_entry = paths.entry(path).or_insert_with(|| json!({}));
             if let Some(obj) = path_entry.as_object_mut() {
-                obj.insert(
-                    method_lc,
-                    json!({ "summary": op_id, "operationId": op_id, "responses": { "200": { "description": "OK" } } }),
-                );
+                let op = if let Some(schema) = request_schema {
+                    json!({
+                        "summary": op_id,
+                        "operationId": op_id,
+                        "requestBody": {
+                            "required": true,
+                            "content": {
+                                "application/json": {
+                                    "schema": schema
+                                }
+                            }
+                        },
+                        "responses": { "200": { "description": "OK" } }
+                    })
+                } else {
+                    json!({
+                        "summary": op_id,
+                        "operationId": op_id,
+                        "responses": { "200": { "description": "OK" } }
+                    })
+                };
+                obj.insert(method_lc, op);
             }
         }
     }
@@ -140,7 +164,7 @@ impl App {
 
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
-        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None)
+        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None)
     )]
     #[allow(clippy::too_many_arguments)]
     fn add_route(
@@ -158,6 +182,7 @@ impl App {
         jwt_audience: Option<String>,
         jwt_leeway: Option<u64>,
         jwt_cookie: Option<String>,
+        body_schema_json: Option<String>,
     ) -> PyResult<()> {
         let st = self.state.lock().map_err(lock_err)?;
         if st.frozen {
@@ -226,9 +251,18 @@ impl App {
             handler_param_names,
             handler_varkw,
         });
+        let request_schema: Option<serde_json::Value> = match body_schema_json
+            .as_deref()
+            .map(str::trim)
+        {
+            None | Some("") => None,
+            Some(s) => Some(serde_json::from_str(s).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid body_schema JSON: {e}"))
+            })?),
+        };
         {
             let mut oa = st.openapi.lock().map_err(lock_err)?;
-            App::openapi_add_path(&mut oa, &method, &path, &op_id);
+            App::openapi_add_path(&mut oa, &method, &path, &op_id, request_schema);
         }
         {
             let mut m = state::map_method_router(&st, &method).ok_or_else(|| {
