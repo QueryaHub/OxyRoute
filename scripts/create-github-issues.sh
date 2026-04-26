@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Creates milestone v0.2.0, labels, and 20 GitHub issues for OxyRoute.
+# One-time: creates milestone v0.2.0, labels, and 20 GitHub issues for OxyRoute.
+# QueryaHub/OxyRoute has already run this; use README ISSUE_BACKLOG for current milestones (v0.3.0 follow-ups).
 # Prerequisite: `gh auth login` with issues:write on the repository.
 # Re-running duplicates issues; only use on a clean tracker or a fork.
 set -euo pipefail
