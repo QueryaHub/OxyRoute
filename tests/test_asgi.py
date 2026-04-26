@@ -11,6 +11,7 @@ from oxyroute import App, Response
 
 def test_asgi_get_plain_text() -> None:
     app = App()
+
     @app.get("/p")
     def p() -> str:
         return "x"

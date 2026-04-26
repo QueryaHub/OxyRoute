@@ -34,7 +34,9 @@ class App:
     ``granian app:app --interface rsgi`` or for ASGI ``granian app:app --interface asgi``.
     """
 
-    def __init__(self, title: str = "OxyRoute", *, include_openapi: bool = True) -> None:
+    def __init__(
+        self, title: str = "OxyRoute", *, include_openapi: bool = True
+    ) -> None:
         self._app = _oxyroute.App(include_openapi=include_openapi)
         self._app.set_openapi_title(title)
         self.title = title

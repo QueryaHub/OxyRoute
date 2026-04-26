@@ -85,7 +85,9 @@ def _norm_headers_asgi(
 class _RsgiProtocol:
     __slots__ = ("_body", "_send", "_loop", "status", "_status")
 
-    def __init__(self, body: bytes, send: Any, main_loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self, body: bytes, send: Any, main_loop: asyncio.AbstractEventLoop
+    ) -> None:
         self._body = body
         self._send = send
         self._loop = main_loop
