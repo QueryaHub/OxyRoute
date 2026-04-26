@@ -46,6 +46,13 @@ If a **dependency factory** or the **route handler** raises a Python exception (
 
 Set the environment variable **`OXYROUTE_DEBUG=1`** (or `true`) to include a **`detail`** string in that JSON for the same error and to log more at the `log` crate target **`oxyroute`** (see `RUST_LOG`, e.g. `RUST_LOG=oxyroute=error`).
 
+## Pre-route hook (`set_middleware`)
+
+`App.set_middleware(f)` sets an **optional** callable taking `(scope, protocol)` (same RSGI-like objects as the rest of the stack). It runs **after** the path and method are known, **before** the request body is read or routes are matched.
+
+- Return **`None`**: continue with normal routing and body read.
+- Return **any other value**: use the same mapping as a route return value (`Response`, dict, `str`, etc.); the response is sent and **the route handler and body are skipped** (e.g. cheap CORS preflight on `OPTIONS` without consuming a `POST` body).
+
 ## See also
 
 - [Routing](routing.md)

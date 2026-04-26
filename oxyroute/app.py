@@ -50,6 +50,19 @@ class App:
         """Enable or disable the built-in ``GET /openapi.json`` route."""
         self._app.set_openapi_served(enabled)
 
+    def set_middleware(
+        self, handler: Callable[..., Any] | None
+    ) -> None:
+        """
+        One optional pre-route callback ``(scope, protocol)`` — return ``None`` to pass through.
+
+        For any other return value, the same rules apply as for route handlers
+        (e.g. :class:`oxyroute.Response` or a ``dict`` with ``status`` / ``body`` / ``headers``);
+        the response is sent and routing / body read is skipped. Runs **before** the request
+        body is read (e.g. for CORS preflight).
+        """
+        self._app.set_middleware(handler)
+
     def get(
         self,
         path: str,
