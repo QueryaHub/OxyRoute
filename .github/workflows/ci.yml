@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, dev]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, dev]
 
 jobs:
   test:
@@ -28,7 +28,7 @@ jobs:
       - name: Install build deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install maturin pytest oxyjwt httpx
+          python -m pip install maturin pytest oxyjwt httpx granian
       - name: Build and install oxyroute
         run: |
           maturin build --release

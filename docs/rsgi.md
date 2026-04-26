@@ -18,10 +18,10 @@ The Python `oxyroute.app.App` class implements the async RSGI entry that Granian
 
 ## Lifespan (optional)
 
-`App` defines no-op coroutines for servers that expect them:
+`App` defines no-op coroutines for servers that expect them. Implementations use `*args, **kwargs` so **Granian** (and any server that passes extra parameters to worker lifespan hooks) can call them without a `TypeError`:
 
-- `async def __rsgi_init__(self) -> None`
-- `async def __rsgi_del__(self) -> None`
+- `async def __rsgi_init__(self, *args, **kwargs) -> None`
+- `async def __rsgi_del__(self, *args, **kwargs) -> None`
 
 You can override these in a subclass if you need startup/shutdown hooks; the default does nothing.
 
