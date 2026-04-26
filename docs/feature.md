@@ -44,7 +44,7 @@
 
 | Тема | Зазор | Комментарий |
 |------|--------|-------------|
-| **Sub-routers / `include_router`** | Нет | Один плоский `App`; нет префиксов и вложенных без ручного дублирования путей. |
+| **Sub-routers / `include_router`** | Частично | `APIRouter`, `App.include_router` — [routing](routing.md), [#46](https://github.com/QueryaHub/OxyRoute/issues/46). |
 | **`Mount` / static files** | Нет | Отдача `/static` из каталога — обычно отдельный слой (nginx) или Starlette StaticFiles. |
 | **Host-based routing** | Нет | |
 | **Глобальные exception handlers** | Частично | `HTTPException` → нужный статус/JSON (см. [handlers](handlers.md)); **нет** `register_exception_handler` / иерархии как в FastAPI — [#48](https://github.com/QueryaHub/OxyRoute/issues/48). |

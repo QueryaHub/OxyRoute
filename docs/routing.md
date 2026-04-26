@@ -25,6 +25,17 @@ Each is a decorator that registers a route and returns the handler unchanged (so
 
 If OpenAPI is enabled, route registration also updates a minimal OpenAPI document. See [openapi.md](openapi.md).
 
+## Sub-routers (`APIRouter` + `include_router`)
+
+For shared path prefixes (for example ``/api/v1/...``), build routes on an **`APIRouter`**, then mount them on the main **`App`** with **`include_router(router, prefix=...)`**. Optional keyword arguments to **`include_router`** are merged with each route’s own options; **per-route** options win on key conflicts (same as FastAPI’s `include_router` defaults).
+
+- **`oxyroute.APIRouter`**: the same `get` / `post` / `put` / `patch` / `delete` / `options` decorators as `App`, but they only *record* routes.
+- **`App.include_router(router, prefix="")`**: registers all recorded routes on the native `App` with `join_path(prefix, route_path)` (leading slashes normalized).
+- **Nesting:** `parent_router.include_router(child_router, prefix="…")` flattens child routes with that prefix, then the parent is mounted on `App` as usual.
+- **Duplicate** path + method: still rejected at register time (same as registering twice on `App`).
+
+Example: [examples/routers_include_app.py](../examples/routers_include_app.py)
+
 ## See also
 
 - [Handlers](handlers.md) — how matched parameters become keyword arguments
