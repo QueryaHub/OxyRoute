@@ -68,6 +68,7 @@ jobs:
             exit 1
           fi
           uv pip install --force-reinstall "${wheels[0]}"
+      # Full suite includes tests/test_granian_e2e.py (real Granian subprocess, --interface rsgi).
       - name: Pytest (isolated dir so repo tree does not shadow the installed package)
         run: |
           cd "$(mktemp -d)"
