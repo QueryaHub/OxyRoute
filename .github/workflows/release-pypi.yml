@@ -1,0 +1,131 @@
+# Publish wheels + sdist to PyPI on version tags (trusted publishing / OIDC).
+# One-time PyPI setup: https://docs.pypi.org/trusted-publishers/adding-a-publisher/
+# GitHub: create an Environment named `pypi` (this workflow uses it for the publish job).
+
+name: Release to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: pypi-release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sdist:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        env:
+          CARGO_INCREMENTAL: "0"
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxyroute-release-sdist
+          path: dist
+
+  wheels-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Linux wheels
+        uses: PyO3/maturin-action@v1
+        env:
+          CARGO_INCREMENTAL: "0"
+        with:
+          target: x86_64
+          manylinux: auto
+          args: --release --out dist --locked --compatibility pypi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxyroute-release-linux
+          path: dist
+
+  wheels-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+      - name: Build Windows wheels
+        uses: PyO3/maturin-action@v1
+        env:
+          CARGO_INCREMENTAL: "0"
+        with:
+          target: x64
+          args: --release --out dist --locked --compatibility pypi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxyroute-release-windows
+          path: dist
+
+  wheels-macos-aarch64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build macOS (arm64) wheels
+        uses: PyO3/maturin-action@v1
+        env:
+          CARGO_INCREMENTAL: "0"
+        with:
+          target: aarch64
+          args: --release --out dist --locked --compatibility pypi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxyroute-release-macos-aarch64
+          path: dist
+
+  wheels-macos-x86_64:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build macOS (x86_64) wheels
+        uses: PyO3/maturin-action@v1
+        env:
+          CARGO_INCREMENTAL: "0"
+        with:
+          target: x86_64
+          args: --release --out dist --locked --compatibility pypi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxyroute-release-macos-x86_64
+          path: dist
+
+  publish:
+    name: Upload to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - sdist
+      - wheels-linux
+      - wheels-windows
+      - wheels-macos-aarch64
+      - wheels-macos-x86_64
+    runs-on: ubuntu-22.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/oxyroute/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+          pattern: oxyroute-release-*
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          print-hash: true

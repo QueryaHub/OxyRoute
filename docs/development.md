@@ -51,6 +51,19 @@ The workflow at `.github/workflows/ci.yml` (job name: **ci**):
 - Matrix across **OS** (Ubuntu, macOS, Windows) and **Python** 3.10 through 3.14 (see `.github/workflows/ci.yml`)
 - Installs dev dependencies (including **granian**), builds a release wheel, installs it, and runs the full pytest suite as above
 
+## Releasing to PyPI
+
+Tag a release with a **`v`-prefixed** semver tag (example: `v0.2.0`). That triggers `.github/workflows/release-pypi.yml`, which builds an **sdist**, **manylinux** x86_64 wheels, **Windows** x64, and **macOS** arm64 + x86_64 wheels, then uploads everything to **PyPI** using [trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC — no long-lived API token in the workflow).
+
+**Before the first upload:**
+
+1. Keep **`pyproject.toml`** / **`Cargo.toml`** versions in sync with the tag you push.
+2. On **PyPI**, register the project (if new) and add a **trusted publisher** for this repo: GitHub → org/repo → workflow **`release-pypi.yml`** → job **`publish`**, and the GitHub **environment** name **`pypi`** (see [PyPI: adding a publisher](https://docs.pypi.org/trusted-publishers/adding-a-publisher/)).
+3. In the GitHub repository, create an **environment** named **`pypi`** (Settings → Environments). You can leave protection rules empty or require reviewers for production safety.
+4. Optionally dry-run on [TestPyPI](https://test.pypi.org/) first: add a second trusted publisher for Test PyPI and either a separate workflow or a manual `twine upload` — the stock release workflow targets production PyPI only.
+
+Build jobs set **`CARGO_INCREMENTAL=0`** for more reproducible release artifacts; wheel builds use **`--locked`** with the committed **`Cargo.lock`**.
+
 ## See also
 
 - [Installation](installation.md)
