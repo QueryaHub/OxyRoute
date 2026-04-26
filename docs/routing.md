@@ -11,7 +11,7 @@ OxyRoute uses the **[matchit](https://crates.io/crates/matchit) 0.7** style of p
 
 The Python `App` class exposes:
 
-- `get`, `post`, `put`, `delete`
+- `get`, `post`, `put`, `patch`, `delete`
 
 Each is a decorator that registers a route and returns the handler unchanged (so you can stack multiple decorators on the same function only if you design for it—usually one method/path per handler is enough).
 
