@@ -324,6 +324,14 @@ impl App {
         Ok(())
     }
 
+    /// Optional security-headers preset; ``response_header_pairs(scope)`` (see
+    /// ``oxyroute.security_headers``), merged only for header names not already on the response.
+    fn set_security_headers(&self, config: Option<Py<PyAny>>) -> PyResult<()> {
+        let mut st = self.state.write();
+        st.security_headers = config;
+        Ok(())
+    }
+
     fn handle_rsgi<'py>(
         this: PyRef<'py, Self>,
         py: Python<'py>,

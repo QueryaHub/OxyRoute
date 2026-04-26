@@ -162,6 +162,10 @@ pub async fn run_rsgi(
         let s = state.read();
         s.cors.clone()
     });
+    let security_cfg = Python::with_gil(|_py| {
+        let s = state.read();
+        s.security_headers.clone()
+    });
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" {
         let (inc, doc) = {
             let st = state.read();
@@ -210,7 +214,21 @@ pub async fn run_rsgi(
                 }
             };
             let mapped = match Python::with_gil(|py| {
-                merge_cors_to_handler_map(py, &cors_cfg, scope.bind(py).clone(), mapped)
+                merge_config_response_headers(
+                    py,
+                    &security_cfg,
+                    scope.bind(py).clone(),
+                    mapped,
+                    true,
+                )
+            }) {
+                Ok(m) => m,
+                Err(e) => {
+                    return send_python_error(&protocol, &method, &path, e).await;
+                }
+            };
+            let mapped = match Python::with_gil(|py| {
+                merge_config_response_headers(py, &cors_cfg, scope.bind(py).clone(), mapped, false)
             }) {
                 Ok(m) => m,
                 Err(e) => {
@@ -688,7 +706,15 @@ pub async fn run_rsgi(
         }
     };
     let mapped = match Python::with_gil(|py| {
-        merge_cors_to_handler_map(py, &cors_cfg, scope.bind(py).clone(), mapped)
+        merge_config_response_headers(py, &security_cfg, scope.bind(py).clone(), mapped, true)
+    }) {
+        Ok(m) => m,
+        Err(e) => {
+            return send_python_error(&protocol, &method, &path, e).await;
+        }
+    };
+    let mapped = match Python::with_gil(|py| {
+        merge_config_response_headers(py, &cors_cfg, scope.bind(py).clone(), mapped, false)
     }) {
         Ok(m) => m,
         Err(e) => {
@@ -811,13 +837,16 @@ async fn send_handler_map(
     }
 }
 
-fn merge_cors_to_handler_map(
+/// `if_absent`: only add a header if no same-name (case-insensitive) header is already present
+/// (``security`` preset). `false` replaces/merges like CORS (``replace`` / duplicate header names).
+fn merge_config_response_headers(
     py: Python<'_>,
-    cors: &Option<Py<PyAny>>,
+    config: &Option<Py<PyAny>>,
     scope: Bound<'_, PyAny>,
     mapped: HandlerMap,
+    if_absent: bool,
 ) -> PyResult<HandlerMap> {
-    let Some(c) = cors else {
+    let Some(c) = config else {
         return Ok(mapped);
     };
     let pairs: Vec<(String, String)> = c
@@ -826,10 +855,14 @@ fn merge_cors_to_handler_map(
     if pairs.is_empty() {
         return Ok(mapped);
     }
-    Ok(merge_cors(mapped, &pairs))
+    if if_absent {
+        Ok(merge_header_pairs_if_absent(mapped, &pairs))
+    } else {
+        Ok(merge_header_pairs_replace(mapped, &pairs))
+    }
 }
 
-fn merge_cors(mapped: HandlerMap, extra: &[(String, String)]) -> HandlerMap {
+fn merge_header_pairs_replace(mapped: HandlerMap, extra: &[(String, String)]) -> HandlerMap {
     if extra.is_empty() {
         return mapped;
     }
@@ -858,6 +891,47 @@ fn merge_cors(mapped: HandlerMap, extra: &[(String, String)]) -> HandlerMap {
             for (a, b) in extra {
                 headers.retain(|(k, _)| !k.eq_ignore_ascii_case(a));
                 headers.push((a.clone(), b.clone()));
+            }
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            }
+        }
+    }
+}
+
+fn merge_header_pairs_if_absent(mapped: HandlerMap, extra: &[(String, String)]) -> HandlerMap {
+    if extra.is_empty() {
+        return mapped;
+    }
+    match mapped {
+        HandlerMap::WithHeaders {
+            status,
+            body,
+            mut headers,
+        } => {
+            for (a, b) in extra {
+                if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(a)) {
+                    headers.push((a.clone(), b.clone()));
+                }
+            }
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            }
+        }
+        HandlerMap::Simple {
+            status,
+            body,
+            content_type,
+        } => {
+            let mut headers = vec![("content-type".to_string(), content_type)];
+            for (a, b) in extra {
+                if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(a)) {
+                    headers.push((a.clone(), b.clone()));
+                }
             }
             HandlerMap::WithHeaders {
                 status,
