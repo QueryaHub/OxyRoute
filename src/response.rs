@@ -90,6 +90,33 @@ async fn send_empty_with_header_pairs(
     })
 }
 
+/// HEAD: no message body, `Content-Length` as if a GET returned `full_body_len` (RFC 9110).
+pub async fn send_head_simple(
+    protocol: &Py<PyAny>,
+    status: u16,
+    full_body_len: usize,
+    content_type: &str,
+) -> PyResult<PyObject> {
+    let headers = vec![
+        ("content-type".to_string(), content_type.to_string()),
+        ("content-length".to_string(), full_body_len.to_string()),
+    ];
+    send_empty_with_header_pairs(protocol, status, headers).await
+}
+
+/// Same as [`send_head_simple`] for structured responses: strip body, set `content-length` from `body.len()`.
+pub async fn send_head_with_headers(
+    protocol: &Py<PyAny>,
+    status: u16,
+    full_body: &[u8],
+    mut headers: Vec<(String, String)>,
+) -> PyResult<PyObject> {
+    let len = full_body.len();
+    headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-length"));
+    headers.push(("content-length".to_string(), len.to_string()));
+    send_empty_with_header_pairs(protocol, status, headers).await
+}
+
 fn build_header_list_from_pairs<'py>(
     py: Python<'py>,
     pairs: &[(String, String)],

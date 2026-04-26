@@ -176,6 +176,31 @@ class App:
             jwt_leeway=jwt_leeway,
         )
 
+    def options(
+        self,
+        path: str,
+        *,
+        require_jwt: bool = False,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
+    ) -> Callable[[F], F]:
+        return self._route(
+            "OPTIONS",
+            path,
+            require_jwt,
+            jwt_secret,
+            algorithms,
+            read_json_body=False,
+            dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
+        )
+
     def _route(
         self,
         method: str,

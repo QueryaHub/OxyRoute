@@ -37,6 +37,7 @@ pub struct AppState {
     pub put: Mutex<Router<usize>>,
     pub patch: Mutex<Router<usize>>,
     pub delete: Mutex<Router<usize>>,
+    pub options: Mutex<Router<usize>>,
     pub openapi: Mutex<serde_json::Value>,
     /// When true, `add_route` fails (DAG / routes frozen for DI).
     pub frozen: bool,
@@ -58,6 +59,7 @@ impl AppState {
             put: Mutex::new(Router::new()),
             patch: Mutex::new(Router::new()),
             delete: Mutex::new(Router::new()),
+            options: Mutex::new(Router::new()),
             openapi: Mutex::new(openapi),
             frozen: false,
             include_openapi: true,
@@ -70,11 +72,13 @@ pub fn map_method_router<'a>(
     method: &str,
 ) -> Option<std::sync::MutexGuard<'a, matchit::Router<usize>>> {
     match method {
-        "GET" => state.get.lock().ok(),
+        // RFC 9110: HEAD shares URI with GET; same handler, no body in the response.
+        "GET" | "HEAD" => state.get.lock().ok(),
         "POST" => state.post.lock().ok(),
         "PUT" => state.put.lock().ok(),
         "PATCH" => state.patch.lock().ok(),
         "DELETE" => state.delete.lock().ok(),
+        "OPTIONS" => state.options.lock().ok(),
         _ => None,
     }
 }
