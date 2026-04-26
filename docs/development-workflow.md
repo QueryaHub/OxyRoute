@@ -2,41 +2,43 @@
 
 OxyRoute uses **`dev` as the integration branch**. `main` (or the default production branch) is updated from `dev` when maintainers cut a release or merge a stable snapshot—follow what your team documents for release tagging.
 
-## Branching model
+## Checklist (order matters)
 
-1. **Always branch from the latest `dev`:**
-
+1. **Sync `dev` first (always `fetch` + `pull` before branching):**
    ```bash
    git fetch origin
    git checkout dev
    git pull origin dev
    ```
+2. **Create a branch** for one GitHub issue: `git checkout -b issue-<N>-<short-slug>`.
+3. **Read the issue** (and [`.github/ISSUE_BACKLOG/bodies/`](.github/ISSUE_BACKLOG/bodies/) or linked spec if you use it).
+4. **Implement** on that branch.
+5. **Run tests and linters** (same as CI, see [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)):
+   - `uv run ruff check oxyroute tests examples` and `uv run ruff format --check oxyroute tests examples`
+   - `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings`
+   - `uv run pytest` (or the isolated pattern in [development.md](development.md))
+6. **Commit atomically** (one logical change per commit: `feat:`, `fix:`, `test:`, `docs:`, …).
+7. **Push and open a PR to `dev`** (base = `dev`), with **`Closes #N`** when the issue is done.
 
-2. **Create a branch for one GitHub issue** (one topic per PR when possible):
+## Branch naming
 
-   ```bash
-   git checkout -b issue-12-rsgi-e2e
-   # or: feat/12-rsgi-e2e  — use a short, kebab-case slug
-   ```
+- Prefer `issue-<N>-<kebab-slug>` or `feat/<N>-<kebab>` so the PR links to the issue (e.g. #12).
 
-   Prefer including the **issue number** in the name so the PR and issue stay linked (e.g. #12).
+## Atomic commits and backlog
 
-3. **Implement the issue** with **small, atomic commits** (one logical change per commit: `fix: …`, `test: …`, `docs: …`).
+- **Do not mix** product code and **`.github/ISSUE_BACKLOG/`** in the same commit. If you update templates, use a **separate** `docs:` or `chore:` commit (or a separate PR).
 
-4. **Do not mix** code changes and **`.github/ISSUE_BACKLOG/`** (issue template bodies) in the same commit. The backlog is reference material for maintainers; if you need to update it, use a **separate** commit, e.g. `docs: update issue backlog description`.
+## Push and open a pull request
 
-5. **Push and open a pull request** with **base = `dev`** and **compare = your branch**.
+```bash
+git push -u origin issue-12-rsgi-e2e
+```
 
-   ```bash
-   git push -u origin issue-12-rsgi-e2e
-   ```
+On GitHub: **New pull request** → **base: `dev`**, **compare: your branch**. Use **`Closes #N`** (or `Fixes #N`) to auto-close the issue on merge.
 
-   On GitHub: **New pull request** → base repository `QueryaHub/OxyRoute`, **base: `dev`**, **compare: `issue-12-rsgi-e2e`**.
+## After merge
 
-6. In the PR description, use **`Closes #N`** (or `Fixes #N`) if the work fully finishes issue **N**—GitHub will close the issue when the PR is merged.
-
-7. After merge into `dev`, delete the remote branch (GitHub can do this on merge) and locally:  
-   `git branch -d issue-12-rsgi-e2e` , then continue with the next issue from a fresh `dev`.
+Delete the remote branch (GitHub can do this on merge) and locally: `git branch -d issue-12-rsgi-e2e`. For the **next** issue, repeat from **fetch + pull `dev`**.
 
 ## What not to do
 
