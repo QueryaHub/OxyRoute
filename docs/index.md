@@ -45,7 +45,7 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 | [Dependencies](dependencies.md) | `Depends`, `dependencies=[...]`, `freeze` |
 | [OpenAPI](openapi.md) | `openapi.json` route, title, `openapi_json()` |
 | [ASGI bridge](asgi.md) | Optional `__call__` for ASGI 3, limitations |
-| [Development](development.md) | Tests, CI, clippy, running pytest safely |
+| [Development](development.md) | Tests, CI, PyPI releases (tag `v*`), clippy, pytest |
 | [Branching and PRs](development-workflow.md) | `dev` as base, issue branches, `Closes #N`, no mixing code with `ISSUE_BACKLOG` in one commit |
 | [Contributing](../CONTRIBUTING.md) | Local setup, issue backlog, GitHub `gh` workflow |
 
