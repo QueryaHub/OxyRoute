@@ -6,13 +6,18 @@ OxyRoute maintains a small **OpenAPI 3.0**-shaped JSON document in Rust while ro
 
 ## Constructor and toggles
 
-- **`App(..., include_openapi=True)`** (Python) maps to the native `App` constructor. When `include_openapi` is false, the special **`GET /openapi.json`** response from the engine is not served, and the document may be empty in those modes depending on the implementation.
-- **`set_openapi_served(False)`** can disable serving the document at runtime by flipping the same flag in state (naming mirrors the native `set_openapi_served`).
+Served vs built: one flag, two ways to set it.
+
+- **`include_openapi`** (constructor) and **`set_openapi_served(enabled)`** both update the same native field (`AppState::include_openapi`). Use the constructor to choose the default; use **`set_openapi_served(False)`** to turn off HTTP serving later (or `True` to re-enable) without recreating the app.
+- **While serving is off** (`include_openapi=False` at build time, or after `set_openapi_served(False)`):
+  - The engine does **not** return the spec for **`GET /openapi.json`** or **`HEAD /openapi.json`**. The request is **not** special-cased, so it goes through normal routing. Unless you add your own handler for that path, the client usually gets **404 Not Found**.
+  - Route registration still **merges** operations into the in-memory OpenAPI document. The document is not discarded.
+- **Export:** **`openapi_json()`** on the Python `App` still returns the current JSON as a string (handy in tests, admin tools, or a custom response), regardless of the serving toggle.
 
 ## Title and export
 
 - **`set_openapi_title`** is applied from `App(..., title="...")` at construction.
-- **`openapi_json()`** on the Python `App` returns the current document as a **string** (for debugging or an alternate transport).
+- **`openapi_json()`** is described above; it is independent of whether `/openapi.json` is exposed over HTTP.
 
 ## What is in the document today
 
