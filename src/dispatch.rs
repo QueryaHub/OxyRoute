@@ -4,7 +4,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use jsonwebtoken::errors::ErrorKind;
-use jsonwebtoken::{decode, DecodingKey, Validation};
+use jsonwebtoken::{decode, Validation};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use serde_json::Value as JsonValue;
@@ -13,7 +13,7 @@ use crate::params::{build_request_context, header_get_lax, parse_query, value_fo
 use crate::response;
 use crate::schema::json_to_py;
 use crate::state::{map_method_router, methods_matching_path, AppState};
-use crate::token::{extract_bearer, extract_cookie_value};
+use crate::token::{build_decoding_key, extract_bearer, extract_cookie_value};
 
 fn oxyroute_debug() -> bool {
     std::env::var("OXYROUTE_DEBUG")
@@ -271,7 +271,7 @@ pub async fn run_rsgi(
             )
             .await;
         };
-        val.algorithms = algs;
+        val.algorithms = algs.clone();
         val.validate_nbf = true;
         val.leeway = jwt_leeway;
         if let Some(ref iss) = jwt_issuer {
@@ -284,7 +284,18 @@ pub async fn run_rsgi(
             // (InvalidAudience). Disable unless the route opts in to an expected audience.
             val.validate_aud = false;
         }
-        let dk = DecodingKey::from_secret(key.as_bytes());
+        let dk = match build_decoding_key(&key, &algs) {
+            Ok(d) => d,
+            Err(_) => {
+                return response::send_text(
+                    &protocol,
+                    401,
+                    "Unauthorized",
+                    "text/plain; charset=utf-8",
+                )
+                .await;
+            }
+        };
         match decode::<JsonValue>(&token, &dk, &val) {
             Ok(data) => {
                 claims_val = Some(data.claims);
