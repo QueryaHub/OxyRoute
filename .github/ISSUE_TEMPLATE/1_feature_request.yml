@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest a new feature or an improvement to OxyRoute
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please read the [docs](https://github.com/QueryaHub/OxyRoute/blob/main/docs/index.md) and check [.github/ISSUE_BACKLOG/PRIORITIES.md](https://github.com/QueryaHub/OxyRoute/blob/main/.github/ISSUE_BACKLOG/PRIORITIES.md) for related plans.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do? What is missing?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Optional design sketch, API shape, or links.
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: RSGI vs ASGI, Python version, Granian version, etc.
+    validations:
+      required: false

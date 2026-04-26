@@ -46,5 +46,6 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 | [OpenAPI](openapi.md) | `openapi.json` route, title, `openapi_json()` |
 | [ASGI bridge](asgi.md) | Optional `__call__` for ASGI 3, limitations |
 | [Development](development.md) | Tests, CI, clippy, running pytest safely |
+| [Contributing](../CONTRIBUTING.md) | Local setup, issue backlog, GitHub `gh` workflow |
 
 [← Back to project README](../README.md)

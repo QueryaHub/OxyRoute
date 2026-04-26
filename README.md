@@ -80,6 +80,10 @@ ASGI and other servers are covered in [docs/asgi.md](docs/asgi.md).
 - `docs/` — detailed English documentation
 - `tests/` — pytest suite (run from a temp directory or an installed wheel so the source tree does not shadow the package; see [docs/development.md](docs/development.md))
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) (build, tests, issue backlog, batch `gh` script).
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
