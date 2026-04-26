@@ -33,9 +33,7 @@ def test_asgi_jwt_rs256_bearer() -> None:
 
     async def _go() -> None:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as c:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             o = await c.get("/r", headers={"Authorization": f"Bearer {tok}"})
         assert o.status_code == 200
         assert o.text == "u-rs"
@@ -46,6 +44,7 @@ def test_asgi_jwt_rs256_bearer() -> None:
 def test_add_route_rejects_mixed_key_and_algorithms() -> None:
     app = App()
     with pytest.raises(ValueError, match="incompatible"):
+
         @app.get(
             "/x",
             require_jwt=True,
