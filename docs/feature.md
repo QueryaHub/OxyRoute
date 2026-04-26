@@ -47,7 +47,7 @@
 | **Sub-routers / `include_router`** | Нет | Один плоский `App`; нет префиксов и вложенных без ручного дублирования путей. |
 | **`Mount` / static files** | Нет | Отдача `/static` из каталога — обычно отдельный слой (nginx) или Starlette StaticFiles. |
 | **Host-based routing** | Нет | |
-| **Глобальные exception handlers** | Нет | Только 500 с JSON; нет `@app.exception_handler` и иерархии исключений. |
+| **Глобальные exception handlers** | Частично | `HTTPException` → нужный статус/JSON (см. [handlers](handlers.md)); **нет** `register_exception_handler` / иерархии как в FastAPI — [#48](https://github.com/QueryaHub/OxyRoute/issues/48). |
 | **Middleware-цепочка** | Один хук | Нет порядка нескольких middleware и `on_request` / `on_response` как в ASGI-стеке. |
 
 ---
