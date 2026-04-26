@@ -1,0 +1,12 @@
+# https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests
+blank_issues_enabled: true
+contact_links:
+  - name: OxyRoute documentation
+    url: https://github.com/QueryaHub/OxyRoute/blob/main/docs/index.md
+    about: RSGI, routing, handlers, JWT, OpenAPI, and local development.
+  - name: Issue backlog and priorities
+    url: https://github.com/QueryaHub/OxyRoute/blob/main/.github/ISSUE_BACKLOG/PRIORITIES.md
+    about: P0 / P1 ordering and pre-written issue bodies in bodies/.
+  - name: Open an issue
+    url: https://github.com/QueryaHub/OxyRoute/issues/new/choose
+    about: Bug reports, features, and questions that fit a GitHub issue.

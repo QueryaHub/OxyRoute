@@ -1,0 +1,39 @@
+name: Bug report
+description: Report incorrect behavior, crashes, or documentation mistakes
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For RSGI/Granian behavior, linking to a **minimal** `app` module and the exact `granian` command line helps a lot.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: Python, oxyroute (git / pip), granian, OS.
+      value: |
+        - Python:
+        - oxyroute:
+        - granian (if used):
+        - OS:
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Code, shell commands, and whether the failure is RSGI or ASGI.
+    validations:
+      required: false
