@@ -25,7 +25,7 @@ pub async fn send_str(
         let p = protocol.bind(py);
         let h = build_headers_ct(py, Some(content_type))?;
         p.getattr("response_str")?.call1((status, h, text))?;
-        Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
+        Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
     })
 }
 
@@ -38,7 +38,7 @@ pub async fn send_empty(
         let p = protocol.bind(py);
         let h = build_headers_ct(py, content_type)?;
         p.getattr("response_empty")?.call1((status, h))?;
-        Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
+        Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
     })
 }
 
@@ -55,7 +55,7 @@ pub async fn send_bytes(
         let p = protocol.bind(py);
         let h = build_headers_ct(py, Some(content_type))?;
         p.getattr("response_bytes")?.call1((status, h, body))?;
-        Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
+        Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
     })
 }
 
@@ -90,7 +90,7 @@ pub async fn send_with_headers(
         let p = protocol.bind(py);
         let h = build_header_list_from_pairs(py, &headers)?;
         p.getattr("response_bytes")?.call1((status, h, body))?;
-        Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
+        Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
     })
 }
 
@@ -103,7 +103,7 @@ async fn send_empty_with_header_pairs(
         let p = protocol.bind(py);
         let h = build_header_list_from_pairs(py, &headers)?;
         p.getattr("response_empty")?.call1((status, h))?;
-        Ok(pyo3::types::PyNone::get_bound(py).to_object(py))
+        Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
     })
 }
 
@@ -138,20 +138,17 @@ fn build_header_list_from_pairs<'py>(
     py: Python<'py>,
     pairs: &[(String, String)],
 ) -> PyResult<Bound<'py, PyList>> {
-    let out = PyList::empty_bound(py);
+    let out = PyList::empty(py);
     for (k, v) in pairs {
         let name: String = if k.eq_ignore_ascii_case("set-cookie") {
             "set-cookie".to_string()
         } else {
             k.to_ascii_lowercase()
         };
-        let pair = PyTuple::new_bound(
+        let pair = PyTuple::new(
             py,
-            [
-                PyString::new_bound(py, &name),
-                PyString::new_bound(py, v.as_str()),
-            ],
-        );
+            [PyString::new(py, &name), PyString::new(py, v.as_str())],
+        )?;
         out.append(pair)?;
     }
     Ok(out)
@@ -162,16 +159,13 @@ fn build_headers_ct<'py>(
     content_type: Option<&str>,
 ) -> PyResult<Bound<'py, PyList>> {
     match content_type {
-        None => Ok(PyList::empty_bound(py)),
+        None => Ok(PyList::empty(py)),
         Some(ct) => {
-            let pair = PyTuple::new_bound(
+            let pair = PyTuple::new(
                 py,
-                [
-                    PyString::new_bound(py, "content-type"),
-                    PyString::new_bound(py, ct),
-                ],
-            );
-            Ok(PyList::new_bound(py, [pair]))
+                [PyString::new(py, "content-type"), PyString::new(py, ct)],
+            )?;
+            Ok(PyList::new(py, [pair])?)
         }
     }
 }

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use form_urlencoded::parse as parse_urlencoded;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use pyo3::IntoPy;
+use pyo3::IntoPyObjectExt;
 
 /// Context dict passed as the `request` keyword to dependency callables that declare it:
 /// `method`, `path`, `query_string`, and `headers` (str → str, lowercased names when from the ASGI bridge).
@@ -16,7 +16,7 @@ pub fn build_request_context<'py>(
     path: &str,
     query_string: &str,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new_bound(py);
+    let d = PyDict::new(py);
     d.set_item("method", method)?;
     d.set_item("path", path)?;
     d.set_item("query_string", query_string)?;
@@ -29,7 +29,7 @@ fn copy_scope_headers_to_dict<'py>(
     py: Python<'py>,
     scope: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let out = PyDict::new_bound(py);
+    let out = PyDict::new(py);
     let h = match scope.getattr("headers") {
         Ok(x) => x,
         Err(_) => return Ok(out),
@@ -74,19 +74,19 @@ pub fn parse_query(q: &str) -> HashMap<String, String> {
 pub fn value_for_path_param(py: Python<'_>, s: &str) -> Py<PyAny> {
     if let Ok(i) = s.parse::<i64>() {
         if !s.contains('.') {
-            return i.into_py(py);
+            return i.into_py_any(py).expect("i64 to Python");
         }
     }
     if let Ok(f) = s.parse::<f64>() {
-        return f.into_py(py);
+        return f.into_py_any(py).expect("f64 to Python");
     }
     if s == "true" {
-        return true.into_py(py);
+        return true.into_py_any(py).expect("bool to Python");
     }
     if s == "false" {
-        return false.into_py(py);
+        return false.into_py_any(py).expect("bool to Python");
     }
-    s.into_py(py)
+    s.to_string().into_py_any(py).expect("str to Python")
 }
 
 pub fn header_get_lax(headers: &Bound<'_, PyAny>, name: &str) -> Option<String> {
