@@ -59,6 +59,7 @@ class App:
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -72,6 +73,7 @@ class App:
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
         )
 
     def post(
@@ -85,6 +87,7 @@ class App:
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -98,6 +101,7 @@ class App:
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
         )
 
     def put(
@@ -110,6 +114,7 @@ class App:
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -123,6 +128,7 @@ class App:
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
         )
 
     def patch(
@@ -136,6 +142,7 @@ class App:
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -149,6 +156,7 @@ class App:
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
         )
 
     def delete(
@@ -161,6 +169,7 @@ class App:
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -174,6 +183,7 @@ class App:
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
         )
 
     def options(
@@ -186,6 +196,7 @@ class App:
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -199,6 +210,7 @@ class App:
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
         )
 
     def _route(
@@ -214,6 +226,7 @@ class App:
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
     ) -> Callable[[F], F]:
         dlist = _norm_dependencies(dependencies)
 
@@ -230,6 +243,7 @@ class App:
                 jwt_issuer,
                 jwt_audience,
                 jwt_leeway,
+                jwt_cookie,
             )
             return handler
 

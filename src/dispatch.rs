@@ -12,7 +12,7 @@ use crate::params::{build_request_context, header_get_lax, parse_query, value_fo
 use crate::response;
 use crate::schema::json_to_py;
 use crate::state::{map_method_router, methods_matching_path, AppState};
-use crate::token::extract_bearer;
+use crate::token::{extract_bearer, extract_cookie_value};
 
 fn oxyroute_debug() -> bool {
     std::env::var("OXYROUTE_DEBUG")
@@ -111,11 +111,15 @@ pub async fn run_rsgi(
         }
         Ok(Vec::new())
     })?;
-    let auth = Python::with_gil(|py| -> PyResult<Option<String>> {
-        let s = scope.bind(py);
-        let headers = s.getattr("headers")?;
-        Ok(header_get_lax(&headers, "authorization"))
-    })?;
+    let (auth, cookie_raw) =
+        Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
+            let s = scope.bind(py);
+            let headers = s.getattr("headers")?;
+            Ok((
+                header_get_lax(&headers, "authorization"),
+                header_get_lax(&headers, "cookie"),
+            ))
+        })?;
     let route_out: Option<(usize, HashMap<String, String>)> = (|| -> PyResult<_> {
         let st = state.lock().map_err(crate::lock_err)?;
         let g = map_method_router(&st, &method)
@@ -156,6 +160,7 @@ pub async fn run_rsgi(
         jwt_issuer,
         jwt_audience,
         jwt_leeway,
+        jwt_cookie,
         read_json_body,
         dep_names,
         dep_factories,
@@ -178,6 +183,7 @@ pub async fn run_rsgi(
             e.jwt_issuer.clone(),
             e.jwt_audience.clone(),
             e.jwt_leeway,
+            e.jwt_cookie.clone(),
             e.read_json_body,
             e.dep_names.clone(),
             e.dep_factories.clone(),
@@ -201,17 +207,31 @@ pub async fn run_rsgi(
             }
             Some(s) => s,
         };
-        let token = match extract_bearer(auth.as_deref()) {
+        let token: String = match extract_bearer(auth.as_deref()).filter(|s| !s.is_empty()) {
             Some(t) => t,
-            None => {
-                return response::send_text(
-                    &protocol,
-                    401,
-                    "Unauthorized",
-                    "text/plain; charset=utf-8",
-                )
-                .await
-            }
+            None => match (jwt_cookie.as_deref(), cookie_raw.as_deref()) {
+                (Some(cname), Some(raw)) => match extract_cookie_value(raw, cname) {
+                    Some(t) if !t.is_empty() => t,
+                    _ => {
+                        return response::send_text(
+                            &protocol,
+                            401,
+                            "Unauthorized",
+                            "text/plain; charset=utf-8",
+                        )
+                        .await;
+                    }
+                },
+                _ => {
+                    return response::send_text(
+                        &protocol,
+                        401,
+                        "Unauthorized",
+                        "text/plain; charset=utf-8",
+                    )
+                    .await;
+                }
+            },
         };
         let mut val = if let Some(f) = algs.first() {
             Validation::new(*f)
