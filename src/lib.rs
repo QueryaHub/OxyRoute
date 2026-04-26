@@ -96,7 +96,7 @@ impl App {
 
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
-        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, dependencies=None)
+        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None)
     )]
     #[allow(clippy::too_many_arguments)]
     fn add_route(
@@ -110,6 +110,9 @@ impl App {
         algorithms: Option<Bound<'_, PyList>>,
         read_json_body: bool,
         dependencies: Option<Bound<'_, PyList>>,
+        jwt_issuer: Option<String>,
+        jwt_audience: Option<String>,
+        jwt_leeway: Option<u64>,
     ) -> PyResult<()> {
         let st = self.state.lock().map_err(|e| lock_err(e))?;
         if st.frozen {
@@ -168,6 +171,9 @@ impl App {
             require_jwt,
             jwt_secret,
             algs: algs.clone(),
+            jwt_issuer,
+            jwt_audience,
+            jwt_leeway: jwt_leeway.unwrap_or(60),
             read_json_body,
             dep_names,
             dep_factories,

@@ -9,6 +9,12 @@ pub struct RouteEntry {
     pub require_jwt: bool,
     pub jwt_secret: Option<String>,
     pub algs: Vec<jsonwebtoken::Algorithm>,
+    /// `None` in Python → no issuer check; else `set_issuer` in jsonwebtoken.
+    pub jwt_issuer: Option<String>,
+    /// `None` in Python → `validate_aud` disabled for this route.
+    pub jwt_audience: Option<String>,
+    /// Clock skew (seconds); Python `None` uses default 60 (jsonwebtoken default).
+    pub jwt_leeway: u64,
     pub read_json_body: bool,
     /// Dependency `name` -> factory callable (linear order; resolved in order, then user handler).
     pub dep_names: Vec<String>,
