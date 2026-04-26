@@ -157,6 +157,11 @@ pub async fn run_rsgi(
             ))
         })?;
     let is_head = method == "HEAD";
+    // `Py<PyAny>` must be cloned while the GIL is held (see PyO3 0.21+).
+    let cors_cfg = Python::with_gil(|_py| {
+        let s = state.read();
+        s.cors.clone()
+    });
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" {
         let (inc, doc) = {
             let st = state.read();
@@ -199,6 +204,14 @@ pub async fn run_rsgi(
         let skip = Python::with_gil(|py| out.bind(py).is_none());
         if !skip {
             let mapped = match Python::with_gil(|py| map_handler_return(py, &out)) {
+                Ok(m) => m,
+                Err(e) => {
+                    return send_python_error(&protocol, &method, &path, e).await;
+                }
+            };
+            let mapped = match Python::with_gil(|py| {
+                merge_cors_to_handler_map(py, &cors_cfg, scope.bind(py).clone(), mapped)
+            }) {
                 Ok(m) => m,
                 Err(e) => {
                     return send_python_error(&protocol, &method, &path, e).await;
@@ -674,6 +687,14 @@ pub async fn run_rsgi(
             return send_python_error(&protocol, &method, &path, e).await;
         }
     };
+    let mapped = match Python::with_gil(|py| {
+        merge_cors_to_handler_map(py, &cors_cfg, scope.bind(py).clone(), mapped)
+    }) {
+        Ok(m) => m,
+        Err(e) => {
+            return send_python_error(&protocol, &method, &path, e).await;
+        }
+    };
     send_handler_map(&protocol, is_head, mapped).await
 }
 
@@ -786,6 +807,63 @@ async fn send_handler_map(
                 body,
                 content_type,
             } => response::send_bytes(protocol, status, &body, &content_type).await,
+        }
+    }
+}
+
+fn merge_cors_to_handler_map(
+    py: Python<'_>,
+    cors: &Option<Py<PyAny>>,
+    scope: Bound<'_, PyAny>,
+    mapped: HandlerMap,
+) -> PyResult<HandlerMap> {
+    let Some(c) = cors else {
+        return Ok(mapped);
+    };
+    let pairs: Vec<(String, String)> = c
+        .call_method1(py, "response_header_pairs", (&scope,))?
+        .extract(py)?;
+    if pairs.is_empty() {
+        return Ok(mapped);
+    }
+    Ok(merge_cors(mapped, &pairs))
+}
+
+fn merge_cors(mapped: HandlerMap, extra: &[(String, String)]) -> HandlerMap {
+    if extra.is_empty() {
+        return mapped;
+    }
+    match mapped {
+        HandlerMap::WithHeaders {
+            status,
+            body,
+            mut headers,
+        } => {
+            for (a, b) in extra {
+                headers.retain(|(k, _)| !k.eq_ignore_ascii_case(a));
+                headers.push((a.clone(), b.clone()));
+            }
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            }
+        }
+        HandlerMap::Simple {
+            status,
+            body,
+            content_type,
+        } => {
+            let mut headers = vec![("content-type".to_string(), content_type)];
+            for (a, b) in extra {
+                headers.retain(|(k, _)| !k.eq_ignore_ascii_case(a));
+                headers.push((a.clone(), b.clone()));
+            }
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            }
         }
     }
 }
