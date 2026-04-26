@@ -215,29 +215,29 @@ pub async fn run_rsgi(
         handler_param_names,
         handler_varkw,
     ) = Python::with_gil(|_py| -> PyResult<RouteCallSnapshot> {
-            let st = state.read();
-            let e = st
-                .routes
-                .get(route_idx)
-                .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("route index"))?;
-            Ok((
-                e.handler.clone(),
-                e.is_async,
-                e.require_jwt,
-                e.jwt_secret.clone(),
-                e.algs.clone(),
-                e.jwt_issuer.clone(),
-                e.jwt_audience.clone(),
-                e.jwt_leeway,
-                e.jwt_cookie.clone(),
-                e.read_json_body,
-                e.dep_names.clone(),
-                e.dep_factories.clone(),
-                e.dep_is_async.clone(),
-                e.dep_wants_request.clone(),
-                e.handler_param_names.clone(),
-                e.handler_varkw,
-            ))
+        let st = state.read();
+        let e = st
+            .routes
+            .get(route_idx)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("route index"))?;
+        Ok((
+            e.handler.clone(),
+            e.is_async,
+            e.require_jwt,
+            e.jwt_secret.clone(),
+            e.algs.clone(),
+            e.jwt_issuer.clone(),
+            e.jwt_audience.clone(),
+            e.jwt_leeway,
+            e.jwt_cookie.clone(),
+            e.read_json_body,
+            e.dep_names.clone(),
+            e.dep_factories.clone(),
+            e.dep_is_async.clone(),
+            e.dep_wants_request.clone(),
+            e.handler_param_names.clone(),
+            e.handler_varkw,
+        ))
     })?;
     let mut claims_val: Option<JsonValue> = None;
     if require_jwt {
