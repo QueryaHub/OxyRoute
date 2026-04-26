@@ -2,6 +2,12 @@
 
 This directory holds **20 issue bodies** ([bodies/](bodies/)) and a [PRIORITIES.md](PRIORITIES.md) file. They were generated from the OxyRoute roadmap for **QueryaHub/OxyRoute**.
 
+## Status and GitHub (living backlog)
+
+- **Closed milestone [v0.2.0](https://github.com/QueryaHub/OxyRoute/milestone/1):** the original **20-issue** batch is **shipped** in `main`/`dev` (PyPI 0.1.x, CI, RSGI/OpenAPI surface, PyO3 upgrade, etc.).  
+- **Active milestone [v0.3.0](https://github.com/QueryaHub/OxyRoute/milestone/2):** remaining **open** work — [#4](https://github.com/QueryaHub/OxyRoute/issues/4) (perf), [#8](https://github.com/QueryaHub/OxyRoute/issues/8) (JWK/oxyjwt), [#17](https://github.com/QueryaHub/OxyRoute/issues/17) (ASGI), [#18](https://github.com/QueryaHub/OxyRoute/issues/18) (lifespan/state). Optional OpenAPI depth (`$ref` / `$defs`): [09.md](bodies/09.md); issue #9 is closed — open a new issue if you pick this up.  
+- **Do not re-run** `./scripts/create-github-issues.sh` on an already-populated repo (duplicates). Check open work with: `gh issue list -R QueryaHub/OxyRoute --state open`.
+
 ## Prerequisites
 
 1. [GitHub CLI](https://cli.github.com/) installed (`gh`).
@@ -59,7 +65,7 @@ gh issue create --title "feat: expose PATCH routes on Python App" \
 
 ## Priority tier (P0 / P1)
 
-See [PRIORITIES.md](PRIORITIES.md) for the recommended order: **P0** = 2, 3, 12; **P1** = 1, 5, 6, 10.
+See [PRIORITIES.md](PRIORITIES.md) for the **current** order (v0.3.0 follow-ups: **4, 17, 18, 8**; optional **9**).
 
 ## Documentation
 
