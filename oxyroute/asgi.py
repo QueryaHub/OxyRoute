@@ -12,6 +12,28 @@ from collections.abc import Callable
 from typing import Any
 
 
+def _run_handle_rsgi_blocking(
+    app_rsgi: Callable[[Any, Any], Any],
+    rscope: Any,
+    proto: Any,
+) -> None:
+    """Run ``handle_rsgi`` to completion on a **fresh** event loop in the thread pool.
+
+    The ASGI server's main loop must **not** ``await`` the native coroutine directly: the
+    Rust/Tokio side calls synchronous ``protocol.response_*`` which use
+    ``run_coroutine_threadsafe(..., self._loop).result()`` targeting the **main** loop.
+    If the main loop is blocked in ``await handle_rsgi``, it can never run those ``send``
+    coroutines — a classic deadlock. Running the await in ``run_in_executor`` + ``asyncio.run``
+    keeps the main loop free to drain the threadsafe queue.
+    """
+
+    async def _inner() -> None:
+        c = app_rsgi(rscope, proto)
+        await c
+
+    asyncio.run(_inner())
+
+
 def _hdr_from_asgi(raw: list[tuple[bytes, bytes]]) -> _HeaderView:
     d: dict[str, str] = {}
     for k, v in raw:
@@ -204,7 +226,13 @@ async def asgi_to_rsgi(
     )
     loop = asyncio.get_running_loop()
     proto = _RsgiProtocol(body, send, loop)
-    await app_rsgi(rscope, proto)
+    await loop.run_in_executor(
+        None,
+        _run_handle_rsgi_blocking,
+        app_rsgi,
+        rscope,
+        proto,
+    )
 
 
 def build_asgi_caller(framework_app: Any) -> Callable[..., Any]:
