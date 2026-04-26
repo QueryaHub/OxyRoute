@@ -110,3 +110,39 @@ def test_openapi_post_request_body_from_pydantic() -> None:
     assert ct["type"] == "object"
     assert "title" in ct.get("properties", {})
     assert "count" in ct.get("properties", {})
+
+
+def test_openapi_post_request_body_from_body_schema_dict() -> None:
+    app = App()
+    raw_schema = {
+        "type": "object",
+        "required": ["a"],
+        "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+    }
+
+    @app.post("/raw", body_schema=raw_schema)
+    def create_raw(json: dict) -> str:
+        return "ok"
+
+    doc = json.loads(app.openapi_json())
+    rb = doc["paths"]["/raw"]["post"]["requestBody"]
+    assert rb["required"] is True
+    s = rb["content"]["application/json"]["schema"]
+    assert s["type"] == "object"
+    assert s["required"] == ["a"]
+    assert s["properties"]["a"]["type"] == "string"
+
+
+def test_openapi_body_model_and_body_schema_rejected() -> None:
+    pydantic = pytest.importorskip("pydantic")
+
+    class M(pydantic.BaseModel):
+        x: int
+
+    app = App()
+
+    with pytest.raises(TypeError, match="body_model and body_schema"):
+
+        @app.post("/x", body_model=M, body_schema={"type": "object"})
+        def _bad(json: dict) -> str:
+            return "n"

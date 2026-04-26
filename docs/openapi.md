@@ -26,7 +26,10 @@ Served vs built: one flag, two ways to set it.
 
 Per route, the code records path, method, a short `summary` / `operationId` derived from the **handler’s** `__name__`, and a simple `200` response placeholder.
 
-For **`POST`**, **`PUT`**, and **`PATCH`**, you can pass **`body_model=...`** where the value is a **Pydantic v2** `BaseModel` class. OxyRoute calls **`model_json_schema()`** at registration time and stores that JSON Schema under the operation’s **`requestBody` → `content` → `application/json` → `schema`**. Pydantic is optional at runtime: only needed if you use `body_model`. The schema is a plain JSON value in the OpenAPI file (`$defs` and refs may appear as Pydantic emits them).
+For **`POST`**, **`PUT`**, and **`PATCH`**, you can document the JSON request body in OpenAPI in two ways (pass **at most one**):
+
+- **`body_model=...`**: a **Pydantic v2** `BaseModel` class. OxyRoute calls **`model_json_schema()`** at registration time and stores the result under **`requestBody` → `content` → `application/json` → `schema`**. Pydantic is optional at runtime: only needed if you use `body_model` (`$defs` / `$ref` appear as Pydantic emits them).
+- **`body_schema=...`**: a plain **JSON Schema** object (`dict` / mapping), e.g. from hand-written spec or another library. It is **JSON-serialized** at registration time and used the same way in OpenAPI. No Pydantic import required.
 
 ## See also
 
