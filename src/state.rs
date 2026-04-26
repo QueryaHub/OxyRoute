@@ -82,3 +82,49 @@ pub fn map_method_router<'a>(
         _ => None,
     }
 }
+
+/// All HTTP methods for which `path` matches a registered route. Used to respond with **405** and
+/// an [`Allow`][1] header when the request method’s router had no match but another would.
+///
+/// [1]: https://www.rfc-editor.org/rfc/rfc9110#name-405-method-not-allowed
+pub fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
+    const ORDER: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+    let mut have = [false; 7];
+    if let Ok(g) = state.get.lock() {
+        if g.at(path).is_ok() {
+            have[0] = true;
+            have[1] = true;
+        }
+    }
+    if let Ok(r) = state.post.lock() {
+        if r.at(path).is_ok() {
+            have[2] = true;
+        }
+    }
+    if let Ok(r) = state.put.lock() {
+        if r.at(path).is_ok() {
+            have[3] = true;
+        }
+    }
+    if let Ok(r) = state.patch.lock() {
+        if r.at(path).is_ok() {
+            have[4] = true;
+        }
+    }
+    if let Ok(r) = state.delete.lock() {
+        if r.at(path).is_ok() {
+            have[5] = true;
+        }
+    }
+    if let Ok(r) = state.options.lock() {
+        if r.at(path).is_ok() {
+            have[6] = true;
+        }
+    }
+    ORDER
+        .iter()
+        .zip(have)
+        .filter(|(_, ok)| *ok)
+        .map(|(m, _)| (*m).to_string())
+        .collect()
+}
