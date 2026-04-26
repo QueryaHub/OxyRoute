@@ -134,12 +134,12 @@ class App:
 
         return wrap
 
-    async def __rsgi_init__(self) -> None:  # noqa: D401
-        """Lifespan hook (no-op) for RSGI servers that call it."""
+    async def __rsgi_init__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401
+        """Lifespan hook (no-op). Granian may pass extra positional args; accept **kwargs."""
         return None
 
-    async def __rsgi_del__(self) -> None:  # noqa: D401
-        """Lifespan teardown hook (no-op) for RSGI servers that call it."""
+    async def __rsgi_del__(self, *args: Any, **kwargs: Any) -> None:  # noqa: D401
+        """Lifespan teardown (no-op). Accept extra args for Granian compatibility."""
         return None
 
     async def __rsgi__(self, scope: Any, protocol: Any) -> None:
