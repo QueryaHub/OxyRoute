@@ -23,3 +23,20 @@ def test_asgi_get_plain_text() -> None:
         assert r2.text == "x"
 
     asyncio.run(_run())
+
+
+def test_asgi_patch_json_body() -> None:
+    app = App()
+
+    @app.patch("/x")
+    def patch_x(json: dict) -> str:  # noqa: A002 — injected JSON body
+        return f"p:{json.get('a')}"
+
+    async def _run() -> None:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.patch("/x", json={"a": 7})
+        assert r.status_code == 200
+        assert r.text == "p:7"
+
+    asyncio.run(_run())
