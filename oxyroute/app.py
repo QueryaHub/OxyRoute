@@ -94,6 +94,20 @@ class App:
             "PUT", path, require_jwt, jwt_secret, algorithms, read_json_body=True, dependencies=dependencies
         )
 
+    def patch(
+        self,
+        path: str,
+        *,
+        require_jwt: bool = False,
+        jwt_secret: Optional[str] = None,
+        algorithms: Optional[List[str]] = None,
+        read_json_body: bool = True,
+        dependencies: Optional[List[Tuple[str, Dep]]] = None,
+    ) -> Callable[[F], F]:
+        return self._route(
+            "PATCH", path, require_jwt, jwt_secret, algorithms, read_json_body, dependencies=dependencies
+        )
+
     def delete(
         self,
         path: str,
