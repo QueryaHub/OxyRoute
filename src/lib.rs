@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyDict, PyList, PyTuple};
 use serde_json::json;
 
 mod dispatch;
@@ -19,6 +20,30 @@ pub(crate) fn lock_err<T>(e: std::sync::PoisonError<T>) -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
 }
 
+/// Parameter names the route handler accepts, plus whether it has `**kwargs`.
+fn handler_signature_kinds(
+    py: Python<'_>,
+    handler: &Bound<'_, PyAny>,
+) -> PyResult<(HashSet<String>, bool)> {
+    let d = PyDict::new_bound(py);
+    d.set_item("f", handler)?;
+    py.run_bound(
+        "import inspect\n_s = inspect.signature(f)\n_p = []\nfor _n, _param in _s.parameters.items():\n    if _param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):\n        _p.append(_n)\n_w = False\nfor _x in _s.parameters.values():\n    if _x.kind == inspect.Parameter.VAR_KEYWORD:\n        _w = True\n        break",
+        None,
+        Some(&d),
+    )?;
+    let pl = d
+        .get_item("_p")?
+        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("handler _p"))?;
+    let v: Vec<String> = pl.extract()?;
+    let names: HashSet<String> = v.into_iter().collect();
+    let w: bool = d
+        .get_item("_w")?
+        .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("handler _w"))?
+        .extract()?;
+    Ok((names, w))
+}
+
 fn parse_algorithm(s: &str) -> PyResult<jsonwebtoken::Algorithm> {
     match s {
         "HS256" => Ok(jsonwebtoken::Algorithm::HS256),
@@ -33,29 +58,54 @@ fn parse_algorithm(s: &str) -> PyResult<jsonwebtoken::Algorithm> {
 fn parse_dependencies(
     py: Python<'_>,
     dep_list: &Bound<PyList>,
-) -> PyResult<(Vec<String>, Vec<Py<PyAny>>, Vec<bool>)> {
+) -> PyResult<(
+    Vec<String>,
+    Vec<Py<PyAny>>,
+    Vec<bool>,
+    Vec<bool>,
+)> {
     let inspect = py.import_bound("inspect")?;
     let iscoro = inspect.getattr("iscoroutinefunction")?;
     let n = dep_list.len();
     let mut names = Vec::with_capacity(n);
     let mut facts = Vec::with_capacity(n);
     let mut asy = Vec::with_capacity(n);
+    let mut want_req = Vec::with_capacity(n);
     for i in 0..n {
         let it = dep_list.get_item(i)?;
-        let tup = it.downcast::<pyo3::types::PyTuple>()?;
+        let tup = it.downcast::<PyTuple>()?;
         if tup.len() != 2 {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "each dependency must be (name, callable)",
             ));
         }
         let name: String = tup.get_item(0)?.extract()?;
+        if names.contains(&name) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "duplicate dependency name",
+            ));
+        }
         let f: Py<PyAny> = tup.get_item(1)?.unbind();
         let is_a: bool = iscoro.call1((f.clone_ref(py),))?.extract()?;
+        let f_b = f.bind(py);
+        let has_req: bool = dependency_wants_request(py, &f_b)?;
         names.push(name);
         facts.push(f);
         asy.push(is_a);
+        want_req.push(has_req);
     }
-    Ok((names, facts, asy))
+    Ok((names, facts, asy, want_req))
+}
+
+/// True if the factory declares a `request` parameter (for the request context dict).
+fn dependency_wants_request(py: Python<'_>, f: &Bound<'_, PyAny>) -> PyResult<bool> {
+    let inspect = py.import_bound("inspect")?;
+    let sig = inspect.getattr("signature")?.call1((f,))?;
+    let params = sig.getattr("parameters")?;
+    params
+        .getattr("__contains__")?
+        .call1((pyo3::types::PyString::new_bound(py, "request"),))?
+        .extract()
 }
 
 #[pyclass]
@@ -154,15 +204,17 @@ impl App {
                 ));
             }
         }
-        let (dep_names, dep_factories, dep_is_async) = if let Some(d) = dependencies {
+        let (dep_names, dep_factories, dep_is_async, dep_wants_request) = if let Some(d) = dependencies
+        {
             parse_dependencies(py, &d)?
         } else {
-            (vec![], vec![], vec![])
+            (vec![], vec![], vec![], vec![])
         };
         let op_id: String = handler
             .bind(py)
             .getattr(pyo3::intern!(py, "__name__"))?
             .extract()?;
+        let (handler_param_names, handler_varkw) = handler_signature_kinds(py, &handler.bind(py))?;
         let mut st = self.state.lock().map_err(|e| lock_err(e))?;
         let idx = st.routes.len();
         st.routes.push(state::RouteEntry {
@@ -178,6 +230,9 @@ impl App {
             dep_names,
             dep_factories,
             dep_is_async,
+            dep_wants_request,
+            handler_param_names,
+            handler_varkw,
         });
         {
             let mut oa = st.openapi.lock().map_err(|e| lock_err(e))?;
