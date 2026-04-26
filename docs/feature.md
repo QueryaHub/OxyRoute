@@ -33,8 +33,8 @@
 
 | Тема | Зазор | Комментарий |
 |------|--------|-------------|
-| **`multipart/form-data`** | Нет | Загрузка файлов, поля формы — нужен парсер и API (`upload`, `form()`). |
-| **`application/x-www-form-urlencoded` (body)** | Нет | Сейчас разбор query есть; тело формы не инжектится как отдельный тип. |
+| **`multipart/form-data`** | Частично | `read_form_body=True`, инжект `form` / `files` (в памяти); см. [handlers](handlers.md). [#47](https://github.com/QueryaHub/OxyRoute/issues/47). |
+| **`application/x-www-form-urlencoded` (body)** | Частично | То же — `form`; нет streaming для очень больших тел. |
 | **Streaming request body** | Ограничено | Тело читается в буфер для JSON/сырых байт; большие upload без полного чтения — отдельная работа. |
 | **Валидация на уровне фреймворка** | Частично | Pydantic удобнее вручную; нет единого `Body()` как в FastAPI для всех типов контента. |
 

@@ -43,6 +43,8 @@ pub struct RouteEntry {
     /// If set, read JWT from the `Cookie` header when `Authorization: Bearer` is missing.
     pub jwt_cookie: Option<String>,
     pub read_json_body: bool,
+    /// When set, body is parsed as form data (``application/x-www-form-urlencoded`` or ``multipart/form-data``), not JSON.
+    pub read_form_body: bool,
     /// Dependency `name` -> factory callable (linear order; resolved in order, then user handler).
     pub dep_names: Vec<String>,
     pub dep_factories: Vec<Py<PyAny>>,
