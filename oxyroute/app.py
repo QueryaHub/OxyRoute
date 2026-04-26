@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 from collections.abc import Callable, Mapping
 from types import SimpleNamespace
@@ -7,6 +8,7 @@ from typing import Any, TypeVar
 
 from . import _oxyroute
 from .asgi import build_asgi_caller
+from .router import APIRouter, join_path
 
 F = TypeVar("F", bound=Callable[..., Any])
 Dep = Callable[..., Any] | _oxyroute.PyDepends
@@ -56,6 +58,32 @@ class App:
     def set_openapi_served(self, enabled: bool) -> None:
         """Enable or disable the built-in ``GET /openapi.json`` route."""
         self._app.set_openapi_served(enabled)
+
+    def include_router(
+        self,
+        router: APIRouter,
+        prefix: str = "",
+        **defaults: Any,
+    ) -> None:
+        """
+        Mount routes from an :class:`APIRouter` on this app with an optional path prefix.
+        Per-route options win over ``**defaults`` (same keys as the ``get`` / ``post`` / … decorators).
+        """
+        regmap: dict[str, Callable[..., Any]] = {
+            "GET": App.get,
+            "POST": App.post,
+            "PUT": App.put,
+            "PATCH": App.patch,
+            "DELETE": App.delete,
+            "OPTIONS": App.options,
+        }
+        for method, rel, handler, opts in router._routes:
+            merged: dict[str, Any] = {**defaults, **opts}
+            full = join_path(prefix, rel)
+            reg = regmap[method]
+            allowed = {p for p in inspect.signature(reg).parameters if p not in ("self", "path")}
+            kw: dict[str, Any] = {k: v for k, v in merged.items() if k in allowed}
+            reg(self, full, **kw)(handler)
 
     def set_middleware(self, handler: Callable[..., Any] | None) -> None:
         """
