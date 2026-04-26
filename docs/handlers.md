@@ -38,6 +38,12 @@ The Rust layer maps the return value to an HTTP response:
 
 For precise behavior and edge cases, refer to the implementation in the repository’s `src/dispatch.rs` and `src/response.rs`.
 
+## Errors in handlers and dependencies
+
+If a **dependency factory** or the **route handler** raises a Python exception (or building the response fails), the server answers with **500** and a small **JSON** body: `{"error":"internal server error"}`. Exception text and tracebacks are **not** included in the response by default (to avoid leaking internals to clients).
+
+Set the environment variable **`OXYROUTE_DEBUG=1`** (or `true`) to include a **`detail`** string in that JSON for the same error and to log more at the `log` crate target **`oxyroute`** (see `RUST_LOG`, e.g. `RUST_LOG=oxyroute=error`).
+
 ## See also
 
 - [Routing](routing.md)
