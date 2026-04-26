@@ -1,26 +1,42 @@
 ---
-description: Feature branches and PRs for GitHub issues — never land feature work by committing straight to dev/main
+description: Issue workflow — sync dev, branch, implement, test+lint, atomic commits, PR to dev
 alwaysApply: true
 ---
 
 # Git and GitHub workflow (OxyRoute)
 
-When implementing a **feature, fix, or issue** (including backlog / issue numbers in `.github/ISSUE_BACKLOG`):
+**Integration branch is `dev`.** Do not land feature or fix work by committing directly to `dev` or `main` (see exceptions at the end).
 
-1. **Branch**  
-   - Do **not** commit or push feature work directly to `dev` or `main`.  
-   - Create a branch from the current base (usually `dev`): `git fetch origin` then `git checkout -b <branch>`.  
-   - Prefer names like: `feat/<short-slug>`, or `issue-<N>-<short-slug>` (e.g. `issue-20-head-options`).
+## Order of operations (always)
 
-2. **Pull request**  
-   - Push the branch: `git push -u origin <branch>`.  
-   - Open a **PR** into `dev` (or the repo’s default integration branch).  
-   - In the PR title or description, **link the issue**: `Closes #N` / `Fixes #N` / `Ref #N` as appropriate so GitHub closes or tracks the work.
+1. **Sync `dev` first**
+   - `git fetch origin`
+   - `git checkout dev`
+   - `git pull origin dev`
 
-3. **Before coding**  
-   - Confirm whether an issue already exists; if the user only gave a topic, match it to a backlog file or open an issue, then use the same branch+PR flow.
+2. **Branch from that `dev` for one GitHub issue** (one topic per PR when possible)
+   - `git checkout -b issue-<N>-<short-slug>` (e.g. `issue-47-multipart-form`)
 
-4. **Exceptions**  
-   - Tiny doc typo or rule-only changes may still use a small branch+PR, or a single “chore:” PR if the team agrees — default is **always branch + PR** for any code or test change.
+3. **Read the requirement**
+   - Open the GitHub issue and, if present, the body under [`.github/ISSUE_BACKLOG/bodies/`](.github/ISSUE_BACKLOG/bodies/) or linked docs.
 
-This applies to all agents and humans working in this repo.
+4. **Implement** in the branch (Rust/Python/docs as needed).
+
+5. **Validate before commit/push** (match CI in [`.github/workflows/ci.yml`](.github/workflows/ci.yml))
+   - Python: `uv run ruff check oxyroute tests examples` and `uv run ruff format --check oxyroute tests examples` (or format then check).
+   - Rust: `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings`
+   - Tests: `uv run pytest` (or the same isolated pattern as in `docs/development.md` if testing the installed wheel).
+
+6. **Atomic commits** — one logical change per commit (e.g. `feat:`, `fix:`, `test:`, `docs:`). **Do not** mix product code and [`.github/ISSUE_BACKLOG/`](.github/ISSUE_BACKLOG/) in the same commit; backlog updates: separate `docs:` / `chore:` commit if needed.
+
+7. **PR into `dev`**
+   - `git push -u origin <branch>`
+   - Open PR: **base = `dev`**, compare = your branch. Use **`Closes #N`** (or `Fixes #N`) when the PR completes issue **N**.
+
+8. **After merge** — delete the local branch, keep `main` and `dev`; next issue: repeat from step 1.
+
+## Exceptions
+
+- Trivial one-line doc fixes may still use a small branch + PR, or a maintainer chore — default is **branch + PR** for any code or test change.
+
+[Full narrative + `gh` examples: `docs/development-workflow.md`]
