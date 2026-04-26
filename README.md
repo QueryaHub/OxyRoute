@@ -71,6 +71,8 @@ Run (from the repo, after `maturin develop` or an editable install):
 granian --interface rsgi examples.rsgi_app:app
 ```
 
+Per-worker setup (`__rsgi_init__`) is shown in [examples/rsgi_lifespan_app.py](examples/rsgi_lifespan_app.py) and [docs/rsgi.md](docs/rsgi.md#lifespan-optional).
+
 ASGI and other servers are covered in [docs/asgi.md](docs/asgi.md).
 
 ## Project layout
