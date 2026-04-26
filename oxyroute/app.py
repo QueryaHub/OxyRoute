@@ -104,6 +104,13 @@ class App:
         """
         self._app.set_cors(config)
 
+    def set_security_headers(self, config: Any | None) -> None:
+        """
+        Optional preset (e.g. :class:`oxyroute.security_headers.SecurityHeadersConfig`) — merged
+        into responses when a header of the same name is not already set. Pass ``None`` to disable.
+        """
+        self._app.set_security_headers(config)
+
     def get(
         self,
         path: str,
