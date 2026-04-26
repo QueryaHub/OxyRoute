@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -44,14 +45,11 @@ fn handler_signature_kinds(
 }
 
 fn parse_algorithm(s: &str) -> PyResult<jsonwebtoken::Algorithm> {
-    match s {
-        "HS256" => Ok(jsonwebtoken::Algorithm::HS256),
-        "HS384" => Ok(jsonwebtoken::Algorithm::HS384),
-        "HS512" => Ok(jsonwebtoken::Algorithm::HS512),
-        _ => Err(pyo3::exceptions::PyValueError::new_err(
-            "HMAC-only in core: HS256, HS384, HS512. Use handler + oxyjwt for asymmetric.",
-        )),
-    }
+    jsonwebtoken::Algorithm::from_str(s).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(
+            "unknown JWT algorithm (see jsonwebtoken: HS* / RS* / PS* / ES* / EdDSA)",
+        )
+    })
 }
 
 fn parse_dependencies(py: Python<'_>, dep_list: &Bound<PyList>) -> PyResult<ParsedDependencies> {
@@ -192,7 +190,7 @@ impl App {
         let inspect = py.import_bound("inspect")?;
         let f = inspect.getattr("iscoroutinefunction")?;
         let is_async: bool = f.call1((handler.clone_ref(py),))?.extract()?;
-        let algs: Vec<jsonwebtoken::Algorithm> = if let Some(list) = algorithms {
+        let mut algs: Vec<jsonwebtoken::Algorithm> = if let Some(list) = algorithms {
             let n = list.len();
             let mut v = Vec::with_capacity(n);
             for i in 0..n {
@@ -203,19 +201,21 @@ impl App {
         } else {
             vec![jsonwebtoken::Algorithm::HS256]
         };
+        if algs.is_empty() {
+            algs.push(jsonwebtoken::Algorithm::HS256);
+        }
+        if require_jwt && jwt_secret.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "require_jwt needs jwt_secret (HMAC shared secret, or public key PEM for RS*/PS*/ES*/EdDSA)",
+            ));
+        }
         if require_jwt {
-            let need = algs.iter().all(|a| {
-                matches!(
-                    a,
-                    jsonwebtoken::Algorithm::HS256
-                        | jsonwebtoken::Algorithm::HS384
-                        | jsonwebtoken::Algorithm::HS512
-                )
-            });
-            if need && jwt_secret.is_none() {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "require_jwt with HMAC needs jwt_secret",
-                ));
+            if let Some(k) = jwt_secret.as_deref() {
+                crate::token::build_decoding_key(k, &algs).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "jwt_secret and algorithms are incompatible: {e}"
+                    ))
+                })?;
             }
         }
         let (dep_names, dep_factories, dep_is_async, dep_wants_request) =
