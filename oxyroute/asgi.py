@@ -8,11 +8,12 @@ Builds a minimal RSGI-like ``scope`` / ``protocol`` and delegates to the same Ru
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 
-def _hdr_from_asgi(raw: List[Tuple[bytes, bytes]]) -> "_HeaderView":
-    d: Dict[str, str] = {}
+def _hdr_from_asgi(raw: list[tuple[bytes, bytes]]) -> _HeaderView:
+    d: dict[str, str] = {}
     for k, v in raw:
         dk = k.decode("latin-1").lower()
         d[dk] = v.decode("latin-1")
@@ -22,7 +23,7 @@ def _hdr_from_asgi(raw: List[Tuple[bytes, bytes]]) -> "_HeaderView":
 class _HeaderView:
     __slots__ = ("_d",)
 
-    def __init__(self, d: Dict[str, str]) -> None:
+    def __init__(self, d: dict[str, str]) -> None:
         self._d = d
 
     def get(self, k: str, default: str = "") -> str:
@@ -31,17 +32,17 @@ class _HeaderView:
 
 class _RsgiScope:
     __slots__ = (
-        "proto",
+        "authority",
+        "client",
+        "headers",
+        "http_version",
         "method",
         "path",
+        "proto",
         "query_string",
-        "headers",
         "rsgi_version",
-        "http_version",
-        "server",
-        "client",
         "scheme",
-        "authority",
+        "server",
     )
 
     def __init__(
@@ -62,13 +63,13 @@ class _RsgiScope:
         self.path = path
         self.query_string = query_string
         self.headers = headers
-        self.authority: Optional[str] = None
+        self.authority: str | None = None
 
 
 def _norm_headers_asgi(
     rsgi_headers: list,
-) -> List[Tuple[bytes, bytes]]:
-    out: List[Tuple[bytes, bytes]] = []
+) -> list[tuple[bytes, bytes]]:
+    out: list[tuple[bytes, bytes]] = []
     for p in rsgi_headers:
         if not isinstance(p, (list, tuple)) or len(p) != 2:
             continue
@@ -83,15 +84,13 @@ def _norm_headers_asgi(
 
 
 class _RsgiProtocol:
-    __slots__ = ("_body", "_send", "_loop", "status", "_status")
+    __slots__ = ("_body", "_loop", "_send", "_status", "status")
 
-    def __init__(
-        self, body: bytes, send: Any, main_loop: asyncio.AbstractEventLoop
-    ) -> None:
+    def __init__(self, body: bytes, send: Any, main_loop: asyncio.AbstractEventLoop) -> None:
         self._body = body
         self._send = send
         self._loop = main_loop
-        self._status: Optional[int] = None
+        self._status: int | None = None
         self.status = 200
 
     def _run_send(self, coro: Any) -> None:
@@ -173,7 +172,7 @@ class _RsgiProtocol:
 
 async def asgi_to_rsgi(
     app_rsgi: Callable[[Any, Any], Any],
-    scope: Dict[str, Any],
+    scope: dict[str, Any],
     receive: Any,
     send: Any,
 ) -> None:
@@ -222,7 +221,7 @@ def build_asgi_caller(framework_app: Any) -> Callable[..., Any]:
         inner = getattr(c, "_app", c)
         return inner.handle_rsgi(s, p)
 
-    async def asgi3(scope: Dict[str, Any], receive: Any, send: Any) -> None:
+    async def asgi3(scope: dict[str, Any], receive: Any, send: Any) -> None:
         await asgi_to_rsgi(_rsgi, scope, receive, send)
 
     return asgi3

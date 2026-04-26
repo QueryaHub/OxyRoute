@@ -7,6 +7,30 @@ on:
     branches: [main, master, dev]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Sync (locked) dev environment
+        run: uv sync --frozen --extra dev
+      - name: Ruff (check + format)
+        run: |
+          uv run ruff check oxyroute tests examples
+          uv run ruff format --check oxyroute tests examples
+      - name: rustfmt + clippy
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets -- -D warnings
+
   test:
     strategy:
       fail-fast: false
@@ -23,17 +47,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          # 3.14 may be pre-release on some runners until GA; keep CI green across the full range.
           allow-prerelease: true
-      - name: Install build deps
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Install locked deps, build and install oxyroute
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install maturin pytest oxyjwt httpx granian
-      - name: Build and install oxyroute
-        run: |
-          maturin build --release
-          python -m pip install target/wheels/oxyroute-*.whl
+          set -euo pipefail
+          uv sync --frozen --extra dev
+          uv run maturin build --release
+          uv pip install --force-reinstall target/wheels/oxyroute-*.whl
       - name: Pytest (isolated dir so repo tree does not shadow the installed package)
         run: |
           cd "$(mktemp -d)"
-          python -m pytest "$GITHUB_WORKSPACE/tests" -v
+          UV_PROJECT="$GITHUB_WORKSPACE" uv run python -m pytest "$GITHUB_WORKSPACE/tests" -v

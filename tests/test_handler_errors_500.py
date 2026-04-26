@@ -7,7 +7,6 @@ import json
 import os
 
 import httpx
-
 from oxyroute import App
 
 
@@ -57,9 +56,7 @@ def test_500_includes_detail_when_debug_env() -> None:
             assert r.status_code == 500
             data = json.loads(r.text)
             assert "detail" in data
-            assert (
-                "super_secret_token" in data["detail"] or "ValueError" in data["detail"]
-            )
+            assert "super_secret_token" in data["detail"] or "ValueError" in data["detail"]
 
         asyncio.run(_run())
     finally:
