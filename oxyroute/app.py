@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, TypeVar
 
 from . import _oxyroute
@@ -101,6 +101,7 @@ class App:
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
         body_model: Any | None = None,
+        body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -116,6 +117,7 @@ class App:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             body_model=body_model,
+            body_schema=body_schema,
         )
 
     def put(
@@ -130,6 +132,7 @@ class App:
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
         body_model: Any | None = None,
+        body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -145,6 +148,7 @@ class App:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             body_model=body_model,
+            body_schema=body_schema,
         )
 
     def patch(
@@ -160,6 +164,7 @@ class App:
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
         body_model: Any | None = None,
+        body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -175,6 +180,7 @@ class App:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             body_model=body_model,
+            body_schema=body_schema,
         )
 
     def delete(
@@ -246,13 +252,18 @@ class App:
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
         body_model: Any | None = None,
+        body_schema: Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         dlist = _norm_dependencies(dependencies)
 
         def wrap(handler: F) -> F:
+            if body_model is not None and body_schema is not None:
+                raise TypeError("use only one of body_model and body_schema")
             body_schema_json: str | None = None
             if body_model is not None:
                 body_schema_json = json.dumps(body_model.model_json_schema())
+            elif body_schema is not None:
+                body_schema_json = json.dumps(body_schema)
             self._app.add_route(
                 method,
                 path,
