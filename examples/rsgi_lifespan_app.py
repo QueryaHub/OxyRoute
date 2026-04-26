@@ -84,4 +84,3 @@ def pool_info() -> str:
     if p is None:
         return "thread_pool=off"
     return f"thread_pool max_workers={_WORKERS} (per process, not across workers)"
-
