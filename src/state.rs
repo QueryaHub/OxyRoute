@@ -45,6 +45,8 @@ pub struct AppState {
     pub frozen: bool,
     /// Serve `GET /openapi.json` from the built document without a user route.
     pub include_openapi: bool,
+    /// Optional `(scope, protocol) ->` hook; return ``None`` to continue to routing (see `docs/handlers.md`).
+    pub middleware: Option<Py<PyAny>>,
 }
 
 impl AppState {
@@ -65,6 +67,7 @@ impl AppState {
             openapi: Mutex::new(openapi),
             frozen: false,
             include_openapi: true,
+            middleware: None,
         }
     }
 }

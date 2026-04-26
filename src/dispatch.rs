@@ -96,6 +96,32 @@ pub async fn run_rsgi(
                 .await;
         }
     }
+    let maybe_mw = {
+        let st = state.lock();
+        st.middleware.clone()
+    };
+    if let Some(mw) = maybe_mw {
+        let out: Py<PyAny> = match Python::with_gil(|py| {
+            let f = mw.bind(py);
+            f.call1((scope.bind(py), protocol.bind(py)))
+                .map(|b| b.unbind())
+        }) {
+            Ok(x) => x,
+            Err(e) => {
+                return send_internal_error(&protocol, &method, &path, e).await;
+            }
+        };
+        let skip = Python::with_gil(|py| out.bind(py).is_none());
+        if !skip {
+            let mapped = match Python::with_gil(|py| map_handler_return(py, &out)) {
+                Ok(m) => m,
+                Err(e) => {
+                    return send_internal_error(&protocol, &method, &path, e).await;
+                }
+            };
+            return send_handler_map(&protocol, is_head, mapped).await;
+        }
+    }
     let read_fut = Python::with_gil(|py| {
         let p = protocol.bind(py);
         let aw: Bound<PyAny> = p.call0()?;
@@ -452,33 +478,7 @@ pub async fn run_rsgi(
             return send_internal_error(&protocol, &method, &path, e).await;
         }
     };
-    if is_head {
-        match mapped {
-            HandlerMap::WithHeaders {
-                status,
-                body,
-                headers,
-            } => response::send_head_with_headers(&protocol, status, &body, headers).await,
-            HandlerMap::Simple {
-                status,
-                body,
-                content_type,
-            } => response::send_head_simple(&protocol, status, body.len(), &content_type).await,
-        }
-    } else {
-        match mapped {
-            HandlerMap::WithHeaders {
-                status,
-                body,
-                headers,
-            } => response::send_with_headers(&protocol, status, &body, headers).await,
-            HandlerMap::Simple {
-                status,
-                body,
-                content_type,
-            } => response::send_bytes(&protocol, status, &body, &content_type).await,
-        }
-    }
+    send_handler_map(&protocol, is_head, mapped).await
 }
 
 /// Return value of a user handler, mapped to an HTTP body and headers.
@@ -558,6 +558,40 @@ enum HandlerMap {
         body: Vec<u8>,
         content_type: String,
     },
+}
+
+async fn send_handler_map(
+    protocol: &Py<PyAny>,
+    is_head: bool,
+    mapped: HandlerMap,
+) -> PyResult<PyObject> {
+    if is_head {
+        match mapped {
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            } => response::send_head_with_headers(protocol, status, &body, headers).await,
+            HandlerMap::Simple {
+                status,
+                body,
+                content_type,
+            } => response::send_head_simple(protocol, status, body.len(), &content_type).await,
+        }
+    } else {
+        match mapped {
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            } => response::send_with_headers(protocol, status, &body, headers).await,
+            HandlerMap::Simple {
+                status,
+                body,
+                content_type,
+            } => response::send_bytes(protocol, status, &body, &content_type).await,
+        }
+    }
 }
 
 fn is_oxyroute_response(_py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<bool> {
