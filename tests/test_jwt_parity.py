@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 
 import pytest
-
 from oxyroute import decode_jwt_hs
 
 oxyjwt = pytest.importorskip("oxyjwt")

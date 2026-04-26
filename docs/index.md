@@ -41,11 +41,12 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 | [RSGI and Granian](rsgi.md) | Why RSGI, `__rsgi__`, lifespan hooks, spec link |
 | [Routing](routing.md) | Path patterns, methods, 404s |
 | [Handlers](handlers.md) | Injected parameters, return types, JSON encoding |
-| [JWT](jwt.md) | `require_jwt`, algorithms, `decode_jwt_hs` |
+| [JWT](jwt.md) | `require_jwt`, HS* / RSA / EC PEM, `decode_jwt_hs` (HS* tests) |
 | [Dependencies](dependencies.md) | `Depends`, `dependencies=[...]`, `freeze` |
 | [OpenAPI](openapi.md) | `openapi.json` route, title, `openapi_json()` |
 | [ASGI bridge](asgi.md) | Optional `__call__` for ASGI 3, limitations |
-| [Development](development.md) | Tests, CI, clippy, running pytest safely |
+| [Development](development.md) | Tests, CI, PyPI releases (tag `v*`), clippy, pytest |
+| [Branching and PRs](development-workflow.md) | `dev` as base, issue branches, `Closes #N`, no mixing code with `ISSUE_BACKLOG` in one commit |
 | [Contributing](../CONTRIBUTING.md) | Local setup, issue backlog, GitHub `gh` workflow |
 
 [← Back to project README](../README.md)

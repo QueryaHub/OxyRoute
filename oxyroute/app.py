@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Callable, List, Optional, Tuple, TypeVar, Union
+import json
+from collections.abc import Callable, Mapping
+from typing import Any, TypeVar
 
 from . import _oxyroute
 from .asgi import build_asgi_caller
 
 F = TypeVar("F", bound=Callable[..., Any])
-Dep = Union[Callable[..., Any], _oxyroute.PyDepends]
+Dep = Callable[..., Any] | _oxyroute.PyDepends
 
 
 def _unwrap_dep(f: Dep) -> Any:
@@ -16,8 +18,8 @@ def _unwrap_dep(f: Dep) -> Any:
 
 
 def _norm_dependencies(
-    deps: Optional[List[Tuple[str, Dep]]],
-) -> Optional[List[Tuple[str, Any]]]:
+    deps: list[tuple[str, Dep]] | None,
+) -> list[tuple[str, Any]] | None:
     if not deps:
         return None
     return [(n, _unwrap_dep(c)) for n, c in deps]
@@ -48,17 +50,42 @@ class App:
         """Enable or disable the built-in ``GET /openapi.json`` route."""
         self._app.set_openapi_served(enabled)
 
+    def set_middleware(self, handler: Callable[..., Any] | None) -> None:
+        """
+        One optional pre-route callback ``(scope, protocol)`` — return ``None`` to pass through.
+
+        For any other return value, the same rules apply as for route handlers
+        (e.g. :class:`oxyroute.Response` or a ``dict`` with ``status`` / ``body`` / ``headers``);
+        the response is sent and routing / body read is skipped. Runs **before** the request
+        body is read (e.g. for CORS preflight).
+        """
+        self._app.set_middleware(handler)
+
     def get(
         self,
         path: str,
         *,
         require_jwt: bool = False,
-        jwt_secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
-        dependencies: Optional[List[Tuple[str, Dep]]] = None,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
-            "GET", path, require_jwt, jwt_secret, algorithms, read_json_body=False, dependencies=dependencies
+            "GET",
+            path,
+            require_jwt,
+            jwt_secret,
+            algorithms,
+            read_json_body=False,
+            dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
         )
 
     def post(
@@ -66,10 +93,16 @@ class App:
         path: str,
         *,
         require_jwt: bool = False,
-        jwt_secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
         read_json_body: bool = True,
-        dependencies: Optional[List[Tuple[str, Dep]]] = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
+        body_model: Any | None = None,
+        body_schema: Mapping[str, Any] | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "POST",
@@ -79,6 +112,12 @@ class App:
             algorithms,
             read_json_body,
             dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
+            body_model=body_model,
+            body_schema=body_schema,
         )
 
     def put(
@@ -86,12 +125,62 @@ class App:
         path: str,
         *,
         require_jwt: bool = False,
-        jwt_secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
-        dependencies: Optional[List[Tuple[str, Dep]]] = None,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
+        body_model: Any | None = None,
+        body_schema: Mapping[str, Any] | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
-            "PUT", path, require_jwt, jwt_secret, algorithms, read_json_body=True, dependencies=dependencies
+            "PUT",
+            path,
+            require_jwt,
+            jwt_secret,
+            algorithms,
+            read_json_body=True,
+            dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
+            body_model=body_model,
+            body_schema=body_schema,
+        )
+
+    def patch(
+        self,
+        path: str,
+        *,
+        require_jwt: bool = False,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
+        read_json_body: bool = True,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
+        body_model: Any | None = None,
+        body_schema: Mapping[str, Any] | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
+    ) -> Callable[[F], F]:
+        return self._route(
+            "PATCH",
+            path,
+            require_jwt,
+            jwt_secret,
+            algorithms,
+            read_json_body,
+            dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
+            body_model=body_model,
+            body_schema=body_schema,
         )
 
     def delete(
@@ -99,12 +188,53 @@ class App:
         path: str,
         *,
         require_jwt: bool = False,
-        jwt_secret: Optional[str] = None,
-        algorithms: Optional[List[str]] = None,
-        dependencies: Optional[List[Tuple[str, Dep]]] = None,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
-            "DELETE", path, require_jwt, jwt_secret, algorithms, read_json_body=False, dependencies=dependencies
+            "DELETE",
+            path,
+            require_jwt,
+            jwt_secret,
+            algorithms,
+            read_json_body=False,
+            dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
+        )
+
+    def options(
+        self,
+        path: str,
+        *,
+        require_jwt: bool = False,
+        jwt_secret: str | None = None,
+        algorithms: list[str] | None = None,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
+        dependencies: list[tuple[str, Dep]] | None = None,
+    ) -> Callable[[F], F]:
+        return self._route(
+            "OPTIONS",
+            path,
+            require_jwt,
+            jwt_secret,
+            algorithms,
+            read_json_body=False,
+            dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
+            jwt_cookie=jwt_cookie,
         )
 
     def _route(
@@ -112,14 +242,28 @@ class App:
         method: str,
         path: str,
         require_jwt: bool,
-        jwt_secret: Optional[str],
-        algorithms: Optional[List[str]],
+        jwt_secret: str | None,
+        algorithms: list[str] | None,
         read_json_body: bool,
-        dependencies: Optional[List[Tuple[str, Dep]]],
+        dependencies: list[tuple[str, Dep]] | None,
+        *,
+        jwt_issuer: str | None = None,
+        jwt_audience: str | None = None,
+        jwt_leeway: int | None = None,
+        jwt_cookie: str | None = None,
+        body_model: Any | None = None,
+        body_schema: Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         dlist = _norm_dependencies(dependencies)
 
         def wrap(handler: F) -> F:
+            if body_model is not None and body_schema is not None:
+                raise TypeError("use only one of body_model and body_schema")
+            body_schema_json: str | None = None
+            if body_model is not None:
+                body_schema_json = json.dumps(body_model.model_json_schema())
+            elif body_schema is not None:
+                body_schema_json = json.dumps(body_schema)
             self._app.add_route(
                 method,
                 path,
@@ -129,17 +273,25 @@ class App:
                 algorithms,
                 read_json_body,
                 dlist,
+                jwt_issuer,
+                jwt_audience,
+                jwt_leeway,
+                jwt_cookie,
+                body_schema_json,
             )
             return handler
 
         return wrap
 
-    async def __rsgi_init__(self) -> None:  # noqa: D401
-        """Lifespan hook (no-op) for RSGI servers that call it."""
+    async def __rsgi_init__(self, *args: Any, **kwargs: Any) -> None:
+        """
+        RSGI worker startup (no-op in the base class). Subclass to open pools/clients; see
+        ``docs/rsgi.md`` (Lifespan) and ``examples/rsgi_lifespan_app.py``.
+        """
         return None
 
-    async def __rsgi_del__(self) -> None:  # noqa: D401
-        """Lifespan teardown hook (no-op) for RSGI servers that call it."""
+    async def __rsgi_del__(self, *args: Any, **kwargs: Any) -> None:
+        """RSGI worker teardown (no-op in the base class)."""
         return None
 
     async def __rsgi__(self, scope: Any, protocol: Any) -> None:
