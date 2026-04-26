@@ -55,10 +55,22 @@ class App:
         require_jwt: bool = False,
         jwt_secret: Optional[str] = None,
         algorithms: Optional[List[str]] = None,
+        jwt_issuer: Optional[str] = None,
+        jwt_audience: Optional[str] = None,
+        jwt_leeway: Optional[int] = None,
         dependencies: Optional[List[Tuple[str, Dep]]] = None,
     ) -> Callable[[F], F]:
         return self._route(
-            "GET", path, require_jwt, jwt_secret, algorithms, read_json_body=False, dependencies=dependencies
+            "GET",
+            path,
+            require_jwt,
+            jwt_secret,
+            algorithms,
+            read_json_body=False,
+            dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
         )
 
     def post(
@@ -69,6 +81,9 @@ class App:
         jwt_secret: Optional[str] = None,
         algorithms: Optional[List[str]] = None,
         read_json_body: bool = True,
+        jwt_issuer: Optional[str] = None,
+        jwt_audience: Optional[str] = None,
+        jwt_leeway: Optional[int] = None,
         dependencies: Optional[List[Tuple[str, Dep]]] = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -79,6 +94,9 @@ class App:
             algorithms,
             read_json_body,
             dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
         )
 
     def put(
@@ -88,10 +106,22 @@ class App:
         require_jwt: bool = False,
         jwt_secret: Optional[str] = None,
         algorithms: Optional[List[str]] = None,
+        jwt_issuer: Optional[str] = None,
+        jwt_audience: Optional[str] = None,
+        jwt_leeway: Optional[int] = None,
         dependencies: Optional[List[Tuple[str, Dep]]] = None,
     ) -> Callable[[F], F]:
         return self._route(
-            "PUT", path, require_jwt, jwt_secret, algorithms, read_json_body=True, dependencies=dependencies
+            "PUT",
+            path,
+            require_jwt,
+            jwt_secret,
+            algorithms,
+            read_json_body=True,
+            dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
         )
 
     def patch(
@@ -102,10 +132,22 @@ class App:
         jwt_secret: Optional[str] = None,
         algorithms: Optional[List[str]] = None,
         read_json_body: bool = True,
+        jwt_issuer: Optional[str] = None,
+        jwt_audience: Optional[str] = None,
+        jwt_leeway: Optional[int] = None,
         dependencies: Optional[List[Tuple[str, Dep]]] = None,
     ) -> Callable[[F], F]:
         return self._route(
-            "PATCH", path, require_jwt, jwt_secret, algorithms, read_json_body, dependencies=dependencies
+            "PATCH",
+            path,
+            require_jwt,
+            jwt_secret,
+            algorithms,
+            read_json_body,
+            dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
         )
 
     def delete(
@@ -115,10 +157,22 @@ class App:
         require_jwt: bool = False,
         jwt_secret: Optional[str] = None,
         algorithms: Optional[List[str]] = None,
+        jwt_issuer: Optional[str] = None,
+        jwt_audience: Optional[str] = None,
+        jwt_leeway: Optional[int] = None,
         dependencies: Optional[List[Tuple[str, Dep]]] = None,
     ) -> Callable[[F], F]:
         return self._route(
-            "DELETE", path, require_jwt, jwt_secret, algorithms, read_json_body=False, dependencies=dependencies
+            "DELETE",
+            path,
+            require_jwt,
+            jwt_secret,
+            algorithms,
+            read_json_body=False,
+            dependencies=dependencies,
+            jwt_issuer=jwt_issuer,
+            jwt_audience=jwt_audience,
+            jwt_leeway=jwt_leeway,
         )
 
     def _route(
@@ -130,6 +184,10 @@ class App:
         algorithms: Optional[List[str]],
         read_json_body: bool,
         dependencies: Optional[List[Tuple[str, Dep]]],
+        *,
+        jwt_issuer: Optional[str] = None,
+        jwt_audience: Optional[str] = None,
+        jwt_leeway: Optional[int] = None,
     ) -> Callable[[F], F]:
         dlist = _norm_dependencies(dependencies)
 
@@ -143,6 +201,9 @@ class App:
                 algorithms,
                 read_json_body,
                 dlist,
+                jwt_issuer,
+                jwt_audience,
+                jwt_leeway,
             )
             return handler
 

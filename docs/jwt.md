@@ -11,6 +11,9 @@ The HTTP verb decorators on `App` accept:
 - `require_jwt: bool` — if true, a valid `Authorization: Bearer <token>` header and successful verification are required before the handler runs
 - `jwt_secret: str | None` — required for the default HMAC flow when `require_jwt` is set
 - `algorithms: list[str] | None` — e.g. `["HS256"]` (defaults in code if omitted)
+- `jwt_issuer: str | None` — if set, the `iss` claim must match (via [`jsonwebtoken`](https://crates.io/crates/jsonwebtoken) validation)
+- `jwt_audience: str | None` — if set, the `aud` claim is validated against this value. If **omitted**, audience checking is **disabled** for that route (so tokens with an `aud` claim are not rejected for audience mismatch; opt in by passing `jwt_audience`)
+- `jwt_leeway: int | None` — clock skew in **seconds** for `exp` / `nbf` (default when omitted: **60**, matching the `jsonwebtoken` crate default)
 
 If `require_jwt` is set but the secret is missing for an all-HMAC algorithm set, **registration** fails with a clear error.
 
