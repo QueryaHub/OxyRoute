@@ -16,6 +16,8 @@ pub struct RouteEntry {
     pub jwt_audience: Option<String>,
     /// Clock skew (seconds); Python `None` uses default 60 (jsonwebtoken default).
     pub jwt_leeway: u64,
+    /// If set, read JWT from the `Cookie` header when `Authorization: Bearer` is missing.
+    pub jwt_cookie: Option<String>,
     pub read_json_body: bool,
     /// Dependency `name` -> factory callable (linear order; resolved in order, then user handler).
     pub dep_names: Vec<String>,
