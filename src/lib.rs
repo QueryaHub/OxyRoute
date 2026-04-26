@@ -297,6 +297,14 @@ impl App {
         Ok(())
     }
 
+    /// Single optional pre-route hook. Return ``None`` to continue; otherwise the return value
+    /// is mapped like a route handler (e.g. :class:`oxyroute.Response`, ``dict`` with ``status`` / ``body`` / ``headers``).
+    fn set_middleware(&self, handler: Option<Py<PyAny>>) -> PyResult<()> {
+        let mut st = self.state.lock();
+        st.middleware = handler;
+        Ok(())
+    }
+
     fn handle_rsgi<'py>(
         this: PyRef<'py, Self>,
         py: Python<'py>,
