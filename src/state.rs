@@ -78,6 +78,9 @@ pub struct AppState {
     pub middleware: Option<Py<PyAny>>,
     /// Optional Python CORS config (e.g. :class:`oxyroute.cors.CORSConfig`) for response headers.
     pub cors: Option<Py<PyAny>>,
+    /// Optional :class:`oxyroute.security_headers.SecurityHeadersConfig` (or compatible
+    /// ``response_header_pairs``) merged if those header names are not already set.
+    pub security_headers: Option<Py<PyAny>>,
 }
 
 impl AppState {
@@ -101,6 +104,7 @@ impl AppState {
             include_openapi: true,
             middleware: None,
             cors: None,
+            security_headers: None,
         }
     }
 
