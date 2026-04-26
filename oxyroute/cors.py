@@ -113,7 +113,9 @@ class CORSConfig:
         return Response(status=204, body=None, headers=h)
 
     def _preflight_access_control_allow_headers_value(self, raw_ach: str) -> str | None:
-        if self.allow_headers == ["*"] or (len(self.allow_headers) == 1 and self.allow_headers[0] == "*"):
+        if self.allow_headers == ["*"] or (
+            len(self.allow_headers) == 1 and self.allow_headers[0] == "*"
+        ):
             return "*"
         allow_lower = {x.lower() for x in self.allow_headers if x != "*"}
         parts = [p for p in _HDR_SPLIT.split(raw_ach.strip()) if p]
