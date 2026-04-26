@@ -1,8 +1,32 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use matchit::Router;
 use parking_lot::Mutex;
 use pyo3::prelude::*;
+
+/// Immutable route tables built at [`AppState::freeze`](AppState) time so the request
+/// path can be matched without per-method `Mutex` locks (issue #4).
+pub struct CompiledRouters {
+    pub get: Router<usize>,
+    pub post: Router<usize>,
+    pub put: Router<usize>,
+    pub patch: Router<usize>,
+    pub delete: Router<usize>,
+    pub options: Router<usize>,
+}
+
+fn router_for_compiled<'a>(c: &'a CompiledRouters, method: &str) -> Option<&'a Router<usize>> {
+    match method {
+        "GET" | "HEAD" => Some(&c.get),
+        "POST" => Some(&c.post),
+        "PUT" => Some(&c.put),
+        "PATCH" => Some(&c.patch),
+        "DELETE" => Some(&c.delete),
+        "OPTIONS" => Some(&c.options),
+        _ => None,
+    }
+}
 
 pub struct RouteEntry {
     pub handler: Py<PyAny>,
@@ -41,6 +65,9 @@ pub struct AppState {
     pub delete: Mutex<Router<usize>>,
     pub options: Mutex<Router<usize>>,
     pub openapi: Mutex<serde_json::Value>,
+    /// When `Some`, route matching uses these tables without taking per-router mutexes
+    /// (populated in [`App::freeze`](crate::App::freeze)).
+    pub compiled: Option<Arc<CompiledRouters>>,
     /// When true, `add_route` fails (DAG / routes frozen for DI).
     pub frozen: bool,
     /// Serve `GET /openapi.json` from the built document without a user route.
@@ -65,9 +92,22 @@ impl AppState {
             delete: Mutex::new(Router::new()),
             options: Mutex::new(Router::new()),
             openapi: Mutex::new(openapi),
+            compiled: None,
             frozen: false,
             include_openapi: true,
             middleware: None,
+        }
+    }
+
+    /// Clone current mutex-protected [`Router`]s into a snapshot (used at freeze / tests).
+    pub fn snapshot_routers(&self) -> CompiledRouters {
+        CompiledRouters {
+            get: self.get.lock().clone(),
+            post: self.post.lock().clone(),
+            put: self.put.lock().clone(),
+            patch: self.patch.lock().clone(),
+            delete: self.delete.lock().clone(),
+            options: self.options.lock().clone(),
         }
     }
 }
@@ -95,41 +135,63 @@ pub fn map_method_router<'a>(
 pub fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
     const ORDER: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
     let mut have = [false; 7];
-    {
-        let g = state.get.lock();
-        if g.at(path).is_ok() {
+    if let Some(c) = &state.compiled {
+        if c.get.at(path).is_ok() {
             have[0] = true;
             have[1] = true;
         }
-    }
-    {
-        let r = state.post.lock();
-        if r.at(path).is_ok() {
+        if c.post.at(path).is_ok() {
             have[2] = true;
         }
-    }
-    {
-        let r = state.put.lock();
-        if r.at(path).is_ok() {
+        if c.put.at(path).is_ok() {
             have[3] = true;
         }
-    }
-    {
-        let r = state.patch.lock();
-        if r.at(path).is_ok() {
+        if c.patch.at(path).is_ok() {
             have[4] = true;
         }
-    }
-    {
-        let r = state.delete.lock();
-        if r.at(path).is_ok() {
+        if c.delete.at(path).is_ok() {
             have[5] = true;
         }
-    }
-    {
-        let r = state.options.lock();
-        if r.at(path).is_ok() {
+        if c.options.at(path).is_ok() {
             have[6] = true;
+        }
+    } else {
+        {
+            let g = state.get.lock();
+            if g.at(path).is_ok() {
+                have[0] = true;
+                have[1] = true;
+            }
+        }
+        {
+            let r = state.post.lock();
+            if r.at(path).is_ok() {
+                have[2] = true;
+            }
+        }
+        {
+            let r = state.put.lock();
+            if r.at(path).is_ok() {
+                have[3] = true;
+            }
+        }
+        {
+            let r = state.patch.lock();
+            if r.at(path).is_ok() {
+                have[4] = true;
+            }
+        }
+        {
+            let r = state.delete.lock();
+            if r.at(path).is_ok() {
+                have[5] = true;
+            }
+        }
+        {
+            let r = state.options.lock();
+            if r.at(path).is_ok() {
+                have[6] = true;
+            }
         }
     }
     ORDER
@@ -138,4 +200,60 @@ pub fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
         .filter(|(_, ok)| *ok)
         .map(|(m, _)| (*m).to_string())
         .collect()
+}
+
+/// Returns route index and path params, or `None` if the method is unsupported; `Some(None)` if
+/// no match; `Some(Some)` on success. Uses [`CompiledRouters`] when set (lock-free).
+pub fn match_route(
+    state: &AppState,
+    method: &str,
+    path: &str,
+) -> Option<Option<(usize, HashMap<String, String>)>> {
+    if let Some(c) = &state.compiled {
+        let g = router_for_compiled(c, method)?;
+        return Some(g.at(path).ok().map(|m| {
+            let mut pmap = HashMap::new();
+            for (k, v) in m.params.iter() {
+                pmap.insert(k.to_string(), v.to_string());
+            }
+            (*m.value, pmap)
+        }));
+    }
+    let g = map_method_router(state, method)?;
+    Some(g.at(path).ok().map(|m| {
+        let mut pmap = HashMap::new();
+        for (k, v) in m.params.iter() {
+            pmap.insert(k.to_string(), v.to_string());
+        }
+        (*m.value, pmap)
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn match_route_same_with_and_without_compiled() {
+        let mut s = AppState::new();
+        s.get.lock().insert("/a/:id", 7usize).unwrap();
+        let pre = match_route(&s, "GET", "/a/5").expect("method");
+
+        s.compiled = Some(Arc::new(s.snapshot_routers()));
+        let post = match_route(&s, "GET", "/a/5").expect("method");
+
+        assert_eq!(pre, post);
+        let inner = pre.expect("match");
+        assert_eq!(inner.0, 7);
+        assert_eq!(inner.1.get("id").map(String::as_str), Some("5"));
+    }
+
+    #[test]
+    fn methods_matching_path_uses_compiled() {
+        let mut s = AppState::new();
+        s.post.lock().insert("/x", 0usize).unwrap();
+        s.compiled = Some(Arc::new(s.snapshot_routers()));
+        let m = methods_matching_path(&s, "/x");
+        assert_eq!(m, vec!["POST".to_string()]);
+    }
 }

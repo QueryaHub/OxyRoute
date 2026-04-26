@@ -276,6 +276,9 @@ impl App {
     fn freeze(&self) -> PyResult<()> {
         let mut st = self.state.write();
         st.frozen = true;
+        if st.compiled.is_none() {
+            st.compiled = Some(Arc::new(st.snapshot_routers()));
+        }
         Ok(())
     }
 
