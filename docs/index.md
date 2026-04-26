@@ -43,6 +43,7 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 | [Handlers](handlers.md) | Injected parameters, return types, JSON encoding |
 | [CORS](cors.md) | `CORSConfig`, preflight, `apply_cors` |
 | [Security headers](security-headers.md) | `SecurityHeadersConfig`, HSTS, CSP |
+| [CSRF](csrf.md) | Double-submit, `apply_csrf`, `csrf_layer` + CORS |
 | [JWT](jwt.md) | `require_jwt`, HS* / RSA / EC PEM, `decode_jwt_hs` (HS* tests) |
 | [Dependencies](dependencies.md) | `Depends`, `dependencies=[...]`, `freeze` |
 | [OpenAPI](openapi.md) | `openapi.json` route, title, `openapi_json()` |
