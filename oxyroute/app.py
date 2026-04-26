@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -88,6 +89,7 @@ class App:
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
+        body_model: Any | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -102,6 +104,7 @@ class App:
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
+            body_model=body_model,
         )
 
     def put(
@@ -115,6 +118,7 @@ class App:
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
+        body_model: Any | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -129,6 +133,7 @@ class App:
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
+            body_model=body_model,
         )
 
     def patch(
@@ -143,6 +148,7 @@ class App:
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
+        body_model: Any | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
@@ -157,6 +163,7 @@ class App:
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
+            body_model=body_model,
         )
 
     def delete(
@@ -227,10 +234,14 @@ class App:
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
+        body_model: Any | None = None,
     ) -> Callable[[F], F]:
         dlist = _norm_dependencies(dependencies)
 
         def wrap(handler: F) -> F:
+            body_schema_json: str | None = None
+            if body_model is not None:
+                body_schema_json = json.dumps(body_model.model_json_schema())
             self._app.add_route(
                 method,
                 path,
@@ -244,6 +255,7 @@ class App:
                 jwt_audience,
                 jwt_leeway,
                 jwt_cookie,
+                body_schema_json,
             )
             return handler
 

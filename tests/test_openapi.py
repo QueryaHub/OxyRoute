@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 from oxyroute import App
 
 
@@ -67,3 +68,25 @@ def test_set_openapi_served_false_stops_serving_still_exports_json() -> None:
 
     asyncio.run(_run())
     assert "/z" in json.loads(app.openapi_json())["paths"]
+
+
+def test_openapi_post_request_body_from_pydantic() -> None:
+    pydantic = pytest.importorskip("pydantic")
+
+    class ItemIn(pydantic.BaseModel):
+        title: str
+        count: int = 0
+
+    app = App()
+
+    @app.post("/items", body_model=ItemIn)
+    def create_item(json: dict) -> str:
+        return "ok"
+
+    doc = json.loads(app.openapi_json())
+    rb = doc["paths"]["/items"]["post"]["requestBody"]
+    assert rb["required"] is True
+    ct = rb["content"]["application/json"]["schema"]
+    assert ct["type"] == "object"
+    assert "title" in ct.get("properties", {})
+    assert "count" in ct.get("properties", {})
