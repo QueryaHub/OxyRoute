@@ -55,9 +55,30 @@ For precise behavior and edge cases, refer to the implementation in the reposito
 
 ## Errors in handlers and dependencies
 
-If a **dependency factory** or the **route handler** raises a Python exception (or building the response fails), the server answers with **500** and a small **JSON** body: `{"error":"internal server error"}`. Exception text and tracebacks are **not** included in the response by default (to avoid leaking internals to clients).
+### `HTTPException` (non-500 responses)
+
+Raise **`HTTPException`** from `oxyroute` to return a specific **status code** and JSON body without a `try` / `except` at every call site:
+
+```python
+from oxyroute import HTTPException
+
+raise HTTPException(404, "not found")
+raise HTTPException(422, {"errors": [...]})  # body is this JSON value
+raise HTTPException(400, "bad", headers={"X-Reason": "check"})  # optional extra headers
+```
+
+- String or other non-`dict` / non-`list` **`detail`** becomes `{"detail": ...}`.
+- **`detail=None`** uses a short default message derived from the status (HTTP reason phrase when available).
+- **`Content-Type`** is set to `application/json; charset=utf-8` unless you supply a `content-type` in **`headers`**.
+- Works from **route handlers**, **dependencies**, **middleware** (when they run in Python), and when **mapping the return value** to a response.
+
+### Other exceptions → 500
+
+If a **dependency factory** or the **route handler** raises any other Python exception (or building the response fails), the server answers with **500** and a small **JSON** body: `{"error":"internal server error"}`. Exception text and tracebacks are **not** included in the response by default (to avoid leaking internals to clients).
 
 Set the environment variable **`OXYROUTE_DEBUG=1`** (or `true`) to include a **`detail`** string in that JSON for the same error and to log more at the `log` crate target **`oxyroute`** (see `RUST_LOG`, e.g. `RUST_LOG=oxyroute=error`).
+
+There is no **`register_exception_handler`** API yet; map custom exception types by catching them in Python or by a small wrapper.
 
 ## Pre-route hook (`set_middleware`)
 
