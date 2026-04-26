@@ -4,8 +4,9 @@ This directory holds **20 + N issue bodies** ([bodies/](bodies/)) and a [PRIORIT
 
 ## Status and GitHub (living backlog)
 
-- **Closed milestone [v0.2.0](https://github.com/QueryaHub/OxyRoute/milestone/1):** the original **20-issue** batch is **shipped** in `main`/`dev` (PyPI 0.1.x, CI, RSGI/OpenAPI surface, PyO3 upgrade, etc.).  
-- **Active milestone [v0.3.0](https://github.com/QueryaHub/OxyRoute/milestone/2):** **open** work — [#4](https://github.com/QueryaHub/OxyRoute/issues/4) (perf), [#8](https://github.com/QueryaHub/OxyRoute/issues/8) (JWK/oxyjwt), [#17](https://github.com/QueryaHub/OxyRoute/issues/17) (ASGI), [#18](https://github.com/QueryaHub/OxyRoute/issues/18) (lifespan/state), **critical modules** — [#46](https://github.com/QueryaHub/OxyRoute/issues/46) (sub-routers), [#47](https://github.com/QueryaHub/OxyRoute/issues/47) (multipart/form), [#48](https://github.com/QueryaHub/OxyRoute/issues/48) (HTTPException), [#49](https://github.com/QueryaHub/OxyRoute/issues/49) (CORS). Optional OpenAPI depth (`$ref` / `$defs`): [09.md](bodies/09.md); issue #9 is closed — open a new issue if you pick this up.  
+- **Active milestone [v0.2.0](https://github.com/QueryaHub/OxyRoute/milestone/1):** next **PyPI 0.2.0** — open work includes [#4](https://github.com/QueryaHub/OxyRoute/issues/4) (perf), [#8](https://github.com/QueryaHub/OxyRoute/issues/8) (JWK/oxyjwt), [#17](https://github.com/QueryaHub/OxyRoute/issues/17) (ASGI), [#18](https://github.com/QueryaHub/OxyRoute/issues/18) (lifespan/state), [#46](https://github.com/QueryaHub/OxyRoute/issues/46)–[#49](https://github.com/QueryaHub/OxyRoute/issues/49) (sub-routers, multipart, **global exceptions**, CORS), [#50](https://github.com/QueryaHub/OxyRoute/issues/50)–[#54](https://github.com/QueryaHub/OxyRoute/issues/54) (HTTP/2 docs, **SSE**, **WebSocket** research, **CSRF**, **security headers**).  
+- **Closed milestone [v0.3.0](https://github.com/QueryaHub/OxyRoute/milestone/2):** unused name; work consolidated under **v0.2.0**.  
+- Optional OpenAPI depth (`$ref` / `$defs`): [09.md](bodies/09.md); issue #9 is closed — open a new issue if you pick this up.  
 - **Do not re-run** `./scripts/create-github-issues.sh` on an already-populated repo (duplicates). Check open work with: `gh issue list -R QueryaHub/OxyRoute --state open`.
 
 ## Prerequisites
@@ -63,7 +64,7 @@ gh issue create --title "feat: expose PATCH routes on Python App" \
 | 19 | [bodies/19.md](bodies/19.md) | feat: return 405 when path exists for another method | `enhancement` | v0.2.0 |
 | 20 | [bodies/20.md](bodies/20.md) | feat: register HEAD/OPTIONS and sensible defaults | `enhancement` | v0.2.0 |
 
-### Follow-up issues (v0.3.0, [feature research](../../docs/feature.md))
+### Follow-up issues (milestone v0.2.0 / 0.2.0, [feature research](../../docs/feature.md))
 
 | # | GitHub | Body file | Title |
 |---|--------|-----------|--------|
@@ -71,10 +72,15 @@ gh issue create --title "feat: expose PATCH routes on Python App" \
 | 47 | [issue](https://github.com/QueryaHub/OxyRoute/issues/47) | [bodies/22.md](bodies/22.md) | feat: multipart/form-data and urlencoded request bodies |
 | 48 | [issue](https://github.com/QueryaHub/OxyRoute/issues/48) | [bodies/23.md](bodies/23.md) | feat: global HTTPException and exception handlers |
 | 49 | [issue](https://github.com/QueryaHub/OxyRoute/issues/49) | [bodies/24.md](bodies/24.md) | feat: first-class CORS helper (middleware / preflight) |
+| 50 | [issue](https://github.com/QueryaHub/OxyRoute/issues/50) | [bodies/25.md](bodies/25.md) | research+docs: HTTP/2 with Granian/TLS and framework guarantees |
+| 51 | [issue](https://github.com/QueryaHub/OxyRoute/issues/51) | [bodies/26.md](bodies/26.md) | feat: Server-Sent Events (SSE) streaming responses |
+| 52 | [issue](https://github.com/QueryaHub/OxyRoute/issues/52) | [bodies/27.md](bodies/27.md) | research+feat: WebSocket support (Granian / ASGI integration) |
+| 53 | [issue](https://github.com/QueryaHub/OxyRoute/issues/53) | [bodies/28.md](bodies/28.md) | feat: optional CSRF protection for cookie/session-based flows |
+| 54 | [issue](https://github.com/QueryaHub/OxyRoute/issues/54) | [bodies/29.md](bodies/29.md) | feat: security headers preset (HSTS, X-Frame-Options, CSP, etc.) |
 
 ## Priority tier (P0 / P1)
 
-See [PRIORITIES.md](PRIORITIES.md) for the **current** order (v0.3.0 follow-ups: **4, 17, 18, 8**; optional **9**).
+See [PRIORITIES.md](PRIORITIES.md) for the **current** order (milestone **v0.2.0** / release **0.2.0**).
 
 ## Documentation
 

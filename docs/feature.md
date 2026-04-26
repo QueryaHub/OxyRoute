@@ -2,6 +2,8 @@
 
 Документ фиксирует **разрыв** между текущим OxyRoute (RSGI + Rust hot path, см. [index](index.md)) и ожиданиями от **широкого** HTTP-фреймворка уровня FastAPI / Starlette / Django REST. Термин «полноценный» здесь означает **покрытие типичного продакшн-API и DX**, а не обязательность всех пунктов для твоего позиционирования.
 
+**Следующий релиз:** в репозитории и в GitHub milestone целим **0.2.0** / [**v0.2.0**](https://github.com/QueryaHub/OxyRoute/milestone/1) (не 0.3.0); см. [PRIORITIES](../.github/ISSUE_BACKLOG/PRIORITIES.md).
+
 ---
 
 ## Уже есть (кратко)
@@ -112,12 +114,22 @@ OxyRoute осознанно **уже** в нише: **быстрый маршр�
 5. **Multipart + form body** — если не только JSON API.  
 6. **CORS / exception handlers** — быстрые победы на Python-стороне без ломки RSGI.
 
-## Связанные GitHub-issues (критичные модули)
+## Связанные GitHub-issues (milestone v0.2.0)
 
-- [#46](https://github.com/QueryaHub/OxyRoute/issues/46) — sub-routers / `include_router` ([`bodies/21.md`](../.github/ISSUE_BACKLOG/bodies/21.md))  
-- [#47](https://github.com/QueryaHub/OxyRoute/issues/47) — multipart и `application/x-www-form-urlencoded` ([`22.md`](../.github/ISSUE_BACKLOG/bodies/22.md))  
-- [#48](https://github.com/QueryaHub/OxyRoute/issues/48) — `HTTPException` и глобальные обработчики ([`23.md`](../.github/ISSUE_BACKLOG/bodies/23.md))  
-- [#49](https://github.com/QueryaHub/OxyRoute/issues/49) — CORS helper ([`24.md`](../.github/ISSUE_BACKLOG/bodies/24.md))  
+**Композиция и тело / ошибки / CORS**
+
+- [#46](https://github.com/QueryaHub/OxyRoute/issues/46) — sub-routers ([`21.md`](../.github/ISSUE_BACKLOG/bodies/21.md))  
+- [#47](https://github.com/QueryaHub/OxyRoute/issues/47) — multipart / urlencoded ([`22.md`](../.github/ISSUE_BACKLOG/bodies/22.md))  
+- [#48](https://github.com/QueryaHub/OxyRoute/issues/48) — **глобальные исключения** / `HTTPException` ([`23.md`](../.github/ISSUE_BACKLOG/bodies/23.md))  
+- [#49](https://github.com/QueryaHub/OxyRoute/issues/49) — CORS ([`24.md`](../.github/ISSUE_BACKLOG/bodies/24.md))  
+
+**Протокол и безопасность**
+
+- [#50](https://github.com/QueryaHub/OxyRoute/issues/50) — HTTP/2 (док/Granian) ([`25.md`](../.github/ISSUE_BACKLOG/bodies/25.md))  
+- [#51](https://github.com/QueryaHub/OxyRoute/issues/51) — SSE ([`26.md`](../.github/ISSUE_BACKLOG/bodies/26.md))  
+- [#52](https://github.com/QueryaHub/OxyRoute/issues/52) — WebSocket ([`27.md`](../.github/ISSUE_BACKLOG/bodies/27.md))  
+- [#53](https://github.com/QueryaHub/OxyRoute/issues/53) — CSRF ([`28.md`](../.github/ISSUE_BACKLOG/bodies/28.md))  
+- [#54](https://github.com/QueryaHub/OxyRoute/issues/54) — security headers ([`29.md`](../.github/ISSUE_BACKLOG/bodies/29.md))  
 
 ---
 
