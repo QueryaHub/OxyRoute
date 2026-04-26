@@ -8,7 +8,8 @@ OxyRoute can validate **Bearer JWTs** in the **Rust** layer for routes you mark 
 
 The HTTP verb decorators on `App` accept:
 
-- `require_jwt: bool` — if true, a valid `Authorization: Bearer <token>` header and successful verification are required before the handler runs
+- `require_jwt: bool` — if true, a valid JWT and successful verification are required before the handler runs (see below)
+- `jwt_cookie: str | None` — if set, and there is no usable `Authorization: Bearer` value, the token is read from the `Cookie` header: the first non-empty `name=<value>` pair where `name` matches this string (case-sensitive). `Bearer` still wins when both are present
 - `jwt_secret: str | None` — required for the default HMAC flow when `require_jwt` is set
 - `algorithms: list[str] | None` — e.g. `["HS256"]` (defaults in code if omitted)
 - `jwt_issuer: str | None` — if set, the `iss` claim must match (via [`jsonwebtoken`](https://crates.io/crates/jsonwebtoken) validation)
@@ -22,7 +23,7 @@ If `require_jwt` is set but the secret is missing for an all-HMAC algorithm set,
 The handler is **not** executed when:
 
 - The route requires JWT but there is no usable secret
-- The `Authorization` header is missing or not a Bearer token
+- The `Authorization` header is not a usable Bearer token **and** there is no `jwt_cookie` value, or the named cookie is missing/empty; otherwise cookie-based token is used when `jwt_cookie` is set
 - The token does not verify (including wrong algorithm/secret) — typically **401** with a plain `Unauthorized` body
 - The token is expired in a way the library classifies as signature expiry — **401** with body `Expired` in the current implementation
 

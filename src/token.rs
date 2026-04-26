@@ -16,6 +16,38 @@ pub fn extract_bearer(h: Option<&str>) -> Option<String> {
     }
 }
 
+/// Read a case-sensitive cookie name from a raw [`Cookie`][1] header value.
+///
+/// [1]: https://www.rfc-editor.org/rfc/rfc6265#section-4.2.1
+pub fn extract_cookie_value(raw: &str, name: &str) -> Option<String> {
+    for part in raw.split(';') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (k, v) = part.split_once('=')?;
+        if k.trim() != name {
+            continue;
+        }
+        let v = v.trim();
+        let v = trim_cookie_dquotes(v);
+        if v.is_empty() {
+            return None;
+        }
+        return Some(v.to_string());
+    }
+    None
+}
+
+fn trim_cookie_dquotes(s: &str) -> &str {
+    let s = s.trim();
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
 /// Used by the request path and for golden tests against `oxyjwt.decode`.
 pub fn decode_hs_claims(
     token: &str,
@@ -72,4 +104,25 @@ pub fn decode_jwt_hs(
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let j = py.import_bound("json")?;
     Ok(j.call_method1("loads", (s,))?.unbind())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_cookie_finds_name() {
+        assert_eq!(
+            extract_cookie_value("a=1; access_token=eyJ.x.y; Path=/", "access_token").as_deref(),
+            Some("eyJ.x.y")
+        );
+    }
+
+    #[test]
+    fn extract_cookie_quoted() {
+        assert_eq!(
+            extract_cookie_value(r#"t="a.b.c""#, "t").as_deref(),
+            Some("a.b.c")
+        );
+    }
 }
