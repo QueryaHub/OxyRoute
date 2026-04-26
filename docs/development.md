@@ -44,7 +44,7 @@ pip install "oxyroute[dev]"  # in your dev env, from source after maturin develo
 
 The workflow at `.github/workflows/ci.yml` (job name: **ci**):
 
-- Matrix across **OS** (e.g. Ubuntu, macOS, Windows) and **Python** 3.10 / 3.12 (see the file for current exclusions)
+- Matrix across **OS** (Ubuntu, macOS, Windows) and **Python** 3.10 through 3.14 (see `.github/workflows/ci.yml`)
 - Installs `maturin`, `pytest`, `httpx`, `oxyjwt`, builds a release wheel, installs it, and runs the tests as above
 
 ## See also
