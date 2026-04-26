@@ -1,6 +1,10 @@
-# Publish wheels + sdist to PyPI on version tags (trusted publishing / OIDC).
-# One-time PyPI setup: https://docs.pypi.org/trusted-publishers/adding-a-publisher/
-# GitHub: create an Environment named `pypi` (this workflow uses it for the publish job).
+# Publish wheels + sdist to PyPI on `v*` tags.
+#
+# Auth: PyPI API token. In GitHub → Settings → Environments → `pypi` add either:
+#   - a Secret (recommended) `PYPI_API_TOKEN`, or
+#   - a Variable with the same name (fallback; move to a Secret for production)
+# The job uses: secrets first, else vars. Optional later: switch to
+#   https://docs.pypi.org/trusted-publishers/ (remove `with.password` and set `id-token: write`).
 
 name: Release to PyPI
 
@@ -115,8 +119,6 @@ jobs:
     environment:
       name: pypi
       url: https://pypi.org/project/oxyroute/
-    permissions:
-      id-token: write
     steps:
       - name: Download distribution artifacts
         uses: actions/download-artifact@v4
@@ -127,5 +129,7 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
+          user: __token__
+          password: ${{ secrets.PYPI_API_TOKEN || vars.PYPI_API_TOKEN }}
           packages-dir: dist/
           print-hash: true
