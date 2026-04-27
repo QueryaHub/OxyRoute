@@ -45,11 +45,14 @@ Run these from the **repository root** (the directory that contains `pyproject.t
 
 ```bash
 cd /path/to/OxyRoute
+# Include both `dev` and `bench` — `uv sync --extra bench` alone drops the `dev` group (pytest, ruff, …).
 uv sync --extra dev --extra bench
 # or: uv sync --all-extras
 # or: uv pip install -e ".[bench]"
 # wrk: sudo apt install wrk  /  brew install wrk
 ```
+
+`bench_hello.sh` uses `REPO/.venv/bin/python` when present so it does not fall back to **system** `python3` (where FastAPI is usually missing). Override with `PYTHON=/path/to/python` if needed.
 
 ## Run (`bench_hello.sh`)
 
