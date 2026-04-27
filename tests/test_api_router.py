@@ -6,6 +6,8 @@ import asyncio
 import json
 
 import httpx
+
+from tests._rsgi_test_transport import asgi_test_app
 import pytest
 from oxyroute import APIRouter, App
 from oxyroute.router import join_path
@@ -34,7 +36,7 @@ def test_include_router_hits_routes() -> None:
     app.include_router(r, prefix="/v1")
 
     async def _go() -> None:
-        tr = httpx.ASGITransport(app=app)
+        tr = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=tr, base_url="http://t") as c:
             r1 = await c.get("/v1/a")
             r2 = await c.get("/v1/b/7")
@@ -83,7 +85,7 @@ def test_nested_include_router() -> None:
     app.include_router(outer, prefix="/v1")
 
     async def _go() -> None:
-        tr = httpx.ASGITransport(app=app)
+        tr = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=tr, base_url="http://t") as c:
             r0 = await c.get("/v1/inner/c")
         assert r0.status_code == 200 and r0.text == "c"

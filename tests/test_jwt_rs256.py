@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 
 import httpx
+
+from tests._rsgi_test_transport import asgi_test_app
 import jwt
 import pytest
 from oxyroute import App
@@ -32,7 +34,7 @@ def test_asgi_jwt_rs256_bearer() -> None:
         return str(c.get("sub", ""))
 
     async def _go() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             o = await c.get("/r", headers={"Authorization": f"Bearer {tok}"})
         assert o.status_code == 200

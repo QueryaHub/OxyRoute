@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import inspect
 import json
 from collections.abc import Callable, Mapping
@@ -8,7 +7,6 @@ from types import SimpleNamespace
 from typing import Any, TypeVar
 
 from . import _oxyroute
-from .asgi import build_asgi_caller
 from .router import APIRouter, join_path
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -37,7 +35,8 @@ def Depends(call: Callable[..., Any]) -> _oxyroute.PyDepends:
 class App:
     """
     Application object: pass a module instance to Granian, e.g.
-    ``granian app:app --interface rsgi`` or for ASGI ``granian app:app --interface asgi``.
+    ``granian app:app --interface rsgi``. RSGI is the only supported transport;
+    the legacy ASGI bridge was removed in v0.3.0.
 
     ``state`` is an empty ``types.SimpleNamespace`` for per-process data; set fields in
     ``__rsgi_init__`` or a factory, or on a subclass. In-memory data is not shared across
@@ -48,10 +47,8 @@ class App:
         self._app = _oxyroute.App(include_openapi=include_openapi)
         self._app.set_openapi_title(title)
         self.title = title
-        self._websocket_routes: dict[str, Callable[..., Any]] = {}
         # Per-process mutable bag for ``__rsgi_init__`` / factory setup (DB pool, clients, …).
         self.state: SimpleNamespace = SimpleNamespace()
-        self._asgi3: Callable[..., Any] = build_asgi_caller(self)
 
     def freeze(self) -> None:
         """After ``freeze()``, no more route registration (matches Rust app state)."""
@@ -299,34 +296,6 @@ class App:
             jwt_cookie=jwt_cookie,
         )
 
-    def websocket(self, path: str) -> Callable[[F], F]:
-        """
-        Register an ASGI websocket handler for exact `path`.
-
-        This route family is available on the optional ASGI bridge (`App.__call__`), not
-        on the RSGI request path.
-        """
-
-        def wrap(handler: F) -> F:
-            self._websocket_routes[path] = handler
-            return handler
-
-        return wrap
-
-    async def _handle_asgi_websocket(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        path = str(scope.get("path", "/") or "/")
-        handler = self._websocket_routes.get(path)
-        if handler is None:
-            await send({"type": "websocket.close", "code": 1000})
-            return
-        from .asgi import WebSocket
-
-        ws = WebSocket(receive, send)
-        if inspect.iscoroutinefunction(handler):
-            await handler(ws)
-            return
-        await asyncio.get_running_loop().run_in_executor(None, lambda: handler(ws))
-
     def _route(
         self,
         method: str,
@@ -393,11 +362,8 @@ class App:
         return await self._app.handle_rsgi(scope, protocol)
 
     def handle_rsgi(self, scope: Any, protocol: Any) -> Any:
-        """Forward to the native app (used by the ASGI bridge)."""
+        """Forward to the native ``handle_rsgi`` coroutine."""
         return self._app.handle_rsgi(scope, protocol)
-
-    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        return await self._asgi3(scope, receive, send)
 
     def openapi_json(self) -> str:
         return self._app.openapi_json()

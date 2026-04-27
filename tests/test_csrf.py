@@ -6,6 +6,8 @@ import asyncio
 import json
 
 import httpx
+
+from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App
 from oxyroute.csrf import CSRFConfig, apply_csrf
 
@@ -24,7 +26,7 @@ def test_csrf_mismatch_403() -> None:
         return "ok"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.post(
                 "/p",
@@ -48,7 +50,7 @@ def test_csrf_missing_403() -> None:
         return "nope"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.post("/p")
         assert r.status_code == 403
@@ -68,7 +70,7 @@ def test_csrf_ok_when_cookie_and_header_match() -> None:
         return "yes"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.post(
                 "/p",

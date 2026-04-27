@@ -6,6 +6,8 @@ import asyncio
 from dataclasses import dataclass
 
 import httpx
+
+from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App
 from oxyroute.cors import CORSConfig, apply_cors
 
@@ -160,7 +162,7 @@ def test_apply_cors_chain_called_for_non_preflight_integration() -> None:
         return "ok"
 
     async def _run() -> None:
-        tr = httpx.ASGITransport(app=app)
+        tr = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=tr, base_url="http://t") as c:
             r = await c.get("/hi", headers={"origin": "https://a.example"})
         assert r.status_code == 200
