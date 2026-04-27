@@ -238,41 +238,6 @@ pub async fn run_rsgi(
             return send_handler_map(&protocol, is_head, mapped).await;
         }
     }
-    let read_fut = Python::with_gil(|py| {
-        let p = protocol.bind(py);
-        let aw: Bound<PyAny> = p.call0()?;
-        pyo3_async_runtimes::tokio::into_future(aw)
-    })?;
-    let body_obj: PyObject = read_fut.await?;
-    let body_bytes: Vec<u8> = Python::with_gil(|py| -> PyResult<Vec<u8>> {
-        let b = body_obj.bind(py);
-        if let Ok(x) = b.extract::<Vec<u8>>() {
-            return Ok(x);
-        }
-        if let Ok(s) = b.str() {
-            return Ok(s.to_string().into_bytes());
-        }
-        Ok(Vec::new())
-    })?;
-    let max = form::max_body_bytes();
-    if (body_bytes.len() as u64) > max {
-        return response::send_text(
-            &protocol,
-            413,
-            r#"{"error":"payload too large"}"#,
-            "application/json; charset=utf-8",
-        )
-        .await;
-    }
-    let (auth, cookie_raw) =
-        Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
-            let s = scope.bind(py);
-            let headers = s.getattr("headers")?;
-            Ok((
-                header_get_lax(&headers, "authorization"),
-                header_get_lax(&headers, "cookie"),
-            ))
-        })?;
     let route_out: Option<(usize, HashMap<String, String>)> = {
         let st = state.read();
         match match_route(&st, &method, &path) {
@@ -343,6 +308,41 @@ pub async fn run_rsgi(
             e.handler_varkw,
         ))
     })?;
+    let read_fut = Python::with_gil(|py| {
+        let p = protocol.bind(py);
+        let aw: Bound<PyAny> = p.call0()?;
+        pyo3_async_runtimes::tokio::into_future(aw)
+    })?;
+    let body_obj: PyObject = read_fut.await?;
+    let body_bytes: Vec<u8> = Python::with_gil(|py| -> PyResult<Vec<u8>> {
+        let b = body_obj.bind(py);
+        if let Ok(x) = b.extract::<Vec<u8>>() {
+            return Ok(x);
+        }
+        if let Ok(s) = b.str() {
+            return Ok(s.to_string().into_bytes());
+        }
+        Ok(Vec::new())
+    })?;
+    let max = form::max_body_bytes();
+    if (body_bytes.len() as u64) > max {
+        return response::send_text(
+            &protocol,
+            413,
+            r#"{"error":"payload too large"}"#,
+            "application/json; charset=utf-8",
+        )
+        .await;
+    }
+    let (auth, cookie_raw) =
+        Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
+            let s = scope.bind(py);
+            let headers = s.getattr("headers")?;
+            Ok((
+                header_get_lax(&headers, "authorization"),
+                header_get_lax(&headers, "cookie"),
+            ))
+        })?;
     let mut claims_val: Option<JsonValue> = None;
     if require_jwt {
         let key = match jwt_secret {
