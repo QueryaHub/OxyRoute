@@ -322,11 +322,10 @@ class App:
         from .asgi import WebSocket
 
         ws = WebSocket(receive, send)
-        out = handler(ws)
-        if inspect.isawaitable(out):
-            await out
+        if inspect.iscoroutinefunction(handler):
+            await handler(ws)
             return
-        await asyncio.get_running_loop().run_in_executor(None, lambda: out)
+        await asyncio.get_running_loop().run_in_executor(None, lambda: handler(ws))
 
     def _route(
         self,
