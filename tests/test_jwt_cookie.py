@@ -8,6 +8,7 @@ import time
 import httpx
 import pytest
 from oxyroute import App
+from tests._rsgi_test_transport import asgi_test_app
 
 oxyjwt = pytest.importorskip("oxyjwt")
 
@@ -40,7 +41,7 @@ def test_jwt_from_cookie() -> None:
     tok = _token()
 
     async def run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get(
                 "/c",
@@ -78,7 +79,7 @@ def test_bearer_wins_over_cookie() -> None:
     )
 
     async def run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get(
                 "/b",

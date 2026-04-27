@@ -1,8 +1,12 @@
-"""
-Optional ASGI 3.0 entry for ``uvicorn`` / ``granian --interface asgi``.
+"""Test-only ASGI -> RSGI shim used by httpx.ASGITransport in the test suite.
 
-Builds a minimal RSGI-like ``scope`` / ``protocol`` and delegates to the same Rust
-``handle_rsgi`` coroutine as ``__rsgi__``. Only ``type == "http"`` is supported.
+OxyRoute v0.3.0 dropped the runtime ASGI bridge from the package. The unit / integration
+tests still drive the app in-process through ``httpx.ASGITransport`` for speed and
+isolation; this helper re-uses the same bridge code as a **test fixture only**, so the
+production package remains free of ASGI.
+
+Use :func:`build_test_app` (or :func:`asgi_test_app`) on an :class:`oxyroute.App`
+instance to obtain an ASGI 3 callable that proxies into the native RSGI dispatch path.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ def _close_blocking_loop_for_current_thread() -> None:
 
 
 class WebSocket:
-    """Small ASGI websocket helper used by the optional ASGI bridge."""
+    """Small ASGI websocket helper retained for a handful of legacy tests."""
 
     __slots__ = ("_accepted", "_closed", "_connected", "_receive", "_send")
 
@@ -92,17 +96,6 @@ def _run_handle_rsgi_blocking(
     rscope: Any,
     proto: Any,
 ) -> None:
-    """Run ``handle_rsgi`` to completion on a thread-local event loop.
-
-    The ASGI server's main loop must **not** ``await`` the native coroutine directly: the Rust
-    side calls synchronous ``protocol.response_*`` while this coroutine runs on a worker thread.
-    Response calls enqueue ASGI messages onto the main loop, where a dedicated drain task performs
-    ``send(...)`` in order.
-
-    For performance, each worker thread lazily creates and then reuses one event loop instead of
-    allocating a fresh loop per request.
-    """
-
     async def _inner() -> None:
         c = app_rsgi(rscope, proto)
         await c
@@ -115,14 +108,6 @@ def _run_handle_rsgi_blocking(
     loop.run_until_complete(_inner())
 
 
-def _hdr_from_asgi(raw: list[tuple[bytes, bytes]]) -> _HeaderView:
-    d: dict[str, str] = {}
-    for k, v in raw:
-        dk = k.decode("latin-1").lower()
-        d[dk] = v.decode("latin-1")
-    return _HeaderView(d)
-
-
 class _HeaderView:
     __slots__ = ("_d",)
 
@@ -131,6 +116,14 @@ class _HeaderView:
 
     def get(self, k: str, default: str = "") -> str:
         return self._d.get(k.lower(), default)
+
+
+def _hdr_from_asgi(raw: list[tuple[bytes, bytes]]) -> _HeaderView:
+    d: dict[str, str] = {}
+    for k, v in raw:
+        dk = k.decode("latin-1").lower()
+        d[dk] = v.decode("latin-1")
+    return _HeaderView(d)
 
 
 class _RsgiScope:
@@ -266,7 +259,6 @@ class _RsgiProtocol:
 
 
 def _max_body_bytes() -> int:
-    # Keep semantics aligned with Rust path (`src/form.rs`): default 8 MiB, `0` means unlimited.
     default = 8 * 1024 * 1024
     raw = os.getenv("OXYROUTE_MAX_BODY_BYTES", "").strip()
     if not raw:
@@ -371,17 +363,16 @@ async def asgi_to_rsgi(
         try:
             await drain_task
         except Exception:
-            # Preserve the original request-path failure if there was one.
             if run_exc is None:
                 raise
     if run_exc is not None:
         raise run_exc
 
 
-def build_asgi_caller(framework_app: Any) -> Callable[..., Any]:
-    """
-    Return ``async (scope, receive, send)`` using the framework app's
-    ``_oxyroute.App.handle_rsgi`` (via ``App`` wrapper if present).
+def build_test_app(framework_app: Any) -> Callable[..., Any]:
+    """Return an ``async (scope, receive, send)`` ASGI3 callable wrapping the RSGI app.
+
+    Used by tests with ``httpx.ASGITransport(app=build_test_app(my_app))``.
     """
 
     def _rsgi(s: Any, p: Any) -> Any:
@@ -403,3 +394,7 @@ def build_asgi_caller(framework_app: Any) -> Callable[..., Any]:
         await asgi_to_rsgi(_rsgi, _ws, scope, receive, send)
 
     return asgi3
+
+
+asgi_test_app = build_test_app
+"""Alias: ``asgi_test_app(app)`` returns an ASGI3 callable for httpx.ASGITransport."""

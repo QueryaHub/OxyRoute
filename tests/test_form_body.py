@@ -7,6 +7,7 @@ import os
 
 import httpx
 from oxyroute import App
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_urlencoded_form_fields() -> None:
@@ -17,7 +18,7 @@ def test_urlencoded_form_fields() -> None:
         return f"{form.get('a')},{form.get('b')}"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.post(
                 "/form",
@@ -40,7 +41,7 @@ def test_multipart_file_and_field() -> None:
         return f"note={form.get('note')};name={f0['name']};len={len(data)}"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.post(
                 "/up",
@@ -65,7 +66,7 @@ def test_payload_too_large_413() -> None:
     try:
 
         async def _run() -> None:
-            transport = httpx.ASGITransport(app=app)
+            transport = httpx.ASGITransport(app=asgi_test_app(app))
             async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
                 r = await c.post(
                     "/b",
