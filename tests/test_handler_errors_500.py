@@ -8,6 +8,7 @@ import os
 
 import httpx
 from oxyroute import App
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def _make_app() -> App:
@@ -32,7 +33,7 @@ def test_500_no_exception_text_by_default() -> None:
     app = _make_app()
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
             r = await c.get("/boom")
         assert r.status_code == 500
@@ -50,7 +51,7 @@ def test_500_includes_detail_when_debug_env() -> None:
     try:
 
         async def _run() -> None:
-            transport = httpx.ASGITransport(app=app)
+            transport = httpx.ASGITransport(app=asgi_test_app(app))
             async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
                 r = await c.get("/boom")
             assert r.status_code == 500
@@ -68,7 +69,7 @@ def test_dependency_error_returns_500() -> None:
     app = _make_app()
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
             r = await c.get("/dep")
         assert r.status_code == 500

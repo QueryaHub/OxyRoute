@@ -6,6 +6,7 @@ import asyncio
 
 import httpx
 from oxyroute import App, Response
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_asgi_head_same_path_as_get_empty_body() -> None:
@@ -16,7 +17,7 @@ def test_asgi_head_same_path_as_get_empty_body() -> None:
         return "hello"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             g = await c.get("/h")
             head = await c.request("HEAD", "/h")
@@ -37,7 +38,7 @@ def test_asgi_head_openapi_length() -> None:
         return "y"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.request("HEAD", "/openapi.json")
         assert r.status_code == 200
@@ -56,7 +57,7 @@ def test_asgi_options_route() -> None:
         return "ok"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.request("OPTIONS", "/cors")
         assert r.status_code == 200
@@ -77,7 +78,7 @@ def test_asgi_head_structured_response() -> None:
         )
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             g = await c.get("/r")
             head = await c.request("HEAD", "/r")

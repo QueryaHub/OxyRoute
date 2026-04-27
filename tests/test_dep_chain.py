@@ -6,6 +6,7 @@ import asyncio
 
 import httpx
 from oxyroute import App
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_dep_second_receives_first_by_name() -> None:
@@ -22,7 +23,7 @@ def test_dep_second_receives_first_by_name() -> None:
         return f"v={b}"
 
     async def run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/x")
         assert r.status_code == 200
@@ -42,7 +43,7 @@ def test_dep_request_context_headers() -> None:
         return trace_id
 
     async def run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/t", headers={"X-Trace": "z9"})
         assert r.status_code == 200
@@ -65,7 +66,7 @@ def test_dep_async_chain() -> None:
         return b
 
     async def run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/a")
         assert r.status_code == 200

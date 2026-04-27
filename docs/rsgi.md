@@ -53,10 +53,6 @@ app = create_app()
 - [`examples/rsgi_app.py`](../examples/rsgi_app.py) — minimal RSGI app  
 - [`examples/rsgi_lifespan_app.py`](../examples/rsgi_lifespan_app.py) — subclass with `__rsgi_init__` / `__rsgi_del__` and `ready_at` used from handlers
 
-## When to use ASGI instead
-
-If your host only speaks **ASGI 3.0** (for example `uvicorn` with stock ASGI), you can use the optional ASGI bridge: `App` is also a callable `async def __call__(scope, receive, send)`. See [asgi.md](asgi.md) for trade-offs and limitations.
-
 ## See also
 
 - [Handlers](handlers.md) — what the Rust core passes into your functions

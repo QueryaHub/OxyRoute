@@ -14,6 +14,7 @@ pub struct CompiledRouters {
     pub patch: Router<usize>,
     pub delete: Router<usize>,
     pub options: Router<usize>,
+    pub websocket: Router<usize>,
 }
 
 fn router_for_compiled<'a>(c: &'a CompiledRouters, method: &str) -> Option<&'a Router<usize>> {
@@ -28,12 +29,20 @@ fn router_for_compiled<'a>(c: &'a CompiledRouters, method: &str) -> Option<&'a R
     }
 }
 
+/// One WebSocket route: just a handler + async flag (no JWT / deps / body).
+#[derive(Clone)]
+pub struct WebsocketRoute {
+    pub handler: Py<PyAny>,
+    pub is_async: bool,
+}
+
+#[derive(Clone)]
 pub struct RouteEntry {
     pub handler: Py<PyAny>,
     pub is_async: bool,
     pub require_jwt: bool,
     pub jwt_secret: Option<String>,
-    pub algs: Vec<jsonwebtoken::Algorithm>,
+    pub algs: Arc<[jsonwebtoken::Algorithm]>,
     /// `None` in Python → no issuer check; else `set_issuer` in jsonwebtoken.
     pub jwt_issuer: Option<String>,
     /// `None` in Python → `validate_aud` disabled for this route.
@@ -46,26 +55,31 @@ pub struct RouteEntry {
     /// When set, body is parsed as form data (``application/x-www-form-urlencoded`` or ``multipart/form-data``), not JSON.
     pub read_form_body: bool,
     /// Dependency `name` -> factory callable (linear order; resolved in order, then user handler).
-    pub dep_names: Vec<String>,
-    pub dep_factories: Vec<Py<PyAny>>,
-    pub dep_is_async: Vec<bool>,
+    pub dep_names: Arc<[String]>,
+    pub dep_factories: Arc<[Py<PyAny>]>,
+    pub dep_is_async: Arc<[bool]>,
     /// Per factory: pass a `request` context dict (see `build_request_context` in dispatch).
-    pub dep_wants_request: Vec<bool>,
+    pub dep_wants_request: Arc<[bool]>,
     /// From `inspect.signature(handler)`: which parameter names the handler accepts (excluding
     /// `*args` / only `*`-only); used to forward only matching dependency results.
-    pub handler_param_names: HashSet<String>,
+    pub handler_param_names: Arc<HashSet<String>>,
     /// Handler has `**kwargs` (pass all dependency kwargs).
     pub handler_varkw: bool,
 }
 
 pub struct AppState {
-    pub routes: Vec<RouteEntry>,
+    /// Wrapped in `Arc<Vec<…>>` so the hot path can clone a cheap pointer **once** per request and
+    /// release [`AppState`]'s `RwLock` immediately. Mutation goes through [`Arc::make_mut`].
+    pub routes: Arc<Vec<RouteEntry>>,
+    /// Same Arc-snapshot trick as [`routes`](Self::routes); registration uses [`Arc::make_mut`].
+    pub websocket_routes: Arc<Vec<WebsocketRoute>>,
     pub get: Mutex<Router<usize>>,
     pub post: Mutex<Router<usize>>,
     pub put: Mutex<Router<usize>>,
     pub patch: Mutex<Router<usize>>,
     pub delete: Mutex<Router<usize>>,
     pub options: Mutex<Router<usize>>,
+    pub websocket: Mutex<Router<usize>>,
     pub openapi: Mutex<serde_json::Value>,
     /// When `Some`, route matching uses these tables without taking per-router mutexes
     /// (populated in [`App::freeze`](crate::App::freeze)).
@@ -87,17 +101,19 @@ impl AppState {
     pub fn new() -> Self {
         let openapi = serde_json::json!({
             "openapi": "3.0.0",
-            "info": { "title": "OxyRoute", "version": "0.2.0" },
+            "info": { "title": "OxyRoute", "version": "0.3.0" },
             "paths": {}
         });
         Self {
-            routes: Vec::new(),
+            routes: Arc::new(Vec::new()),
+            websocket_routes: Arc::new(Vec::new()),
             get: Mutex::new(Router::new()),
             post: Mutex::new(Router::new()),
             put: Mutex::new(Router::new()),
             patch: Mutex::new(Router::new()),
             delete: Mutex::new(Router::new()),
             options: Mutex::new(Router::new()),
+            websocket: Mutex::new(Router::new()),
             openapi: Mutex::new(openapi),
             compiled: None,
             frozen: false,
@@ -105,6 +121,24 @@ impl AppState {
             middleware: None,
             cors: None,
             security_headers: None,
+        }
+    }
+
+    /// Cheap read-side snapshot of the fields the request hot path touches: the
+    /// returned [`HotSnapshot`] is built **inside one** `state.read()` so the request
+    /// dispatch can release the `RwLock` immediately and avoid further reads.
+    ///
+    /// Cheap because every cloned field is `Arc::clone` / `Option<Py<PyAny>>::clone`
+    /// (both refcount bumps), not deep clones.
+    pub fn hot_snapshot(&self) -> HotSnapshot {
+        HotSnapshot {
+            routes: Arc::clone(&self.routes),
+            websocket_routes: Arc::clone(&self.websocket_routes),
+            compiled: self.compiled.as_ref().map(Arc::clone),
+            cors: self.cors.clone(),
+            security_headers: self.security_headers.clone(),
+            middleware: self.middleware.clone(),
+            include_openapi: self.include_openapi,
         }
     }
 
@@ -117,8 +151,85 @@ impl AppState {
             patch: self.patch.lock().clone(),
             delete: self.delete.lock().clone(),
             options: self.options.lock().clone(),
+            websocket: self.websocket.lock().clone(),
         }
     }
+}
+
+/// One-shot read-side view of [`AppState`] for [`run_rsgi`]. All fields are cheap to clone
+/// (`Arc`/`Option<Py<PyAny>>` refcount bumps) so the hot path can drop the `RwLock` after a
+/// single `read()`. See [`AppState::hot_snapshot`].
+pub struct HotSnapshot {
+    pub routes: Arc<Vec<RouteEntry>>,
+    pub websocket_routes: Arc<Vec<WebsocketRoute>>,
+    pub compiled: Option<Arc<CompiledRouters>>,
+    pub cors: Option<Py<PyAny>>,
+    pub security_headers: Option<Py<PyAny>>,
+    pub middleware: Option<Py<PyAny>>,
+    pub include_openapi: bool,
+}
+
+/// Lookup a WebSocket route in a precomputed [`CompiledRouters`] (lock-free).
+pub fn match_ws_route_compiled(
+    compiled: &CompiledRouters,
+    path: &str,
+) -> Option<(usize, HashMap<String, String>)> {
+    compiled.websocket.at(path).ok().map(|m| {
+        let mut pmap = HashMap::new();
+        for (k, v) in m.params.iter() {
+            pmap.insert(k.to_string(), v.to_string());
+        }
+        (*m.value, pmap)
+    })
+}
+
+/// Lookup an HTTP route in a precomputed [`CompiledRouters`] (lock-free).
+///
+/// Returns ``None`` for unsupported method, ``Some(None)`` for no match, ``Some(Some(...))`` on hit.
+pub fn match_route_compiled(
+    compiled: &CompiledRouters,
+    method: &str,
+    path: &str,
+) -> Option<Option<(usize, HashMap<String, String>)>> {
+    let g = router_for_compiled(compiled, method)?;
+    Some(g.at(path).ok().map(|m| {
+        let mut pmap = HashMap::new();
+        for (k, v) in m.params.iter() {
+            pmap.insert(k.to_string(), v.to_string());
+        }
+        (*m.value, pmap)
+    }))
+}
+
+/// All HTTP methods that match `path` in a precomputed [`CompiledRouters`] (lock-free 405 list).
+pub fn methods_matching_path_compiled(compiled: &CompiledRouters, path: &str) -> Vec<String> {
+    const ORDER: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+    let mut have = [false; 7];
+    if compiled.get.at(path).is_ok() {
+        have[0] = true;
+        have[1] = true;
+    }
+    if compiled.post.at(path).is_ok() {
+        have[2] = true;
+    }
+    if compiled.put.at(path).is_ok() {
+        have[3] = true;
+    }
+    if compiled.patch.at(path).is_ok() {
+        have[4] = true;
+    }
+    if compiled.delete.at(path).is_ok() {
+        have[5] = true;
+    }
+    if compiled.options.at(path).is_ok() {
+        have[6] = true;
+    }
+    ORDER
+        .iter()
+        .zip(have)
+        .filter(|(_, ok)| *ok)
+        .map(|(m, _)| (*m).to_string())
+        .collect()
 }
 
 pub fn map_method_router<'a>(
@@ -141,7 +252,8 @@ pub fn map_method_router<'a>(
 /// an [`Allow`][1] header when the request method’s router had no match but another would.
 ///
 /// [1]: https://www.rfc-editor.org/rfc/rfc9110#name-405-method-not-allowed
-pub fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
+#[cfg(test)]
+fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
     const ORDER: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
     let mut have = [false; 7];
     if let Some(c) = &state.compiled {
@@ -213,7 +325,8 @@ pub fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
 
 /// Returns route index and path params, or `None` if the method is unsupported; `Some(None)` if
 /// no match; `Some(Some)` on success. Uses [`CompiledRouters`] when set (lock-free).
-pub fn match_route(
+#[cfg(test)]
+fn match_route(
     state: &AppState,
     method: &str,
     path: &str,

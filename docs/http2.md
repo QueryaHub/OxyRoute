@@ -43,4 +43,3 @@ If you see `HTTP/1.1`, the fallback happened at server/proxy/TLS level, not in O
 ## See also
 
 - [RSGI and Granian](rsgi.md)
-- [ASGI bridge](asgi.md)

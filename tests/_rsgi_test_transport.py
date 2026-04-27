@@ -1,19 +1,37 @@
-"""
-Optional ASGI 3.0 entry for ``uvicorn`` / ``granian --interface asgi``.
+"""Test-only ASGI -> RSGI shim used by httpx.ASGITransport in the test suite.
 
-Builds a minimal RSGI-like ``scope`` / ``protocol`` and delegates to the same Rust
-``handle_rsgi`` coroutine as ``__rsgi__``. Only ``type == "http"`` is supported.
+OxyRoute v0.3.0 dropped the runtime ASGI bridge from the package. The unit / integration
+tests still drive the app in-process through ``httpx.ASGITransport`` for speed and
+isolation; this helper re-uses the same bridge code as a **test fixture only**, so the
+production package remains free of ASGI.
+
+Use :func:`build_test_app` (or :func:`asgi_test_app`) on an :class:`oxyroute.App`
+instance to obtain an ASGI 3 callable that proxies into the native RSGI dispatch path.
 """
 
 from __future__ import annotations
 
 import asyncio
+import inspect
+import os
+import threading
 from collections.abc import Callable
 from typing import Any
 
+_BLOCKING_LOOP_LOCAL = threading.local()
+
+
+def _close_blocking_loop_for_current_thread() -> None:
+    loop = getattr(_BLOCKING_LOOP_LOCAL, "loop", None)
+    if loop is None:
+        return
+    if not loop.is_closed():
+        loop.close()
+    _BLOCKING_LOOP_LOCAL.loop = None
+
 
 class WebSocket:
-    """Small ASGI websocket helper used by the optional ASGI bridge."""
+    """Small ASGI websocket helper retained for a handful of legacy tests."""
 
     __slots__ = ("_accepted", "_closed", "_connected", "_receive", "_send")
 
@@ -79,29 +97,19 @@ def _run_handle_rsgi_blocking(
     rscope: Any,
     proto: Any,
 ) -> None:
-    """Run ``handle_rsgi`` to completion on a **fresh** event loop in the thread pool.
-
-    The ASGI server's main loop must **not** ``await`` the native coroutine directly: the
-    Rust/Tokio side calls synchronous ``protocol.response_*`` while this coroutine runs on a
-    worker thread. Those response calls enqueue ASGI messages onto the **main** loop, where a
-    dedicated drain task performs ``send(...)`` in order. Running this await in
-    ``run_in_executor`` + ``asyncio.run`` keeps the main loop free for queue draining and avoids
-    deadlock-prone cross-thread blocking waits.
-    """
-
     async def _inner() -> None:
         c = app_rsgi(rscope, proto)
+        # Native ``handle_rsgi`` may return ``None`` (sync short-circuit: openapi / 4xx) or a Future.
+        if c is None or not inspect.isawaitable(c):
+            return
         await c
 
-    asyncio.run(_inner())
-
-
-def _hdr_from_asgi(raw: list[tuple[bytes, bytes]]) -> _HeaderView:
-    d: dict[str, str] = {}
-    for k, v in raw:
-        dk = k.decode("latin-1").lower()
-        d[dk] = v.decode("latin-1")
-    return _HeaderView(d)
+    loop = getattr(_BLOCKING_LOOP_LOCAL, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _BLOCKING_LOOP_LOCAL.loop = loop
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(_inner())
 
 
 class _HeaderView:
@@ -112,6 +120,14 @@ class _HeaderView:
 
     def get(self, k: str, default: str = "") -> str:
         return self._d.get(k.lower(), default)
+
+
+def _hdr_from_asgi(raw: list[tuple[bytes, bytes]]) -> _HeaderView:
+    d: dict[str, str] = {}
+    for k, v in raw:
+        dk = k.decode("latin-1").lower()
+        d[dk] = v.decode("latin-1")
+    return _HeaderView(d)
 
 
 class _RsgiScope:
@@ -183,7 +199,11 @@ class _RsgiProtocol:
         self.status = 200
 
     def _enqueue(self, message: dict[str, Any]) -> None:
-        self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+        # This method runs from the executor thread that drives the native RSGI
+        # dispatcher. Wait until the main loop has actually queued the ASGI
+        # message so the final sentinel cannot overtake response.start/body on
+        # Python 3.14's event-loop scheduling.
+        asyncio.run_coroutine_threadsafe(self._queue.put(message), self._loop).result()
 
     def __call__(self) -> Any:
         async def _body() -> bytes:
@@ -246,6 +266,22 @@ class _RsgiProtocol:
         )
 
 
+def _max_body_bytes() -> int:
+    default = 8 * 1024 * 1024
+    raw = os.getenv("OXYROUTE_MAX_BODY_BYTES", "").strip()
+    if not raw:
+        return default
+    try:
+        n = int(raw)
+    except ValueError:
+        return default
+    if n == 0:
+        return 2**63 - 1
+    if n < 0:
+        return default
+    return n
+
+
 async def asgi_to_rsgi(
     app_rsgi: Callable[[Any, Any], Any],
     app_ws: Callable[[dict[str, Any], Any, Any], Any] | None,
@@ -262,12 +298,32 @@ async def asgi_to_rsgi(
         return
     if st != "http":
         return
-    body = b""
+    max_body = _max_body_bytes()
+    body = bytearray()
     while True:
         m = await receive()
         t = m.get("type", "")
         if t == "http.request":
-            body += m.get("body", b"")
+            chunk = m.get("body", b"")
+            if chunk:
+                body.extend(chunk)
+                if len(body) > max_body:
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": 413,
+                            "headers": [
+                                (b"content-type", b"application/json; charset=utf-8"),
+                            ],
+                        }
+                    )
+                    await send(
+                        {
+                            "type": "http.response.body",
+                            "body": b'{"error":"payload too large"}',
+                        }
+                    )
+                    return
             if not m.get("more_body", False):
                 break
         elif t == "http.disconnect":
@@ -297,7 +353,7 @@ async def asgi_to_rsgi(
             await send(msg)
 
     drain_task = asyncio.create_task(_drain_outgoing())
-    proto = _RsgiProtocol(body, queue, loop)
+    proto = _RsgiProtocol(bytes(body), queue, loop)
     run_exc: BaseException | None = None
     try:
         await loop.run_in_executor(
@@ -315,17 +371,16 @@ async def asgi_to_rsgi(
         try:
             await drain_task
         except Exception:
-            # Preserve the original request-path failure if there was one.
             if run_exc is None:
                 raise
     if run_exc is not None:
         raise run_exc
 
 
-def build_asgi_caller(framework_app: Any) -> Callable[..., Any]:
-    """
-    Return ``async (scope, receive, send)`` using the framework app's
-    ``_oxyroute.App.handle_rsgi`` (via ``App`` wrapper if present).
+def build_test_app(framework_app: Any) -> Callable[..., Any]:
+    """Return an ``async (scope, receive, send)`` ASGI3 callable wrapping the RSGI app.
+
+    Used by tests with ``httpx.ASGITransport(app=build_test_app(my_app))``.
     """
 
     def _rsgi(s: Any, p: Any) -> Any:
@@ -347,3 +402,7 @@ def build_asgi_caller(framework_app: Any) -> Callable[..., Any]:
         await asgi_to_rsgi(_rsgi, _ws, scope, receive, send)
 
     return asgi3
+
+
+asgi_test_app = build_test_app
+"""Alias: ``asgi_test_app(app)`` returns an ASGI3 callable for httpx.ASGITransport."""

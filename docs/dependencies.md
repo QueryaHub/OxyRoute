@@ -6,7 +6,7 @@ OxyRoute supports a **linear** list of **named** dependency factories. At reques
 
 ### Request context (optional)
 
-If a factory’s signature includes a parameter named `request`, the extension passes a **dict** (once per request, shared) with string keys: `method`, `path`, `query_string`, and `headers` (a flat `str` → `str` map, when the underlying RSGI scope exposes headers—see the ASGI bridge in `oxyroute.asgi`). Factories that do **not** declare `request` are still called with **no** extra arguments when they have no prior dependencies, preserving older behavior.
+If a factory’s signature includes a parameter named `request`, the extension passes a **dict** (once per request, shared) with string keys: `method`, `path`, `query_string`, and `headers` (a flat `str` → `str` map, when the underlying RSGI scope exposes headers). Factories that do **not** declare `request` are still called with **no** extra arguments when they have no prior dependencies, preserving older behavior.
 
 ## Declaring on a route
 
