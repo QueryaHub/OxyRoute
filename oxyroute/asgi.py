@@ -9,8 +9,20 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 from collections.abc import Callable
 from typing import Any
+
+_BLOCKING_LOOP_LOCAL = threading.local()
+
+
+def _close_blocking_loop_for_current_thread() -> None:
+    loop = getattr(_BLOCKING_LOOP_LOCAL, "loop", None)
+    if loop is None:
+        return
+    if not loop.is_closed():
+        loop.close()
+    _BLOCKING_LOOP_LOCAL.loop = None
 
 
 class WebSocket:
@@ -80,21 +92,27 @@ def _run_handle_rsgi_blocking(
     rscope: Any,
     proto: Any,
 ) -> None:
-    """Run ``handle_rsgi`` to completion on a **fresh** event loop in the thread pool.
+    """Run ``handle_rsgi`` to completion on a thread-local event loop.
 
-    The ASGI server's main loop must **not** ``await`` the native coroutine directly: the
-    Rust/Tokio side calls synchronous ``protocol.response_*`` while this coroutine runs on a
-    worker thread. Those response calls enqueue ASGI messages onto the **main** loop, where a
-    dedicated drain task performs ``send(...)`` in order. Running this await in
-    ``run_in_executor`` + ``asyncio.run`` keeps the main loop free for queue draining and avoids
-    deadlock-prone cross-thread blocking waits.
+    The ASGI server's main loop must **not** ``await`` the native coroutine directly: the Rust
+    side calls synchronous ``protocol.response_*`` while this coroutine runs on a worker thread.
+    Response calls enqueue ASGI messages onto the main loop, where a dedicated drain task performs
+    ``send(...)`` in order.
+
+    For performance, each worker thread lazily creates and then reuses one event loop instead of
+    allocating a fresh loop per request.
     """
 
     async def _inner() -> None:
         c = app_rsgi(rscope, proto)
         await c
 
-    asyncio.run(_inner())
+    loop = getattr(_BLOCKING_LOOP_LOCAL, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        _BLOCKING_LOOP_LOCAL.loop = loop
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(_inner())
 
 
 def _hdr_from_asgi(raw: list[tuple[bytes, bytes]]) -> _HeaderView:
