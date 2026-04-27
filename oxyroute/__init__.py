@@ -28,4 +28,4 @@ __all__ = [
     "send_sse",
     "sse_done",
 ]
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -87,7 +87,7 @@ impl AppState {
     pub fn new() -> Self {
         let openapi = serde_json::json!({
             "openapi": "3.0.0",
-            "info": { "title": "OxyRoute", "version": "0.1.0" },
+            "info": { "title": "OxyRoute", "version": "0.2.0" },
             "paths": {}
         });
         Self {
