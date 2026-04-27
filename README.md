@@ -1,6 +1,6 @@
 # OxyRoute
 
-**RSGI-first** web toolkit: HTTP routing, JSON/form handling, JWT validation, response mapping, and native WebSockets on a **Rust** hot path ([PyO3](https://pyo3.rs/) + [Maturin](https://www.maturin.rs/)), with your business logic in ordinary **Python** handlers. Pair it with **[Granian](https://github.com/emmett-framework/granian)** using `--interface rsgi` for the intended stack.
+High-performance web framework for **Granian RSGI**, tuned for high **single-worker** throughput: routing, JSON/form parsing, JWT checks, response mapping, and native WebSockets run on a **Rust** hot path ([PyO3](https://pyo3.rs/) + [Maturin](https://www.maturin.rs/)), while business logic stays in plain **Python** handlers.
 
 [![CI](https://github.com/QueryaHub/OxyRoute/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/QueryaHub/OxyRoute/actions)
 
