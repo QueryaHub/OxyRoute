@@ -11,7 +11,7 @@
 - Маршрутизация по методам и путям (`matchit`), path/query/json/body, **405 / Allow**, **HEAD** на GET, **OPTIONS**.
 - **JWT** (HS/RS/… через `jsonwebtoken`), iss/aud/leeway, cookie, **зависимости** с `request`, линейный порядок, `freeze`.
 - **Response** / dict с заголовками и cookies, частичный **OpenAPI**, Pydantic/schema для тела.
-- Один **pre-route middleware** (`set_middleware`), **ASGI мост** только для `http` ([asgi](asgi.md)).
+- Один **pre-route middleware** (`set_middleware`).
 - CI, PyPI, E2E Granian RSGI.
 
 Ниже — то, чего **нет** или что **слабо** относительно «больших» фреймворков.
@@ -22,10 +22,10 @@
 
 | Тема | Зазор | Комментарий |
 |------|--------|-------------|
-| **WebSockets** | Частично (ASGI spike) | Есть `@app.websocket(...)` в ASGI bridge (см. [websocket.md](websocket.md)); RSGI/Rust-native WS path пока не реализован. |
-| **SSE / длинный стрим ответа** | Частично | Есть `send_sse` (см. [sse.md](sse.md)); инкрементальный стрим зависит от `response_stream` в серверном протоколе, иначе fallback в буферизованный ответ. |
+| **WebSockets** | Не реализованы | Поддержка ASGI WS была удалена в v0.3.0; native RSGI WebSocket — следующая работа. |
+| **SSE / длинный стрим ответа** | Частично | Есть `send_sse` (см. [sse.md](sse.md)); инкрементальный стрим использует `response_stream` Granian RSGI. |
 | **HTTP/2 push, trailers** | Не в фокусе | Обычно на стороне сервера; фреймворк редко экспонирует. |
-| **ASGI: lifespan, `websocket`, background** | Частично | Мост ASGI — **только `http`**; нет полноценного ASGI-приложения с lifecycle из спеки. |
+| **ASGI совместимость** | Удалена в v0.3.0 | Поддерживается только RSGI (Granian `--interface rsgi`). |
 
 ---
 

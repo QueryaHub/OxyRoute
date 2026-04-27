@@ -42,7 +42,7 @@ pip install "oxyroute[dev]"  # in your dev env, from source after maturin develo
 
 ## Granian RSGI (end-to-end)
 
-`tests/test_granian_e2e.py` starts a real **Granian** subprocess with `--interface rsgi`, sends HTTP requests with **httpx**, then stops the server. It is part of the normal **pytest** run when `granian` is installed (`oxyroute[dev]` includes it). The same file runs in **CI** on every matrix combination (Linux, macOS, Windows), so the native RSGI path is exercised against a real server, not only the ASGI in-process transport.
+`tests/test_granian_e2e.py` starts a real **Granian** subprocess with `--interface rsgi`, sends HTTP requests with **httpx**, then stops the server. It is part of the normal **pytest** run when `granian` is installed (`oxyroute[dev]` includes it). The same file runs in **CI** on every matrix combination (Linux, macOS, Windows), so the native RSGI path is exercised against a real server, not only the in-process httpx test transport.
 
 ## Continuous integration
 

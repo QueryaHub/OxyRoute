@@ -6,6 +6,7 @@ import asyncio
 
 import httpx
 from oxyroute import App
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_routes_added_after_first_request_still_resolve() -> None:
@@ -16,7 +17,7 @@ def test_routes_added_after_first_request_still_resolve() -> None:
         return "a"
 
     async def _run() -> None:
-        tr = httpx.ASGITransport(app=app)
+        tr = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=tr, base_url="http://test") as c:
             r1 = await c.get("/a")
             assert r1.status_code == 200
@@ -42,7 +43,7 @@ def test_autocompile_keeps_405_behavior() -> None:
         return "ok"
 
     async def _run() -> None:
-        tr = httpx.ASGITransport(app=app)
+        tr = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=tr, base_url="http://test") as c:
             r = await c.get("/x")
         assert r.status_code == 405
