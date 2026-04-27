@@ -8,6 +8,7 @@ Builds a minimal RSGI-like ``scope`` / ``protocol`` and delegates to the same Ru
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -246,6 +247,23 @@ class _RsgiProtocol:
         )
 
 
+def _max_body_bytes() -> int:
+    # Keep semantics aligned with Rust path (`src/form.rs`): default 8 MiB, `0` means unlimited.
+    default = 8 * 1024 * 1024
+    raw = os.getenv("OXYROUTE_MAX_BODY_BYTES", "").strip()
+    if not raw:
+        return default
+    try:
+        n = int(raw)
+    except ValueError:
+        return default
+    if n == 0:
+        return 2**63 - 1
+    if n < 0:
+        return default
+    return n
+
+
 async def asgi_to_rsgi(
     app_rsgi: Callable[[Any, Any], Any],
     app_ws: Callable[[dict[str, Any], Any, Any], Any] | None,
@@ -262,12 +280,32 @@ async def asgi_to_rsgi(
         return
     if st != "http":
         return
-    body = b""
+    max_body = _max_body_bytes()
+    body = bytearray()
     while True:
         m = await receive()
         t = m.get("type", "")
         if t == "http.request":
-            body += m.get("body", b"")
+            chunk = m.get("body", b"")
+            if chunk:
+                body.extend(chunk)
+                if len(body) > max_body:
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": 413,
+                            "headers": [
+                                (b"content-type", b"application/json; charset=utf-8"),
+                            ],
+                        }
+                    )
+                    await send(
+                        {
+                            "type": "http.response.body",
+                            "body": b'{"error":"payload too large"}',
+                        }
+                    )
+                    return
             if not m.get("more_body", False):
                 break
         elif t == "http.disconnect":
@@ -297,7 +335,7 @@ async def asgi_to_rsgi(
             await send(msg)
 
     drain_task = asyncio.create_task(_drain_outgoing())
-    proto = _RsgiProtocol(body, queue, loop)
+    proto = _RsgiProtocol(bytes(body), queue, loop)
     run_exc: BaseException | None = None
     try:
         await loop.run_in_executor(
