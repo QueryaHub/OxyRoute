@@ -277,6 +277,8 @@ impl App {
             m.insert(&path, idx)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))?;
         }
+        // Keep auto-compiled routing snapshots fresh when routes are added before explicit freeze().
+        st.compiled = None;
         Ok(())
     }
 
