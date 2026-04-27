@@ -2,10 +2,9 @@ import asyncio
 import json
 
 import httpx
-
-from tests._rsgi_test_transport import asgi_test_app
 import pytest
 from oxyroute import App
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_openapi_shows_route() -> None:

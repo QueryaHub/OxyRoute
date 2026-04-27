@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-
-from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App, HTTPException, Response
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_response_header_crlf_is_rejected_with_500() -> None:

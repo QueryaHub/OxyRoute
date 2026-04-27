@@ -6,10 +6,9 @@ import asyncio
 from dataclasses import dataclass
 
 import httpx
-
-from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App
 from oxyroute.cors import CORSConfig, apply_cors
+from tests._rsgi_test_transport import asgi_test_app
 
 
 @dataclass

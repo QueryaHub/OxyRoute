@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-
-from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App, HTTPException
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_http_exception_404_string_detail() -> None:

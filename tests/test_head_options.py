@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-
-from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App, Response
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_asgi_head_same_path_as_get_empty_body() -> None:

@@ -7,11 +7,10 @@ import time
 from pathlib import Path
 
 import httpx
-
-from tests._rsgi_test_transport import asgi_test_app
 import jwt
 import pytest
 from oxyroute import App
+from tests._rsgi_test_transport import asgi_test_app
 
 _FIX = Path(__file__).resolve().parent / "fixtures" / "rsa"
 _PUB = (_FIX / "public_pkcs8.pem").read_text()
