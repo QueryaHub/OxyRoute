@@ -2,7 +2,10 @@
 
 Документ фиксирует **разрыв** между текущим OxyRoute (RSGI + Rust hot path, см. [index](index.md)) и ожиданиями от **широкого** HTTP-фреймворка уровня FastAPI / Starlette / Django REST. Термин «полноценный» здесь означает **покрытие типичного продакшн-API и DX**, а не обязательность всех пунктов для твоего позиционирования.
 
-**Следующий релиз:** в репозитории и в GitHub milestone целим **0.2.0** / [**v0.2.0**](https://github.com/QueryaHub/OxyRoute/milestone/1) (не 0.3.0); см. [PRIORITIES](../.github/ISSUE_BACKLOG/PRIORITIES.md).
+**Текущий контекст:** документация ниже описывает состояние ветки v0.3.x: OxyRoute
+теперь **RSGI-only**, ASGI bridge удалён, native RSGI WebSocket реализован, а часть
+пунктов из старого research уже закрыта. Для практического использования см.
+[usage.md](usage.md).
 
 ---
 
@@ -12,7 +15,8 @@
 - **JWT** (HS/RS/… через `jsonwebtoken`), iss/aud/leeway, cookie, **зависимости** с `request`, линейный порядок, `freeze`.
 - **Response** / dict с заголовками и cookies, частичный **OpenAPI**, Pydantic/schema для тела.
 - Один **pre-route middleware** (`set_middleware`).
-- CI, PyPI, E2E Granian RSGI.
+- Native RSGI **WebSocket** (`@app.websocket`, `oxyroute.WebSocket`), SSE helper.
+- CI, PyPI, E2E/bench harness для Granian RSGI.
 
 Ниже — то, чего **нет** или что **слабо** относительно «больших» фреймворков.
 
@@ -22,7 +26,7 @@
 
 | Тема | Зазор | Комментарий |
 |------|--------|-------------|
-| **WebSockets** | Не реализованы | Поддержка ASGI WS была удалена в v0.3.0; native RSGI WebSocket — следующая работа. |
+| **WebSockets** | Реализованы | Native RSGI WebSocket: `@app.websocket(path)`, `oxyroute.WebSocket`; см. [websocket.md](websocket.md). Нет high-level subprotocol API. |
 | **SSE / длинный стрим ответа** | Частично | Есть `send_sse` (см. [sse.md](sse.md)); инкрементальный стрим использует `response_stream` Granian RSGI. |
 | **HTTP/2 push, trailers** | Не в фокусе | Обычно на стороне сервера; фреймворк редко экспонирует. |
 | **ASGI совместимость** | Удалена в v0.3.0 | Поддерживается только RSGI (Granian `--interface rsgi`). |
@@ -78,7 +82,7 @@
 
 | Тема | Зазор | Комментарий |
 |------|--------|-------------|
-| **TestClient** (как Starlette/FastAPI) | Нет | Тесты через httpx + ASGI/реальный Granian; нет единого обёрточного клиента из коробки. |
+| **TestClient** (как Starlette/FastAPI) | Нет | Тесты через in-process RSGI shims или реальный Granian; нет единого обёрточного клиента из коробки. |
 | **CLI** (`oxyroute dev`, scaffold) | Нет | |
 | **OpenAPI генерация клиентов** | Частично | Документ есть; не обещается полная совместимость со всеми генераторами. |
 | **Background tasks** | Нет | Нет `BackgroundTasks` после ответа; только внешний воркер/очередь. |
@@ -101,20 +105,24 @@
 - **Шаблоны HTML (Jinja)** — нет; для API не критично.
 - **GraphQL / gRPC** — отдельные стеки.
 
-OxyRoute осознанно **уже** в нише: **быстрый маршрут + JSON + JWT в Rust**. «Полноценность» для многих команд = **multipart, WebSocket, цепочка middleware, суброутеры, TestClient** — это хороший кандидат на дорожную карту, если цель — конкурировать с FastAPI по удобству, а не только по RSGI.
+OxyRoute осознанно **уже** в нише: быстрый RSGI HTTP/WebSocket слой с routing,
+JSON/form/JWT/headers на Rust hot path и Python business logic. «Полноценность»
+для многих команд теперь упирается меньше в протокол, а больше в **стриминг тела
+запроса**, **цепочку middleware**, **TestClient**, **observability**, **rate limit**
+и **production security automation**.
 
 ---
 
 ## Приоритизация (рекомендация)
 
-1. **Состояние и lifecycle** [#18](https://github.com/QueryaHub/OxyRoute/issues/18) — без этого сложно делить конфиг по воркерам.  
-2. **ASGI надёжность** [#17](https://github.com/QueryaHub/OxyRoute/issues/17) — если ASGI остаётся равноправным входом.  
-3. **Перф роутера** [#4](https://github.com/QueryaHub/OxyRoute/issues/4) — при росте нагрузки.  
-4. **Sub-routers или префиксы** — резко повышают пригодность для крупных приложений.  
-5. **Multipart + form body** — если не только JSON API.  
-6. **Exception handlers (глобальные)** — быстрые победы на Python-стороне без ломки RSGI. **CORS** — см. [cors.md](cors.md) / [#49](https://github.com/QueryaHub/OxyRoute/issues/49).
+1. **Streaming / early body limiting** — сейчас body и multipart читаются в память.
+2. **Middleware chain** — сейчас один pre-route hook, compose вручную.
+3. **TestClient** — единый удобный клиент поверх RSGI shim.
+4. **Observability** — metrics/tracing/access-log story.
+5. **Exception handlers (глобальные)** — удобный слой поверх текущего `HTTPException`.
+6. **JWKS / key rotation** — production auth удобство.
 
-## Связанные GitHub-issues (milestone v0.2.0)
+## Связанные GitHub-issues и исторический backlog
 
 **Композиция и тело / ошибки / CORS**
 
@@ -126,7 +134,7 @@ OxyRoute осознанно **уже** в нише: **быстрый маршр�
 
 - [#50](https://github.com/QueryaHub/OxyRoute/issues/50) — HTTP/2 (док/Granian) ([`25.md`](../.github/ISSUE_BACKLOG/bodies/25.md))  
 - [#51](https://github.com/QueryaHub/OxyRoute/issues/51) — SSE ([`26.md`](../.github/ISSUE_BACKLOG/bodies/26.md))  
-- [#52](https://github.com/QueryaHub/OxyRoute/issues/52) — WebSocket ([`27.md`](../.github/ISSUE_BACKLOG/bodies/27.md))  
+- [#52](https://github.com/QueryaHub/OxyRoute/issues/52) — WebSocket ([`27.md`](../.github/ISSUE_BACKLOG/bodies/27.md)) — **закрыто native RSGI WS**  
 - [#53](https://github.com/QueryaHub/OxyRoute/issues/53) — CSRF ([`28.md`](../.github/ISSUE_BACKLOG/bodies/28.md), [csrf.md](csrf.md)) — **сделано**  
 - [#54](https://github.com/QueryaHub/OxyRoute/issues/54) — security headers ([`29.md`](../.github/ISSUE_BACKLOG/bodies/29.md), [security-headers.md](security-headers.md)) — **сделано**  
 
