@@ -14,6 +14,7 @@ pub struct CompiledRouters {
     pub patch: Router<usize>,
     pub delete: Router<usize>,
     pub options: Router<usize>,
+    pub websocket: Router<usize>,
 }
 
 fn router_for_compiled<'a>(c: &'a CompiledRouters, method: &str) -> Option<&'a Router<usize>> {
@@ -26,6 +27,12 @@ fn router_for_compiled<'a>(c: &'a CompiledRouters, method: &str) -> Option<&'a R
         "OPTIONS" => Some(&c.options),
         _ => None,
     }
+}
+
+/// One WebSocket route: just a handler + async flag (no JWT / deps / body).
+pub struct WebsocketRoute {
+    pub handler: Py<PyAny>,
+    pub is_async: bool,
 }
 
 pub struct RouteEntry {
@@ -60,12 +67,14 @@ pub struct RouteEntry {
 
 pub struct AppState {
     pub routes: Vec<RouteEntry>,
+    pub websocket_routes: Vec<WebsocketRoute>,
     pub get: Mutex<Router<usize>>,
     pub post: Mutex<Router<usize>>,
     pub put: Mutex<Router<usize>>,
     pub patch: Mutex<Router<usize>>,
     pub delete: Mutex<Router<usize>>,
     pub options: Mutex<Router<usize>>,
+    pub websocket: Mutex<Router<usize>>,
     pub openapi: Mutex<serde_json::Value>,
     /// When `Some`, route matching uses these tables without taking per-router mutexes
     /// (populated in [`App::freeze`](crate::App::freeze)).
@@ -92,12 +101,14 @@ impl AppState {
         });
         Self {
             routes: Vec::new(),
+            websocket_routes: Vec::new(),
             get: Mutex::new(Router::new()),
             post: Mutex::new(Router::new()),
             put: Mutex::new(Router::new()),
             patch: Mutex::new(Router::new()),
             delete: Mutex::new(Router::new()),
             options: Mutex::new(Router::new()),
+            websocket: Mutex::new(Router::new()),
             openapi: Mutex::new(openapi),
             compiled: None,
             frozen: false,
@@ -117,8 +128,30 @@ impl AppState {
             patch: self.patch.lock().clone(),
             delete: self.delete.lock().clone(),
             options: self.options.lock().clone(),
+            websocket: self.websocket.lock().clone(),
         }
     }
+}
+
+/// Lookup a WebSocket route by path (uses compiled snapshot when available).
+pub fn match_ws_route(state: &AppState, path: &str) -> Option<(usize, HashMap<String, String>)> {
+    if let Some(c) = &state.compiled {
+        return c.websocket.at(path).ok().map(|m| {
+            let mut pmap = HashMap::new();
+            for (k, v) in m.params.iter() {
+                pmap.insert(k.to_string(), v.to_string());
+            }
+            (*m.value, pmap)
+        });
+    }
+    let g = state.websocket.lock();
+    g.at(path).ok().map(|m| {
+        let mut pmap = HashMap::new();
+        for (k, v) in m.params.iter() {
+            pmap.insert(k.to_string(), v.to_string());
+        }
+        (*m.value, pmap)
+    })
 }
 
 pub fn map_method_router<'a>(

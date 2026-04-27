@@ -13,8 +13,9 @@ use crate::form::{self, ParsedFile};
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
 use crate::response;
 use crate::schema::json_to_py;
-use crate::state::{match_route, methods_matching_path, AppState};
+use crate::state::{match_route, match_ws_route, methods_matching_path, AppState};
 use crate::token::{build_decoding_key, extract_bearer, extract_cookie_value};
+use crate::websocket::WebSocket;
 
 type HttpExceptionPayload = (u16, Vec<u8>, Vec<(String, String)>);
 
@@ -158,6 +159,9 @@ pub async fn run_rsgi(
     protocol: Py<PyAny>,
 ) -> PyResult<PyObject> {
     let proto: String = Python::with_gil(|py| scope.bind(py).getattr("proto")?.extract())?;
+    if proto == "websocket" {
+        return run_rsgi_websocket(state, scope, protocol).await;
+    }
     if proto != "http" {
         return Ok(Python::with_gil(|py| py.None()));
     }
@@ -1075,4 +1079,79 @@ fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<
         s.into_bytes(),
         "application/json; charset=utf-8".to_string(),
     ))
+}
+
+/// Dispatch a Granian RSGI WebSocket scope: match `path` in `AppState::websocket` and run
+/// the handler with a [`WebSocket`] helper. No matching route → ``protocol.close(1000)``;
+/// handler error → close (best-effort) and propagate to logs.
+async fn run_rsgi_websocket(
+    state: Arc<RwLock<AppState>>,
+    scope: Py<PyAny>,
+    protocol: Py<PyAny>,
+) -> PyResult<PyObject> {
+    let path: String =
+        Python::with_gil(|py| -> PyResult<String> { scope.bind(py).getattr("path")?.extract() })?;
+    ensure_compiled_snapshot(&state);
+    let route_match = {
+        let st = state.read();
+        match_ws_route(&st, &path)
+    };
+    let Some((route_idx, param_map)) = route_match else {
+        // No route → polite close. ``close`` is sync on RSGIWebsocketProtocol.
+        let _ = Python::with_gil(|py| -> PyResult<()> {
+            let p = protocol.bind(py);
+            let _ = p.call_method1("close", (1000i32,));
+            Ok(())
+        });
+        return Ok(Python::with_gil(|py| py.None()));
+    };
+    let (handler, is_async) = Python::with_gil(|_py| -> PyResult<(Py<PyAny>, bool)> {
+        let st = state.read();
+        let e = st
+            .websocket_routes
+            .get(route_idx)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("ws route index"))?;
+        Ok((e.handler.clone(), e.is_async))
+    })?;
+    let call_result = Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
+        let ws = WebSocket::new(protocol.clone_ref(py), scope.clone_ref(py), param_map);
+        let py_ws = Py::new(py, ws)?;
+        let res = handler.bind(py).call1((py_ws,))?.unbind();
+        Ok((res, is_async))
+    });
+    let (res, run_async) = match call_result {
+        Ok(x) => x,
+        Err(e) => {
+            log::error!(target: "oxyroute", "websocket {path} handler raised before await: {e}");
+            let _ = Python::with_gil(|py| -> PyResult<()> {
+                let _ = protocol.bind(py).call_method1("close", (1011i32,));
+                Ok(())
+            });
+            return Ok(Python::with_gil(|py| py.None()));
+        }
+    };
+    if run_async {
+        let fut = match Python::with_gil(|py| {
+            let b = res.bind(py).clone();
+            pyo3_async_runtimes::tokio::into_future(b)
+        }) {
+            Ok(f) => f,
+            Err(e) => {
+                log::error!(target: "oxyroute", "websocket {path} bridge: {e}");
+                let _ = Python::with_gil(|py| -> PyResult<()> {
+                    let _ = protocol.bind(py).call_method1("close", (1011i32,));
+                    Ok(())
+                });
+                return Ok(Python::with_gil(|py| py.None()));
+            }
+        };
+        if let Err(e) = fut.await {
+            log::error!(target: "oxyroute", "websocket {path} handler error: {e}");
+            let _ = Python::with_gil(|py| -> PyResult<()> {
+                let _ = protocol.bind(py).call_method1("close", (1011i32,));
+                Ok(())
+            });
+        }
+    }
+    Ok(Python::with_gil(|py| py.None()))
 }
