@@ -238,8 +238,9 @@ impl App {
             .extract()?;
         let (handler_param_names, handler_varkw) = handler_signature_kinds(py, handler.bind(py))?;
         let mut st = self.state.write();
-        let idx = st.routes.len();
-        st.routes.push(state::RouteEntry {
+        let routes = Arc::make_mut(&mut st.routes);
+        let idx = routes.len();
+        routes.push(state::RouteEntry {
             handler,
             is_async,
             require_jwt,
@@ -304,9 +305,9 @@ impl App {
         let f = inspect.getattr("iscoroutinefunction")?;
         let is_async: bool = f.call1((handler.clone_ref(py),))?.extract()?;
         let mut st = self.state.write();
-        let idx = st.websocket_routes.len();
-        st.websocket_routes
-            .push(state::WebsocketRoute { handler, is_async });
+        let ws_routes = Arc::make_mut(&mut st.websocket_routes);
+        let idx = ws_routes.len();
+        ws_routes.push(state::WebsocketRoute { handler, is_async });
         {
             let mut m = st.websocket.lock();
             m.insert(&path, idx)
