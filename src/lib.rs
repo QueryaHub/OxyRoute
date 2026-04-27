@@ -15,6 +15,7 @@ mod response;
 mod schema;
 mod state;
 mod token;
+mod websocket;
 
 use dispatch::run_rsgi;
 use state::AppState;
@@ -282,6 +283,39 @@ impl App {
         Ok(())
     }
 
+    /// Register a WebSocket route. ``handler`` receives a single
+    /// :class:`oxyroute._oxyroute.WebSocket` argument; sync handlers run inline, async
+    /// handlers are awaited on Granian's loop. Same matchit ``/ws/:room`` syntax as HTTP routes.
+    fn add_websocket_route(
+        &self,
+        py: Python<'_>,
+        path: String,
+        handler: Py<PyAny>,
+    ) -> PyResult<()> {
+        {
+            let st = self.state.read();
+            if st.frozen {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "app is frozen; no more add_websocket_route",
+                ));
+            }
+        }
+        let inspect = py.import("inspect")?;
+        let f = inspect.getattr("iscoroutinefunction")?;
+        let is_async: bool = f.call1((handler.clone_ref(py),))?.extract()?;
+        let mut st = self.state.write();
+        let idx = st.websocket_routes.len();
+        st.websocket_routes
+            .push(state::WebsocketRoute { handler, is_async });
+        {
+            let mut m = st.websocket.lock();
+            m.insert(&path, idx)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))?;
+        }
+        st.compiled = None;
+        Ok(())
+    }
+
     /// Lock route registration. Linear dependency list is a valid topological order (DAG of independent roots).
     fn freeze(&self) -> PyResult<()> {
         let mut st = self.state.write();
@@ -378,6 +412,7 @@ impl PyDepends {
 fn _oxyroute(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<App>()?;
     m.add_class::<PyDepends>()?;
+    m.add_class::<websocket::WebSocket>()?;
     m.add_function(wrap_pyfunction!(token::decode_jwt_hs, m)?)?;
     Ok(())
 }
