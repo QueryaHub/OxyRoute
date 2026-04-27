@@ -12,6 +12,7 @@ instance to obtain an ASGI 3 callable that proxies into the native RSGI dispatch
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import threading
 from collections.abc import Callable
@@ -98,6 +99,9 @@ def _run_handle_rsgi_blocking(
 ) -> None:
     async def _inner() -> None:
         c = app_rsgi(rscope, proto)
+        # Native ``handle_rsgi`` may return ``None`` (sync short-circuit: openapi / 4xx) or a Future.
+        if c is None or not inspect.isawaitable(c):
+            return
         await c
 
     loop = getattr(_BLOCKING_LOOP_LOCAL, "loop", None)
