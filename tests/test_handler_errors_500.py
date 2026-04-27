@@ -7,9 +7,8 @@ import json
 import os
 
 import httpx
-
-from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def _make_app() -> App:

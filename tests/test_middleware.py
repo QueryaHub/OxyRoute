@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-
-from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App, Response
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_middleware_cors_preflight_204_no_route_ran() -> None:

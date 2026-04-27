@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-
-from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App, send_sse
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_sse_response_body_and_content_type() -> None:

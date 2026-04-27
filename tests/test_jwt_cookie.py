@@ -6,10 +6,9 @@ import asyncio
 import time
 
 import httpx
-
-from tests._rsgi_test_transport import asgi_test_app
 import pytest
 from oxyroute import App
+from tests._rsgi_test_transport import asgi_test_app
 
 oxyjwt = pytest.importorskip("oxyjwt")
 
