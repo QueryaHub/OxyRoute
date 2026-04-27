@@ -22,7 +22,7 @@
 
 | Тема | Зазор | Комментарий |
 |------|--------|-------------|
-| **WebSockets** | Нет | RSGI/текущий стек заточен под HTTP-запрос/ответ. Нужна отдельная ветка согласно Granian/RSGI для WS и мост в Python. |
+| **WebSockets** | Частично (ASGI spike) | Есть `@app.websocket(...)` в ASGI bridge (см. [websocket.md](websocket.md)); RSGI/Rust-native WS path пока не реализован. |
 | **SSE / длинный стрим ответа** | Частично | Есть `send_sse` (см. [sse.md](sse.md)); инкрементальный стрим зависит от `response_stream` в серверном протоколе, иначе fallback в буферизованный ответ. |
 | **HTTP/2 push, trailers** | Не в фокусе | Обычно на стороне сервера; фреймворк редко экспонирует. |
 | **ASGI: lifespan, `websocket`, background** | Частично | Мост ASGI — **только `http`**; нет полноценного ASGI-приложения с lifecycle из спеки. |
