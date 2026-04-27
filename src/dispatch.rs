@@ -140,7 +140,6 @@ fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) -> Arc<CompiledRouter
     Arc::clone(st.compiled.as_ref().expect("just populated"))
 }
 
-
 /// Synchronous RSGI handling for **openapi**, **404**, and **405** only: no `protocol()` body read
 /// and no `future_into_py` outer bridge (saves a Tokio task + asyncio Future on these paths).
 ///
