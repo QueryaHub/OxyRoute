@@ -2,6 +2,8 @@ import asyncio
 import json
 
 import httpx
+
+from tests._rsgi_test_transport import asgi_test_app
 import pytest
 from oxyroute import App
 
@@ -38,7 +40,7 @@ def test_openapi_serving_off_constructor_get_and_head_404_openapi_json_still_fil
         return "1"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             g = await c.get("/openapi.json")
             h = await c.request("HEAD", "/openapi.json")
@@ -61,7 +63,7 @@ def test_set_openapi_served_false_stops_serving_still_exports_json() -> None:
         return "z"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/openapi.json")
         assert r.status_code == 404
@@ -79,7 +81,7 @@ def test_include_openapi_false_reenabled_with_set_openapi_served_get_200() -> No
         return "b"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/openapi.json")
         assert r.status_code == 200, r.text

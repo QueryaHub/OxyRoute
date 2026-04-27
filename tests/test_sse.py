@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+
+from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App, send_sse
 
 
@@ -17,7 +19,7 @@ def test_sse_response_body_and_content_type() -> None:
         return await send_sse(protocol, data)  # type: ignore[arg-type]
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/events")
         assert r.status_code == 200

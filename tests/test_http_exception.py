@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+
+from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App, HTTPException
 
 
@@ -16,7 +18,7 @@ def test_http_exception_404_string_detail() -> None:
         raise HTTPException(404, "nope")
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/x")
         assert r.status_code == 404
@@ -33,7 +35,7 @@ def test_http_exception_dict_body() -> None:
         raise HTTPException(422, {"errors": [{"loc": "x", "msg": "bad"}]})
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/e")
         assert r.status_code == 422
@@ -50,7 +52,7 @@ def test_http_exception_custom_header() -> None:
         raise HTTPException(400, "bad", headers={"X-App": "1"})
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/h")
         assert r.status_code == 400
@@ -68,7 +70,7 @@ def test_other_exception_still_500() -> None:
         raise ValueError("oops")
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/b")
         assert r.status_code == 500

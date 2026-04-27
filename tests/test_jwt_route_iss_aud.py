@@ -6,6 +6,8 @@ import asyncio
 import time
 
 import httpx
+
+from tests._rsgi_test_transport import asgi_test_app
 import pytest
 from oxyroute import App
 
@@ -38,7 +40,7 @@ def test_jwt_route_iss_and_aud_match() -> None:
     tok = _token(sub="u1", iss=ISS, aud=AUD, exp=now + 3600)
 
     async def run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/ok", headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 200
@@ -65,7 +67,7 @@ def test_jwt_route_wrong_iss_401() -> None:
     tok = _token(sub="u1", iss="https://other", aud=AUD, exp=now + 3600)
 
     async def run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/p", headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 401
@@ -91,7 +93,7 @@ def test_jwt_route_wrong_aud_401() -> None:
     tok = _token(sub="u1", iss=ISS, aud="other-aud", exp=now + 3600)
 
     async def run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/p", headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 401

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+
+from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App
 
 
@@ -16,7 +18,7 @@ def test_405_get_on_post_only_path() -> None:
         return "x"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/p")
         assert r.status_code == 405, r.text
@@ -34,7 +36,7 @@ def test_405_post_on_get_only_includes_get_and_head() -> None:
         return "1"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.post("/g")
         assert r.status_code == 405
@@ -53,7 +55,7 @@ def test_404_still_404_when_nothing_matches() -> None:
         return "a"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.post("/nope")
         assert r.status_code == 404

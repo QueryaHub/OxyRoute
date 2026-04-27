@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+
+from tests._rsgi_test_transport import asgi_test_app
 from oxyroute import App, CORSConfig, apply_cors
 
 
@@ -21,7 +23,7 @@ def test_cors_preflight_204_allows_post() -> None:
         return "ok"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.request(
                 "OPTIONS",
@@ -48,7 +50,7 @@ def test_cors_get_with_origin_merges_headers() -> None:
         return "hello"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/hi", headers={"origin": "https://a.example"})
         assert r.status_code == 200
