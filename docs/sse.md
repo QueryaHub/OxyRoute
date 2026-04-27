@@ -29,8 +29,8 @@ async def events(protocol):
 
 ## Streaming behavior
 
-- On RSGI protocols exposing `response_stream`, chunks are written incrementally.
-- On transports without streaming support (e.g. current ASGI bridge test path), OxyRoute falls back to one buffered `response_str` body with SSE framing.
+- On RSGI protocols exposing `response_stream` (Granian RSGI), chunks are written incrementally.
+- On transports without streaming support (e.g. the in-process httpx test transport), OxyRoute falls back to one buffered `response_str` body with SSE framing.
 
 ## Caveats
 
