@@ -268,6 +268,24 @@ class App:
             jwt_cookie=jwt_cookie,
         )
 
+    def websocket(self, path: str) -> Callable[[F], F]:
+        """
+        Register a native RSGI WebSocket handler.
+
+        ``path`` uses the same ``matchit`` syntax as HTTP routes (e.g. ``/ws/:room``).
+        The handler receives a single :class:`oxyroute.WebSocket` argument; ``await``
+        :meth:`oxyroute.WebSocket.accept` once before sending or receiving frames.
+
+        Sync handlers run inline (the Rust dispatcher does not bridge them through Tokio
+        twice); async handlers are awaited on Granian's loop.
+        """
+
+        def wrap(handler: F) -> F:
+            self._app.add_websocket_route(path, handler)
+            return handler
+
+        return wrap
+
     def options(
         self,
         path: str,
@@ -358,8 +376,15 @@ class App:
         """RSGI worker teardown (no-op in the base class)."""
         return None
 
-    async def __rsgi__(self, scope: Any, protocol: Any) -> None:
-        return await self._app.handle_rsgi(scope, protocol)
+    async def __rsgi__(self, scope: Any, protocol: Any) -> Any:
+        """
+        Granian awaits this coroutine. Native ``handle_rsgi`` may return ``None`` immediately
+        (sync short-circuit for openapi / 404 / 405) or an awaitable (full async path).
+        """
+        r = self._app.handle_rsgi(scope, protocol)
+        if r is None or not inspect.isawaitable(r):
+            return r
+        return await r
 
     def handle_rsgi(self, scope: Any, protocol: Any) -> Any:
         """Forward to the native ``handle_rsgi`` coroutine."""

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -13,30 +13,14 @@ use crate::form::{self, ParsedFile};
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
 use crate::response;
 use crate::schema::json_to_py;
-use crate::state::{match_route, methods_matching_path, AppState};
+use crate::state::{
+    match_route_compiled, match_ws_route_compiled, methods_matching_path_compiled, AppState,
+    CompiledRouters, HotSnapshot, RouteEntry,
+};
 use crate::token::{build_decoding_key, extract_bearer, extract_cookie_value};
+use crate::websocket::WebSocket;
 
 type HttpExceptionPayload = (u16, Vec<u8>, Vec<(String, String)>);
-
-type RouteCallSnapshot = (
-    Py<PyAny>,
-    bool,
-    bool,
-    Option<String>,
-    Arc<[jsonwebtoken::Algorithm]>,
-    Option<String>,
-    Option<String>,
-    u64,
-    Option<String>,
-    bool, // read_json_body
-    bool, // read_form_body
-    Arc<[String]>,
-    Arc<[Py<PyAny>]>,
-    Arc<[bool]>,
-    Arc<[bool]>,
-    Arc<HashSet<String>>,
-    bool,
-);
 
 fn oxyroute_debug() -> bool {
     std::env::var("OXYROUTE_DEBUG")
@@ -145,13 +129,94 @@ async fn send_python_error(
     send_internal_error(protocol, method, path, err).await
 }
 
-fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) {
-    if state.read().compiled.is_some() {
-        return;
+fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) -> Arc<CompiledRouters> {
+    if let Some(c) = state.read().compiled.as_ref() {
+        return Arc::clone(c);
     }
     let mut st = state.write();
     if st.compiled.is_none() {
         st.compiled = Some(Arc::new(st.snapshot_routers()));
+    }
+    Arc::clone(st.compiled.as_ref().expect("just populated"))
+}
+
+/// Synchronous RSGI handling for **openapi**, **404**, and **405** only: no `protocol()` body read
+/// and no `future_into_py` outer bridge (saves a Tokio task + asyncio Future on these paths).
+///
+/// Returns `Ok(None)` if [`run_rsgi`] (async) must be used. Middleware always defers to async.
+pub fn try_rsgi_sync_short_circuit(
+    py: Python<'_>,
+    state: &Arc<RwLock<AppState>>,
+    scope: &Bound<'_, PyAny>,
+    protocol: &Bound<'_, PyAny>,
+) -> PyResult<Option<PyObject>> {
+    let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
+    let proto: String = scope.getattr("proto")?.extract()?;
+    if proto == "websocket" {
+        return Ok(None);
+    }
+    if proto != "http" {
+        return Ok(Some(py.None()));
+    }
+    let method: String = scope.getattr("method")?.extract()?;
+    let path: String = scope.getattr("path")?.extract()?;
+    let is_head = method == "HEAD";
+    let snapshot = state.read().hot_snapshot();
+    if snapshot.middleware.is_some() {
+        return Ok(None);
+    }
+    if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
+    {
+        let doc = state.read().openapi.lock().to_string();
+        if is_head {
+            response::send_head_simple_sync(
+                py,
+                &protocol_py,
+                200,
+                doc.len(),
+                "application/json; charset=utf-8",
+            )?;
+        } else {
+            response::send_str_sync(
+                py,
+                &protocol_py,
+                200,
+                &doc,
+                "application/json; charset=utf-8",
+            )?;
+        }
+        return Ok(Some(py.None()));
+    }
+    // Build the compiled snapshot if it has not been promoted yet. Safe under GIL: only the
+    // current thread is in Rust, the prelim read guard above has been dropped, and parking_lot
+    // is non-reentrant — no scenario where this write blocks the same thread.
+    let compiled = match snapshot.compiled.clone() {
+        Some(c) => c,
+        None => ensure_compiled_snapshot(state),
+    };
+    let route_out = match match_route_compiled(&compiled, &method, &path) {
+        None => {
+            return Err(pyo3::exceptions::PyValueError::new_err("method"));
+        }
+        Some(m) => m,
+    };
+    match route_out {
+        Some((_, _)) => Ok(None),
+        None => {
+            let m = methods_matching_path_compiled(&compiled, &path);
+            if m.is_empty() {
+                response::send_text_sync(
+                    py,
+                    &protocol_py,
+                    404,
+                    "Not Found",
+                    "text/plain; charset=utf-8",
+                )?;
+            } else {
+                response::send_405_method_not_allowed_sync(py, &protocol_py, &m)?;
+            }
+            Ok(Some(py.None()))
+        }
     }
 }
 
@@ -160,22 +225,17 @@ pub async fn run_rsgi(
     scope: Py<PyAny>,
     protocol: Py<PyAny>,
 ) -> PyResult<PyObject> {
-    // Single GIL block: read scope attributes + clone shared cfg refs in one acquire/release.
-    // Each `Python::with_gil` costs ~100-300ns; coalescing 5 separate blocks saves ~1µs/req.
-    type RsgiPrelim = (
-        String,
-        String,
-        String,
-        bool,
-        Option<Py<PyAny>>,
-        Option<Py<PyAny>>,
-        Option<Py<PyAny>>,
-    );
-    let prelim: Option<RsgiPrelim> = Python::with_gil(|py| -> PyResult<Option<RsgiPrelim>> {
+    // Single GIL block: read proto, scope fields, and shared cfg in one acquire/release.
+    // Each `Python::with_gil` costs ~100-300ns; coalescing saves ~1µs/req on the http path.
+    type RsgiPrelim = (String, String, String, bool, HotSnapshot);
+    let (proto, prelim): (String, Option<RsgiPrelim>) = Python::with_gil(|py| -> PyResult<_> {
         let s = scope.bind(py);
         let proto: String = s.getattr("proto")?.extract()?;
+        if proto == "websocket" {
+            return Ok((proto, None::<RsgiPrelim>));
+        }
         if proto != "http" {
-            return Ok(None);
+            return Ok((proto, None::<RsgiPrelim>));
         }
         let method: String = s.getattr("method")?.extract()?;
         let path: String = s.getattr("path")?.extract()?;
@@ -184,44 +244,39 @@ pub async fn run_rsgi(
             .and_then(|x| x.extract())
             .unwrap_or_default();
         let is_head = method == "HEAD";
-        let st = state.read();
-        Ok(Some((
-            method,
-            path,
-            qs,
-            is_head,
-            st.cors.clone(),
-            st.security_headers.clone(),
-            st.middleware.clone(),
-        )))
+        // One `state.read()` for the entire request: every subsequent dispatch step uses
+        // [`HotSnapshot`] without re-acquiring the `RwLock`. The snapshot's
+        // ``Option<Py<PyAny>>`` fields are cloned *here*, while the GIL is held.
+        let snapshot = state.read().hot_snapshot();
+        Ok((proto, Some((method, path, qs, is_head, snapshot))))
     })?;
-    let Some((method, path, query_string, is_head, cors_cfg, security_cfg, maybe_mw)) = prelim
-    else {
+    if proto == "websocket" {
+        return run_rsgi_websocket(state, scope, protocol).await;
+    }
+    let Some((method, path, query_string, is_head, snapshot)) = prelim else {
         return Ok(Python::with_gil(|py| py.None()));
     };
-    if (method == "GET" || method == "HEAD") && path == "/openapi.json" {
-        let (inc, doc) = {
-            let st = state.read();
-            if !st.include_openapi {
-                (false, String::new())
-            } else {
-                let oa = st.openapi.lock();
-                (true, oa.to_string())
-            }
-        };
-        if inc {
-            if is_head {
-                return response::send_head_simple(
-                    &protocol,
-                    200,
-                    doc.len(),
-                    "application/json; charset=utf-8",
-                )
-                .await;
-            }
-            return response::send_str(&protocol, 200, &doc, "application/json; charset=utf-8")
-                .await;
+    type CfgClones = (Option<Py<PyAny>>, Option<Py<PyAny>>, Option<Py<PyAny>>);
+    let (cors_cfg, security_cfg, maybe_mw): CfgClones = Python::with_gil(|_py| {
+        (
+            snapshot.cors.clone(),
+            snapshot.security_headers.clone(),
+            snapshot.middleware.clone(),
+        )
+    });
+    if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
+    {
+        let doc = state.read().openapi.lock().to_string();
+        if is_head {
+            return response::send_head_simple(
+                &protocol,
+                200,
+                doc.len(),
+                "application/json; charset=utf-8",
+            )
+            .await;
         }
+        return response::send_str(&protocol, 200, &doc, "application/json; charset=utf-8").await;
     }
     if let Some(mw) = maybe_mw {
         let out: Py<PyAny> = match Python::with_gil(|py| {
@@ -260,21 +315,18 @@ pub async fn run_rsgi(
     }
     // Auto-enable compiled route snapshot on first request to keep hot-path matching lock-free
     // even when users forget to call `freeze()` explicitly.
-    ensure_compiled_snapshot(&state);
-    let route_out: Option<(usize, HashMap<String, String>)> = {
-        let st = state.read();
-        match match_route(&st, &method, &path) {
-            None => Err(pyo3::exceptions::PyValueError::new_err("method")),
-            Some(m) => Ok(m),
-        }
+    let compiled = match snapshot.compiled.clone() {
+        Some(c) => c,
+        None => ensure_compiled_snapshot(&state),
+    };
+    let route_out = match match_route_compiled(&compiled, &method, &path) {
+        None => Err(pyo3::exceptions::PyValueError::new_err("method")),
+        Some(m) => Ok(m),
     }?;
     let (route_idx, param_map) = match route_out {
         Some(x) => x,
         None => {
-            let m = {
-                let st = state.read();
-                methods_matching_path(&st, &path)
-            };
+            let m = methods_matching_path_compiled(&compiled, &path);
             if m.is_empty() {
                 return response::send_text(
                     &protocol,
@@ -287,6 +339,8 @@ pub async fn run_rsgi(
             return response::send_405_method_not_allowed(&protocol, &m).await;
         }
     };
+    let routes_arc: Arc<Vec<RouteEntry>> = Arc::clone(&snapshot.routes);
+    // ``Py<PyAny>::clone`` is GIL-bound; do the route-entry destructure inside `with_gil`.
     let (
         handler,
         is_async,
@@ -305,10 +359,8 @@ pub async fn run_rsgi(
         dep_wants_request,
         handler_param_names,
         handler_varkw,
-    ) = Python::with_gil(|_py| -> PyResult<RouteCallSnapshot> {
-        let st = state.read();
-        let e = st
-            .routes
+    ) = Python::with_gil(|_py| -> PyResult<_> {
+        let e = routes_arc
             .get(route_idx)
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("route index"))?;
         Ok((
@@ -657,14 +709,15 @@ pub async fn run_rsgi(
             dep_out.push(o);
         }
     }
-    let should_pass_form = read_form_body && (handler_varkw || handler_param_names.contains("form"));
-    let should_pass_files = read_form_body && (handler_varkw || handler_param_names.contains("files"));
+    let should_pass_form =
+        read_form_body && (handler_varkw || handler_param_names.contains("form"));
+    let should_pass_files =
+        read_form_body && (handler_varkw || handler_param_names.contains("files"));
     let should_pass_protocol = handler_varkw || handler_param_names.contains("protocol");
     let should_pass_body = !read_form_body && !body_bytes.is_empty() && body_json.is_none();
-    let has_dep_kwargs = dep_names
-        .iter()
-        .enumerate()
-        .any(|(i, name)| dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(name)));
+    let has_dep_kwargs = dep_names.iter().enumerate().any(|(i, name)| {
+        dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(name))
+    });
     let should_use_kwargs = !param_map.is_empty()
         || !query_map.is_empty()
         || has_dep_kwargs
@@ -939,7 +992,6 @@ fn send_handler_map_inline(
     }
 }
 
-
 /// `if_absent`: only add a header if no same-name (case-insensitive) header is already present
 /// (``security`` preset). `false` replaces/merges like CORS (``replace`` / duplicate header names).
 fn merge_config_response_headers(
@@ -1129,7 +1181,10 @@ fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<
         ));
     }
     if let Ok(buf) = b.downcast::<PyBytes>() {
-        return Ok((buf.as_bytes().to_vec(), "application/octet-stream".to_string()));
+        return Ok((
+            buf.as_bytes().to_vec(),
+            "application/octet-stream".to_string(),
+        ));
     }
     if let Ok(s) = b.extract::<String>() {
         return Ok((s.into_bytes(), "text/plain; charset=utf-8".to_string()));
@@ -1150,4 +1205,79 @@ fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<
         s.into_bytes(),
         "application/json; charset=utf-8".to_string(),
     ))
+}
+
+/// Dispatch a Granian RSGI WebSocket scope: match `path` in `AppState::websocket` and run
+/// the handler with a [`WebSocket`] helper. No matching route → ``protocol.close(1000)``;
+/// handler error → close (best-effort) and propagate to logs.
+async fn run_rsgi_websocket(
+    state: Arc<RwLock<AppState>>,
+    scope: Py<PyAny>,
+    protocol: Py<PyAny>,
+) -> PyResult<PyObject> {
+    let path: String =
+        Python::with_gil(|py| -> PyResult<String> { scope.bind(py).getattr("path")?.extract() })?;
+    let snapshot = state.read().hot_snapshot();
+    let compiled = match snapshot.compiled.clone() {
+        Some(c) => c,
+        None => ensure_compiled_snapshot(&state),
+    };
+    let ws_routes = Arc::clone(&snapshot.websocket_routes);
+    let route_match = match_ws_route_compiled(&compiled, &path);
+    let Some((route_idx, param_map)) = route_match else {
+        // No route → polite close. ``close`` is sync on RSGIWebsocketProtocol.
+        let _ = Python::with_gil(|py| -> PyResult<()> {
+            let p = protocol.bind(py);
+            let _ = p.call_method1("close", (1000i32,));
+            Ok(())
+        });
+        return Ok(Python::with_gil(|py| py.None()));
+    };
+    let (handler, is_async) = Python::with_gil(|_py| -> PyResult<(Py<PyAny>, bool)> {
+        let e = ws_routes
+            .get(route_idx)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("ws route index"))?;
+        Ok((e.handler.clone(), e.is_async))
+    })?;
+    let call_result = Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
+        let ws = WebSocket::new(protocol.clone_ref(py), scope.clone_ref(py), param_map);
+        let py_ws = Py::new(py, ws)?;
+        let res = handler.bind(py).call1((py_ws,))?.unbind();
+        Ok((res, is_async))
+    });
+    let (res, run_async) = match call_result {
+        Ok(x) => x,
+        Err(e) => {
+            log::error!(target: "oxyroute", "websocket {path} handler raised before await: {e}");
+            let _ = Python::with_gil(|py| -> PyResult<()> {
+                let _ = protocol.bind(py).call_method1("close", (1011i32,));
+                Ok(())
+            });
+            return Ok(Python::with_gil(|py| py.None()));
+        }
+    };
+    if run_async {
+        let fut = match Python::with_gil(|py| {
+            let b = res.bind(py).clone();
+            pyo3_async_runtimes::tokio::into_future(b)
+        }) {
+            Ok(f) => f,
+            Err(e) => {
+                log::error!(target: "oxyroute", "websocket {path} bridge: {e}");
+                let _ = Python::with_gil(|py| -> PyResult<()> {
+                    let _ = protocol.bind(py).call_method1("close", (1011i32,));
+                    Ok(())
+                });
+                return Ok(Python::with_gil(|py| py.None()));
+            }
+        };
+        if let Err(e) = fut.await {
+            log::error!(target: "oxyroute", "websocket {path} handler error: {e}");
+            let _ = Python::with_gil(|py| -> PyResult<()> {
+                let _ = protocol.bind(py).call_method1("close", (1011i32,));
+                Ok(())
+            });
+        }
+    }
+    Ok(Python::with_gil(|py| py.None()))
 }

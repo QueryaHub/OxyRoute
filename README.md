@@ -1,6 +1,6 @@
 # OxyRoute
 
-**RSGI-first** web toolkit: HTTP routing, JSON handling, and HS\* JWT validation on a **Rust** hot path ([PyO3](https://pyo3.rs/) + [Maturin](https://www.maturin.rs/)), with your business logic in ordinary **Python** handlers. Pair it with **[Granian](https://github.com/emmett-framework/granian)** using `--interface rsgi` for the intended stack.
+**RSGI-first** web toolkit: HTTP routing, JSON/form handling, JWT validation, response mapping, and native WebSockets on a **Rust** hot path ([PyO3](https://pyo3.rs/) + [Maturin](https://www.maturin.rs/)), with your business logic in ordinary **Python** handlers. Pair it with **[Granian](https://github.com/emmett-framework/granian)** using `--interface rsgi` for the intended stack.
 
 [![CI](https://github.com/QueryaHub/OxyRoute/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/QueryaHub/OxyRoute/actions)
 
@@ -8,13 +8,15 @@
 
 - **RSGI** entrypoint (`async def __rsgi__(scope, protocol)`) compatible with Granian’s RSGI implementation
 - **Routing** via [matchit](https://crates.io/crates/matchit) (path parameters like `/users/:id`)
-- **JSON bodies** parsed in Rust; successful values passed to handlers as kwargs
-- **JWT (HMAC)** verification on the Rust path before your handler runs (`require_jwt`, HS256/384/512)
+- **JSON, form, and multipart bodies** parsed on the native path; successful values passed to handlers as kwargs
+- **JWT** verification on the Rust path before your handler runs (`require_jwt`, HS*, RSA, EC, EdDSA public-key verification)
 - **Optional** `GET /openapi.json` with a minimal OpenAPI-style document
 - **Dependencies**: linear list of named factories (`Depends`, sync or async) passed as kwargs
+- **Optional middleware layers** for pre-route decisions, CORS, CSRF, and browser security headers
+- **Native RSGI WebSockets** via `@app.websocket(path)` and `oxyroute.WebSocket`
 - Native extension wheel (abi3) for **Python ≥ 3.10**
 
-Full documentation: **[docs/index.md](docs/index.md)**
+Start with the full **[Usage guide](docs/usage.md)**, or use **[docs/index.md](docs/index.md)** for topic-specific pages.
 
 ## Requirements
 
@@ -60,8 +62,8 @@ def root() -> str:
 
 
 @app.get("/hello/:name")
-def hello_name(**kwargs) -> str:
-    return f"Hello, {kwargs.get('name', '')}"
+def hello_name(name: str) -> dict:
+    return {"message": f"Hello, {name}"}
 ```
 
 Run (from the repo, after `maturin develop` or an editable install):
@@ -73,6 +75,19 @@ granian --interface rsgi examples.rsgi_app:app
 Per-worker setup (`__rsgi_init__`) is shown in [examples/rsgi_lifespan_app.py](examples/rsgi_lifespan_app.py) and [docs/rsgi.md](docs/rsgi.md#lifespan-optional).
 
 OxyRoute v0.3.0 supports **only** Granian RSGI; the legacy ASGI bridge (`uvicorn` / `granian --interface asgi`) was removed.
+
+## Usage docs
+
+- [Usage guide](docs/usage.md) — install, run, routing, bodies, responses, middleware, CORS, CSRF, JWT, WebSockets, deployment notes, limitations
+- [RSGI and Granian](docs/rsgi.md) — app entrypoint, lifespan hooks, worker process model
+- [Handlers](docs/handlers.md) — injected parameters and response mapping details
+- [Routing](docs/routing.md) — methods, path syntax, `APIRouter`, `freeze()`
+- [JWT](docs/jwt.md), [CORS](docs/cors.md), [CSRF](docs/csrf.md), [Security headers](docs/security-headers.md)
+- [WebSockets](docs/websocket.md) and [SSE](docs/sse.md)
+
+## Production notes
+
+OxyRoute is designed for Granian RSGI deployments. For public traffic, place it behind a normal production boundary (TLS, request-size limits, timeouts, logging, process supervision) and keep `OXYROUTE_DEBUG` disabled. Request bodies and multipart files are currently buffered in memory before parsing, so enforce limits both at the edge and with `OXYROUTE_MAX_BODY_BYTES`.
 
 ## Project layout
 
