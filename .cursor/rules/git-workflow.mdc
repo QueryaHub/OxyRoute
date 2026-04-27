@@ -1,26 +1,55 @@
 ---
-description: Feature branches and PRs for GitHub issues — never land feature work by committing straight to dev/main
+description: Issue workflow — sync dev, branch, implement, test+lint, atomic commits, PR to dev
 alwaysApply: true
 ---
 
 # Git and GitHub workflow (OxyRoute)
 
-When implementing a **feature, fix, or issue** (including backlog / issue numbers in `.github/ISSUE_BACKLOG`):
+**Integration branch is `dev`.** Do not land feature or fix work by committing directly to `dev` or `main` (see exceptions at the end).
 
-1. **Branch**  
-   - Do **not** commit or push feature work directly to `dev` or `main`.  
-   - Create a branch from the current base (usually `dev`): `git fetch origin` then `git checkout -b <branch>`.  
-   - Prefer names like: `feat/<short-slug>`, or `issue-<N>-<short-slug>` (e.g. `issue-20-head-options`).
+## Order of operations (always)
 
-2. **Pull request**  
-   - Push the branch: `git push -u origin <branch>`.  
-   - Open a **PR** into `dev` (or the repo’s default integration branch).  
-   - In the PR title or description, **link the issue**: `Closes #N` / `Fixes #N` / `Ref #N` as appropriate so GitHub closes or tracks the work.
+1. **Sync `dev` first**
+   - `git fetch origin`
+   - `git checkout dev`
+   - `git pull origin dev`
 
-3. **Before coding**  
-   - Confirm whether an issue already exists; if the user only gave a topic, match it to a backlog file or open an issue, then use the same branch+PR flow.
+2. **Branch from that `dev` for one GitHub issue** (one topic per PR when possible)
+   - `git checkout -b issue-<N>-<short-slug>` (e.g. `issue-47-multipart-form`)
 
-4. **Exceptions**  
-   - Tiny doc typo or rule-only changes may still use a small branch+PR, or a single “chore:” PR if the team agrees — default is **always branch + PR** for any code or test change.
+3. **Read the requirement**
+   - Open the GitHub issue and, if present, the body under [`.github/ISSUE_BACKLOG/bodies/`](.github/ISSUE_BACKLOG/bodies/) or linked docs.
 
-This applies to all agents and humans working in this repo.
+4. **Implement** in the branch (Rust/Python/docs as needed).
+
+5. **Validate before commit/push** (match CI in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)) — **humans run this; the agent does not** run ruff/cargo/`make test`/pytest/maturin unless the user **explicitly** asks.
+   - **One-shot (recommended for people):** `make test` from the repo root — `uv` sync, ruff, `cargo fmt`/`clippy`, `maturin develop --uv`, pytest in a temp dir (see [`Makefile`](Makefile)).
+   - **By hand (same as CI):** `uv run ruff check` / `ruff format --check` on `oxyroute`, `tests`, `examples`; `cargo fmt --all -- --check`; `cargo clippy --all-targets -- -D warnings`; build + test as in CI.
+   - **If CI or local checks fail:** the user will report it — fix that. Do not assume green; do not proactively burn tokens re-running the full suite after every edit.
+
+6. **Atomic commits** — one logical change per commit (e.g. `feat:`, `fix:`, `test:`, `docs:`).
+   - **Hard rule:** never mix product changes (`oxyroute/`, `src/`, `tests/`, runtime docs) with [`.github/ISSUE_BACKLOG/`](.github/ISSUE_BACKLOG/) in the same commit.
+   - If both are touched in a branch, split them into separate commits:
+     - Product commit: `feat:` / `fix:` / `test:` / `docs:`
+     - Backlog-only commit: `docs:` or `chore:`
+   - **Pre-commit gate (required):** run `git diff --cached --name-only` and verify staged paths are from one scope only (product **or** backlog).
+   - **If mixed staging is detected:** unstage (`git restore --staged <path>`) and re-stage by scope before committing.
+
+7. **PR into `dev`**
+   - `git push -u origin <branch>`
+   - Open PR: **base = `dev`**, compare = your branch. Use **`Closes #N`** (or `Fixes #N`) when the PR completes issue **N**.
+
+8. **After merge** — delete the local branch, keep `main` and `dev`; next issue: repeat from step 1.
+
+## PR gate (required before opening PR)
+
+- Re-check commit boundaries with:
+  - `git log --name-only --oneline dev..HEAD`
+  - `git show --name-only --oneline <commit>`
+- If any commit mixes product + backlog paths, split/fix history before PR (prefer small follow-up commits over forceful history rewrites unless explicitly requested).
+
+## Exceptions
+
+- Trivial one-line doc fixes may still use a small branch + PR, or a maintainer chore — default is **branch + PR** for any code or test change.
+
+[Full narrative + `gh` examples: `docs/development-workflow.md`]

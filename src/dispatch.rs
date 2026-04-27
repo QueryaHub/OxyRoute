@@ -6,14 +6,17 @@ use parking_lot::RwLock;
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{decode, Validation};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use serde_json::Value as JsonValue;
 
+use crate::form::{self, ParsedFile};
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
 use crate::response;
 use crate::schema::json_to_py;
-use crate::state::{map_method_router, methods_matching_path, AppState};
+use crate::state::{match_route, methods_matching_path, AppState};
 use crate::token::{build_decoding_key, extract_bearer, extract_cookie_value};
+
+type HttpExceptionPayload = (u16, Vec<u8>, Vec<(String, String)>);
 
 type RouteCallSnapshot = (
     Py<PyAny>,
@@ -25,7 +28,8 @@ type RouteCallSnapshot = (
     Option<String>,
     u64,
     Option<String>,
-    bool,
+    bool, // read_json_body
+    bool, // read_form_body
     Vec<String>,
     Vec<Py<PyAny>>,
     Vec<bool>,
@@ -68,6 +72,68 @@ async fn send_internal_error(
     response::send_text(protocol, 500, &body, "application/json; charset=utf-8").await
 }
 
+/// If ``err`` is :class:`oxyroute.exceptions.HTTPException`, send status/body/headers; else ``None``.
+async fn try_http_exception(protocol: &Py<PyAny>, err: &PyErr) -> PyResult<Option<PyObject>> {
+    let payload: Option<HttpExceptionPayload> =
+        Python::with_gil(|py| -> PyResult<Option<HttpExceptionPayload>> {
+            let m = py.import("oxyroute.exceptions")?;
+            let f = m.getattr("_http_exception_payload")?;
+            let exc = err.value(py);
+            let r = f.call1((exc,))?;
+            if r.is_none() {
+                return Ok(None);
+            }
+            let tup = r.downcast::<PyTuple>()?;
+            if tup.len() != 3 {
+                return Ok(None);
+            }
+            let status: u16 = tup.get_item(0)?.extract()?;
+            let b = tup.get_item(1)?;
+            let body: Vec<u8> = b.extract()?;
+            let h = tup.get_item(2)?;
+            let list = h.downcast::<PyList>()?;
+            let mut headers = Vec::new();
+            for i in 0..list.len() {
+                let item = list.get_item(i)?;
+                let pair = item.downcast::<PyTuple>()?;
+                let k: String = pair.get_item(0)?.extract()?;
+                let v: String = pair.get_item(1)?.extract()?;
+                headers.push((k, v));
+            }
+            Ok(Some((status, body, headers)))
+        })?;
+    let Some((st, body, mut headers)) = payload else {
+        return Ok(None);
+    };
+    let has_ct = headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+    if !has_ct {
+        headers.insert(
+            0,
+            (
+                "content-type".to_string(),
+                "application/json; charset=utf-8".to_string(),
+            ),
+        );
+    }
+    let out = response::send_with_headers(protocol, st, &body, headers).await?;
+    Ok(Some(out))
+}
+
+/// Like [`send_internal_error`], but maps :class:`HTTPException` to its status and body.
+async fn send_python_error(
+    protocol: &Py<PyAny>,
+    method: &str,
+    path: &str,
+    err: PyErr,
+) -> PyResult<PyObject> {
+    if let Some(res) = try_http_exception(protocol, &err).await? {
+        return Ok(res);
+    }
+    send_internal_error(protocol, method, path, err).await
+}
+
 pub async fn run_rsgi(
     state: Arc<RwLock<AppState>>,
     scope: Py<PyAny>,
@@ -91,6 +157,15 @@ pub async fn run_rsgi(
             ))
         })?;
     let is_head = method == "HEAD";
+    // `Py<PyAny>` must be cloned while the GIL is held (see PyO3 0.21+).
+    let cors_cfg = Python::with_gil(|_py| {
+        let s = state.read();
+        s.cors.clone()
+    });
+    let security_cfg = Python::with_gil(|_py| {
+        let s = state.read();
+        s.security_headers.clone()
+    });
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" {
         let (inc, doc) = {
             let st = state.read();
@@ -127,7 +202,7 @@ pub async fn run_rsgi(
         }) {
             Ok(x) => x,
             Err(e) => {
-                return send_internal_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e).await;
             }
         };
         let skip = Python::with_gil(|py| out.bind(py).is_none());
@@ -135,7 +210,29 @@ pub async fn run_rsgi(
             let mapped = match Python::with_gil(|py| map_handler_return(py, &out)) {
                 Ok(m) => m,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
+                }
+            };
+            let mapped = match Python::with_gil(|py| {
+                merge_config_response_headers(
+                    py,
+                    &security_cfg,
+                    scope.bind(py).clone(),
+                    mapped,
+                    true,
+                )
+            }) {
+                Ok(m) => m,
+                Err(e) => {
+                    return send_python_error(&protocol, &method, &path, e).await;
+                }
+            };
+            let mapped = match Python::with_gil(|py| {
+                merge_config_response_headers(py, &cors_cfg, scope.bind(py).clone(), mapped, false)
+            }) {
+                Ok(m) => m,
+                Err(e) => {
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             return send_handler_map(&protocol, is_head, mapped).await;
@@ -157,6 +254,16 @@ pub async fn run_rsgi(
         }
         Ok(Vec::new())
     })?;
+    let max = form::max_body_bytes();
+    if (body_bytes.len() as u64) > max {
+        return response::send_text(
+            &protocol,
+            413,
+            r#"{"error":"payload too large"}"#,
+            "application/json; charset=utf-8",
+        )
+        .await;
+    }
     let (auth, cookie_raw) =
         Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
             let s = scope.bind(py);
@@ -166,18 +273,13 @@ pub async fn run_rsgi(
                 header_get_lax(&headers, "cookie"),
             ))
         })?;
-    let route_out: Option<(usize, HashMap<String, String>)> = (|| -> PyResult<_> {
+    let route_out: Option<(usize, HashMap<String, String>)> = {
         let st = state.read();
-        let g = map_method_router(&st, &method)
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("method"))?;
-        Ok(g.at(&path).ok().map(|m| {
-            let mut pmap = HashMap::new();
-            for (k, v) in m.params.iter() {
-                pmap.insert(k.to_string(), v.to_string());
-            }
-            (*m.value, pmap)
-        }))
-    })()?;
+        match match_route(&st, &method, &path) {
+            None => Err(pyo3::exceptions::PyValueError::new_err("method")),
+            Some(m) => Ok(m),
+        }
+    }?;
     let (route_idx, param_map) = match route_out {
         Some(x) => x,
         None => {
@@ -208,6 +310,7 @@ pub async fn run_rsgi(
         jwt_leeway,
         jwt_cookie,
         read_json_body,
+        read_form_body,
         dep_names,
         dep_factories,
         dep_is_async,
@@ -231,6 +334,7 @@ pub async fn run_rsgi(
             e.jwt_leeway,
             e.jwt_cookie.clone(),
             e.read_json_body,
+            e.read_form_body,
             e.dep_names.clone(),
             e.dep_factories.clone(),
             e.dep_is_async.clone(),
@@ -341,6 +445,7 @@ pub async fn run_rsgi(
     }
     let query_map = parse_query(&query_string);
     let body_json: Option<JsonValue> = if read_json_body
+        && !read_form_body
         && (method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE")
     {
         if body_bytes.is_empty() {
@@ -362,6 +467,75 @@ pub async fn run_rsgi(
     } else {
         None
     };
+    let (form_map, form_files): (HashMap<String, String>, Vec<ParsedFile>) = if read_form_body
+        && (method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE")
+    {
+        if body_bytes.is_empty() {
+            (HashMap::new(), vec![])
+        } else {
+            let ct: PyResult<Option<String>> = Python::with_gil(|py| {
+                let s = scope.bind(py);
+                let headers = s.getattr("headers")?;
+                Ok(header_get_lax(&headers, "content-type"))
+            });
+            let ct = match ct {
+                Ok(x) => x,
+                Err(e) => {
+                    return send_python_error(&protocol, &method, &path, e).await;
+                }
+            };
+            if ct.as_deref().map(str::is_empty) != Some(false) {
+                return response::send_text(
+                    &protocol,
+                    400,
+                    r#"{"error":"missing content-type"}"#,
+                    "application/json; charset=utf-8",
+                )
+                .await;
+            }
+            let cts = ct.unwrap();
+            let lower = cts.to_ascii_lowercase();
+            if lower.starts_with("application/x-www-form-urlencoded") {
+                (form::parse_urlencoded_form(&body_bytes), vec![])
+            } else if lower.starts_with("multipart/form-data") {
+                let boundary = match multer::parse_boundary(&cts) {
+                    Ok(b) => b,
+                    Err(_) => {
+                        return response::send_text(
+                            &protocol,
+                            400,
+                            r#"{"error":"invalid multipart boundary"}"#,
+                            "application/json; charset=utf-8",
+                        )
+                        .await
+                    }
+                };
+                let parsed = match form::parse_multipart(body_bytes.clone(), &boundary).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return response::send_text(
+                            &protocol,
+                            400,
+                            &format!(r#"{{"error":"multipart: {e}"}}"#),
+                            "application/json; charset=utf-8",
+                        )
+                        .await
+                    }
+                };
+                (parsed.form, parsed.files)
+            } else {
+                return response::send_text(
+                    &protocol,
+                    415,
+                    r#"{"error":"expected application/x-www-form-urlencoded or multipart/form-data"}"#,
+                    "application/json; charset=utf-8",
+                )
+                .await;
+            }
+        }
+    } else {
+        (HashMap::new(), vec![])
+    };
     let need_req_ctx = dep_wants_request.iter().any(|&x| x);
     let request_ctx: Option<Py<PyAny>> = if need_req_ctx {
         match Python::with_gil(|py| -> PyResult<Py<PyAny>> {
@@ -371,7 +545,7 @@ pub async fn run_rsgi(
         }) {
             Ok(o) => Some(o),
             Err(e) => {
-                return send_internal_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e).await;
             }
         }
     } else {
@@ -399,7 +573,7 @@ pub async fn run_rsgi(
             }) {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             let fut = match Python::with_gil(|py| {
@@ -408,13 +582,13 @@ pub async fn run_rsgi(
             }) {
                 Ok(f) => f,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             let o = match fut.await {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             dep_out.push(o);
@@ -438,7 +612,7 @@ pub async fn run_rsgi(
             }) {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_internal_error(&protocol, &method, &path, e).await;
+                    return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
             dep_out.push(o);
@@ -472,15 +646,41 @@ pub async fn run_rsgi(
             let pyv = json_to_py(py, j.clone())?;
             kwargs.set_item("json", pyv)?;
         }
-        if !body_bytes.is_empty() && body_json.is_none() {
+        if read_form_body {
+            if handler_varkw || handler_param_names.contains("form") {
+                let fd = PyDict::new(py);
+                for (k, v) in &form_map {
+                    fd.set_item(k, v.as_str())?;
+                }
+                kwargs.set_item("form", fd)?;
+            }
+            if handler_varkw || handler_param_names.contains("files") {
+                let fl = PyList::empty(py);
+                for f in &form_files {
+                    let d = PyDict::new(py);
+                    d.set_item("name", f.name.as_str())?;
+                    match &f.filename {
+                        Some(n) => d.set_item("filename", n.as_str())?,
+                        None => d.set_item("filename", py.None())?,
+                    }
+                    d.set_item("content_type", f.content_type.as_str())?;
+                    d.set_item("data", PyBytes::new(py, &f.data))?;
+                    fl.append(d)?;
+                }
+                kwargs.set_item("files", fl)?;
+            }
+        } else if !body_bytes.is_empty() && body_json.is_none() {
             kwargs.set_item("body", PyBytes::new(py, &body_bytes))?;
+        }
+        if handler_varkw || handler_param_names.contains("protocol") {
+            kwargs.set_item("protocol", protocol.bind(py))?;
         }
         let res = handler.bind(py).call((), Some(&kwargs))?.unbind();
         Ok((res, is_async))
     }) {
         Ok(x) => x,
         Err(e) => {
-            return send_internal_error(&protocol, &method, &path, e).await;
+            return send_python_error(&protocol, &method, &path, e).await;
         }
     };
     let handler_out: PyObject = if run_async {
@@ -490,13 +690,13 @@ pub async fn run_rsgi(
         }) {
             Ok(f) => f,
             Err(e) => {
-                return send_internal_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e).await;
             }
         };
         match fut.await {
             Ok(x) => x,
             Err(e) => {
-                return send_internal_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e).await;
             }
         }
     } else {
@@ -505,7 +705,23 @@ pub async fn run_rsgi(
     let mapped = match Python::with_gil(|py| map_handler_return(py, &handler_out)) {
         Ok(m) => m,
         Err(e) => {
-            return send_internal_error(&protocol, &method, &path, e).await;
+            return send_python_error(&protocol, &method, &path, e).await;
+        }
+    };
+    let mapped = match Python::with_gil(|py| {
+        merge_config_response_headers(py, &security_cfg, scope.bind(py).clone(), mapped, true)
+    }) {
+        Ok(m) => m,
+        Err(e) => {
+            return send_python_error(&protocol, &method, &path, e).await;
+        }
+    };
+    let mapped = match Python::with_gil(|py| {
+        merge_config_response_headers(py, &cors_cfg, scope.bind(py).clone(), mapped, false)
+    }) {
+        Ok(m) => m,
+        Err(e) => {
+            return send_python_error(&protocol, &method, &path, e).await;
         }
     };
     send_handler_map(&protocol, is_head, mapped).await
@@ -514,6 +730,12 @@ pub async fn run_rsgi(
 /// Return value of a user handler, mapped to an HTTP body and headers.
 fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
     let b = out.bind(py);
+    if b.getattr("__oxyroute_stream_done__")
+        .and_then(|x| x.extract::<bool>())
+        .unwrap_or(false)
+    {
+        return Ok(HandlerMap::AlreadySent);
+    }
     // Before `extract::<String>`: some non-`str` objects may still coerce in edge cases;
     // `Response` must be recognized first.
     if is_oxyroute_response(py, b)? {
@@ -578,6 +800,7 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
 }
 
 enum HandlerMap {
+    AlreadySent,
     WithHeaders {
         status: u16,
         body: Vec<u8>,
@@ -595,8 +818,12 @@ async fn send_handler_map(
     is_head: bool,
     mapped: HandlerMap,
 ) -> PyResult<PyObject> {
+    if matches!(mapped, HandlerMap::AlreadySent) {
+        return Ok(Python::with_gil(|py| py.None()));
+    }
     if is_head {
         match mapped {
+            HandlerMap::AlreadySent => Ok(Python::with_gil(|py| py.None())),
             HandlerMap::WithHeaders {
                 status,
                 body,
@@ -610,6 +837,7 @@ async fn send_handler_map(
         }
     } else {
         match mapped {
+            HandlerMap::AlreadySent => Ok(Python::with_gil(|py| py.None())),
             HandlerMap::WithHeaders {
                 status,
                 body,
@@ -620,6 +848,113 @@ async fn send_handler_map(
                 body,
                 content_type,
             } => response::send_bytes(protocol, status, &body, &content_type).await,
+        }
+    }
+}
+
+/// `if_absent`: only add a header if no same-name (case-insensitive) header is already present
+/// (``security`` preset). `false` replaces/merges like CORS (``replace`` / duplicate header names).
+fn merge_config_response_headers(
+    py: Python<'_>,
+    config: &Option<Py<PyAny>>,
+    scope: Bound<'_, PyAny>,
+    mapped: HandlerMap,
+    if_absent: bool,
+) -> PyResult<HandlerMap> {
+    let Some(c) = config else {
+        return Ok(mapped);
+    };
+    let pairs: Vec<(String, String)> = c
+        .call_method1(py, "response_header_pairs", (&scope,))?
+        .extract(py)?;
+    if pairs.is_empty() {
+        return Ok(mapped);
+    }
+    if if_absent {
+        Ok(merge_header_pairs_if_absent(mapped, &pairs))
+    } else {
+        Ok(merge_header_pairs_replace(mapped, &pairs))
+    }
+}
+
+fn merge_header_pairs_replace(mapped: HandlerMap, extra: &[(String, String)]) -> HandlerMap {
+    if extra.is_empty() {
+        return mapped;
+    }
+    match mapped {
+        HandlerMap::AlreadySent => HandlerMap::AlreadySent,
+        HandlerMap::WithHeaders {
+            status,
+            body,
+            mut headers,
+        } => {
+            for (a, b) in extra {
+                headers.retain(|(k, _)| !k.eq_ignore_ascii_case(a));
+                headers.push((a.clone(), b.clone()));
+            }
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            }
+        }
+        HandlerMap::Simple {
+            status,
+            body,
+            content_type,
+        } => {
+            let mut headers = vec![("content-type".to_string(), content_type)];
+            for (a, b) in extra {
+                headers.retain(|(k, _)| !k.eq_ignore_ascii_case(a));
+                headers.push((a.clone(), b.clone()));
+            }
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            }
+        }
+    }
+}
+
+fn merge_header_pairs_if_absent(mapped: HandlerMap, extra: &[(String, String)]) -> HandlerMap {
+    if extra.is_empty() {
+        return mapped;
+    }
+    match mapped {
+        HandlerMap::AlreadySent => HandlerMap::AlreadySent,
+        HandlerMap::WithHeaders {
+            status,
+            body,
+            mut headers,
+        } => {
+            for (a, b) in extra {
+                if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(a)) {
+                    headers.push((a.clone(), b.clone()));
+                }
+            }
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            }
+        }
+        HandlerMap::Simple {
+            status,
+            body,
+            content_type,
+        } => {
+            let mut headers = vec![("content-type".to_string(), content_type)];
+            for (a, b) in extra {
+                if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(a)) {
+                    headers.push((a.clone(), b.clone()));
+                }
+            }
+            HandlerMap::WithHeaders {
+                status,
+                body,
+                headers,
+            }
         }
     }
 }

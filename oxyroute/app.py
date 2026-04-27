@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 from collections.abc import Callable, Mapping
+from types import SimpleNamespace
 from typing import Any, TypeVar
 
 from . import _oxyroute
 from .asgi import build_asgi_caller
+from .router import APIRouter, join_path
 
 F = TypeVar("F", bound=Callable[..., Any])
 Dep = Callable[..., Any] | _oxyroute.PyDepends
@@ -34,12 +38,19 @@ class App:
     """
     Application object: pass a module instance to Granian, e.g.
     ``granian app:app --interface rsgi`` or for ASGI ``granian app:app --interface asgi``.
+
+    ``state`` is an empty ``types.SimpleNamespace`` for per-process data; set fields in
+    ``__rsgi_init__`` or a factory, or on a subclass. In-memory data is not shared across
+    Granian worker processes.
     """
 
     def __init__(self, title: str = "OxyRoute", *, include_openapi: bool = True) -> None:
         self._app = _oxyroute.App(include_openapi=include_openapi)
         self._app.set_openapi_title(title)
         self.title = title
+        self._websocket_routes: dict[str, Callable[..., Any]] = {}
+        # Per-process mutable bag for ``__rsgi_init__`` / factory setup (DB pool, clients, …).
+        self.state: SimpleNamespace = SimpleNamespace()
         self._asgi3: Callable[..., Any] = build_asgi_caller(self)
 
     def freeze(self) -> None:
@@ -49,6 +60,32 @@ class App:
     def set_openapi_served(self, enabled: bool) -> None:
         """Enable or disable the built-in ``GET /openapi.json`` route."""
         self._app.set_openapi_served(enabled)
+
+    def include_router(
+        self,
+        router: APIRouter,
+        prefix: str = "",
+        **defaults: Any,
+    ) -> None:
+        """
+        Mount routes from an :class:`APIRouter` on this app with an optional path prefix.
+        Per-route options win over ``**defaults`` (same keys as the ``get`` / ``post`` / … decorators).
+        """
+        regmap: dict[str, Callable[..., Any]] = {
+            "GET": App.get,
+            "POST": App.post,
+            "PUT": App.put,
+            "PATCH": App.patch,
+            "DELETE": App.delete,
+            "OPTIONS": App.options,
+        }
+        for method, rel, handler, opts in router._routes:
+            merged: dict[str, Any] = {**defaults, **opts}
+            full = join_path(prefix, rel)
+            reg = regmap[method]
+            allowed = {p for p in inspect.signature(reg).parameters if p not in ("self", "path")}
+            kw: dict[str, Any] = {k: v for k, v in merged.items() if k in allowed}
+            reg(self, full, **kw)(handler)
 
     def set_middleware(self, handler: Callable[..., Any] | None) -> None:
         """
@@ -60,6 +97,21 @@ class App:
         body is read (e.g. for CORS preflight).
         """
         self._app.set_middleware(handler)
+
+    def set_cors(self, config: Any | None) -> None:
+        """
+        Optional CORS object (e.g. :class:`oxyroute.cors.CORSConfig`) for merging response
+        headers. Used together with :func:`oxyroute.cors.apply_cors` or a custom
+        :meth:`set_middleware` for preflight. Pass ``None`` to disable.
+        """
+        self._app.set_cors(config)
+
+    def set_security_headers(self, config: Any | None) -> None:
+        """
+        Optional preset (e.g. :class:`oxyroute.security_headers.SecurityHeadersConfig`) — merged
+        into responses when a header of the same name is not already set. Pass ``None`` to disable.
+        """
+        self._app.set_security_headers(config)
 
     def get(
         self,
@@ -82,6 +134,7 @@ class App:
             algorithms,
             read_json_body=False,
             dependencies=dependencies,
+            read_form_body=False,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -96,6 +149,7 @@ class App:
         jwt_secret: str | None = None,
         algorithms: list[str] | None = None,
         read_json_body: bool = True,
+        read_form_body: bool = False,
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
@@ -112,6 +166,7 @@ class App:
             algorithms,
             read_json_body,
             dependencies=dependencies,
+            read_form_body=read_form_body,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -127,6 +182,8 @@ class App:
         require_jwt: bool = False,
         jwt_secret: str | None = None,
         algorithms: list[str] | None = None,
+        read_json_body: bool = True,
+        read_form_body: bool = False,
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
@@ -141,8 +198,9 @@ class App:
             require_jwt,
             jwt_secret,
             algorithms,
-            read_json_body=True,
+            read_json_body,
             dependencies=dependencies,
+            read_form_body=read_form_body,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -159,6 +217,7 @@ class App:
         jwt_secret: str | None = None,
         algorithms: list[str] | None = None,
         read_json_body: bool = True,
+        read_form_body: bool = False,
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
@@ -175,6 +234,7 @@ class App:
             algorithms,
             read_json_body,
             dependencies=dependencies,
+            read_form_body=read_form_body,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -204,6 +264,7 @@ class App:
             algorithms,
             read_json_body=False,
             dependencies=dependencies,
+            read_form_body=False,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
@@ -231,11 +292,40 @@ class App:
             algorithms,
             read_json_body=False,
             dependencies=dependencies,
+            read_form_body=False,
             jwt_issuer=jwt_issuer,
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
         )
+
+    def websocket(self, path: str) -> Callable[[F], F]:
+        """
+        Register an ASGI websocket handler for exact `path`.
+
+        This route family is available on the optional ASGI bridge (`App.__call__`), not
+        on the RSGI request path.
+        """
+
+        def wrap(handler: F) -> F:
+            self._websocket_routes[path] = handler
+            return handler
+
+        return wrap
+
+    async def _handle_asgi_websocket(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        path = str(scope.get("path", "/") or "/")
+        handler = self._websocket_routes.get(path)
+        if handler is None:
+            await send({"type": "websocket.close", "code": 1000})
+            return
+        from .asgi import WebSocket
+
+        ws = WebSocket(receive, send)
+        if inspect.iscoroutinefunction(handler):
+            await handler(ws)
+            return
+        await asyncio.get_running_loop().run_in_executor(None, lambda: handler(ws))
 
     def _route(
         self,
@@ -247,6 +337,7 @@ class App:
         read_json_body: bool,
         dependencies: list[tuple[str, Dep]] | None,
         *,
+        read_form_body: bool = False,
         jwt_issuer: str | None = None,
         jwt_audience: str | None = None,
         jwt_leeway: int | None = None,
@@ -259,6 +350,9 @@ class App:
         def wrap(handler: F) -> F:
             if body_model is not None and body_schema is not None:
                 raise TypeError("use only one of body_model and body_schema")
+            rj = read_json_body
+            if read_form_body:
+                rj = False
             body_schema_json: str | None = None
             if body_model is not None:
                 body_schema_json = json.dumps(body_model.model_json_schema())
@@ -271,7 +365,8 @@ class App:
                 require_jwt,
                 jwt_secret,
                 algorithms,
-                read_json_body,
+                rj,
+                read_form_body,
                 dlist,
                 jwt_issuer,
                 jwt_audience,
