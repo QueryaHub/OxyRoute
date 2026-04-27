@@ -82,11 +82,11 @@ def _run_handle_rsgi_blocking(
     """Run ``handle_rsgi`` to completion on a **fresh** event loop in the thread pool.
 
     The ASGI server's main loop must **not** ``await`` the native coroutine directly: the
-    Rust/Tokio side calls synchronous ``protocol.response_*`` which use
-    ``run_coroutine_threadsafe(..., self._loop).result()`` targeting the **main** loop.
-    If the main loop is blocked in ``await handle_rsgi``, it can never run those ``send``
-    coroutines — a classic deadlock. Running the await in ``run_in_executor`` + ``asyncio.run``
-    keeps the main loop free to drain the threadsafe queue.
+    Rust/Tokio side calls synchronous ``protocol.response_*`` while this coroutine runs on a
+    worker thread. Those response calls enqueue ASGI messages onto the **main** loop, where a
+    dedicated drain task performs ``send(...)`` in order. Running this await in
+    ``run_in_executor`` + ``asyncio.run`` keeps the main loop free for queue draining and avoids
+    deadlock-prone cross-thread blocking waits.
     """
 
     async def _inner() -> None:
@@ -298,15 +298,28 @@ async def asgi_to_rsgi(
 
     drain_task = asyncio.create_task(_drain_outgoing())
     proto = _RsgiProtocol(body, queue, loop)
-    await loop.run_in_executor(
-        None,
-        _run_handle_rsgi_blocking,
-        app_rsgi,
-        rscope,
-        proto,
-    )
-    await queue.put(None)
-    await drain_task
+    run_exc: BaseException | None = None
+    try:
+        await loop.run_in_executor(
+            None,
+            _run_handle_rsgi_blocking,
+            app_rsgi,
+            rscope,
+            proto,
+        )
+    except BaseException as exc:  # includes CancelledError
+        run_exc = exc
+    finally:
+        if not drain_task.done():
+            await queue.put(None)
+        try:
+            await drain_task
+        except Exception:
+            # Preserve the original request-path failure if there was one.
+            if run_exc is None:
+                raise
+    if run_exc is not None:
+        raise run_exc
 
 
 def build_asgi_caller(framework_app: Any) -> Callable[..., Any]:
