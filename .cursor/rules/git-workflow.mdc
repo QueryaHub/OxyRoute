@@ -27,13 +27,26 @@ alwaysApply: true
    - **By hand (same as CI):** `uv run ruff check` / `ruff format --check` on `oxyroute`, `tests`, `examples`; `cargo fmt --all -- --check`; `cargo clippy --all-targets -- -D warnings`; build + test as in CI.
    - **If CI or local checks fail:** the user will report it — fix that. Do not assume green; do not proactively burn tokens re-running the full suite after every edit.
 
-6. **Atomic commits** — one logical change per commit (e.g. `feat:`, `fix:`, `test:`, `docs:`). **Do not** mix product code and [`.github/ISSUE_BACKLOG/`](.github/ISSUE_BACKLOG/) in the same commit; backlog updates: separate `docs:` / `chore:` commit if needed.
+6. **Atomic commits** — one logical change per commit (e.g. `feat:`, `fix:`, `test:`, `docs:`).
+   - **Hard rule:** never mix product changes (`oxyroute/`, `src/`, `tests/`, runtime docs) with [`.github/ISSUE_BACKLOG/`](.github/ISSUE_BACKLOG/) in the same commit.
+   - If both are touched in a branch, split them into separate commits:
+     - Product commit: `feat:` / `fix:` / `test:` / `docs:`
+     - Backlog-only commit: `docs:` or `chore:`
+   - **Pre-commit gate (required):** run `git diff --cached --name-only` and verify staged paths are from one scope only (product **or** backlog).
+   - **If mixed staging is detected:** unstage (`git restore --staged <path>`) and re-stage by scope before committing.
 
 7. **PR into `dev`**
    - `git push -u origin <branch>`
    - Open PR: **base = `dev`**, compare = your branch. Use **`Closes #N`** (or `Fixes #N`) when the PR completes issue **N**.
 
 8. **After merge** — delete the local branch, keep `main` and `dev`; next issue: repeat from step 1.
+
+## PR gate (required before opening PR)
+
+- Re-check commit boundaries with:
+  - `git log --name-only --oneline dev..HEAD`
+  - `git show --name-only --oneline <commit>`
+- If any commit mixes product + backlog paths, split/fix history before PR (prefer small follow-up commits over forceful history rewrites unless explicitly requested).
 
 ## Exceptions
 
