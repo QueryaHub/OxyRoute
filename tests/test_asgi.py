@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import oxyroute.asgi as asgi_mod
 from oxyroute import App, Response
 
 
@@ -63,3 +64,56 @@ def test_asgi_response_custom_headers_and_json_ct() -> None:
         assert r.json() == {"x": 1}
 
     asyncio.run(_run())
+
+
+def test_asgi_queue_drain_shutdown_when_executor_path_raises() -> None:
+    app = App()
+
+    @app.get("/x")
+    def x() -> str:
+        return "ok"
+
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "scheme": "http",
+        "method": "GET",
+        "path": "/x",
+        "query_string": b"",
+        "headers": [],
+    }
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    sent: list[dict] = []
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    original = asgi_mod._run_handle_rsgi_blocking
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("boom")
+
+    asgi_mod._run_handle_rsgi_blocking = boom
+
+    async def _run() -> None:
+        try:
+            await app(scope, receive, send)
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError as exc:
+            assert "boom" in str(exc)
+        await asyncio.sleep(0)
+        hanging = [
+            t
+            for t in asyncio.all_tasks()
+            if t is not asyncio.current_task()
+            and getattr(t.get_coro(), "__name__", "") == "_drain_outgoing"
+        ]
+        assert not hanging
+
+    try:
+        asyncio.run(_run())
+    finally:
+        asgi_mod._run_handle_rsgi_blocking = original

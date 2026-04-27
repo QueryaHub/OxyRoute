@@ -42,11 +42,12 @@ cargo clippy
 
 ## Branches, PRs, and atomic commits
 
-- **Integration branch is `dev`:** create your branch from `dev`, open PRs with **base = `dev`**. The maintainer merges to `dev` and later promotes to `main` for releases as needed.
-- **One issue, one PR (when possible):** name the branch with the issue number, e.g. `issue-2-query-decode` or `feat/2-query-decode`.
+- **Integration branch is `dev`:** always `git fetch origin`, `git checkout dev`, `git pull origin dev` **before** creating a branch. Open PRs with **base = `dev`**; maintainers promote to `main` for releases as needed.
+- **One issue, one PR (when possible):** name the branch with the issue number, e.g. `issue-2-query-decode` or `feat/2-query-decode`. Read the GitHub issue (and backlog body if linked) before coding.
+- After implementation, run **the same tests and linters as CI** (Ruff, `cargo fmt`/`clippy`, pytest) — see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 - Use **atomic commits** (one logical change per commit). **Do not** put `.github/ISSUE_BACKLOG/` changes in the same commit as product code—backlog/templating updates should be a separate `docs:` (or `chore:`) commit, or a separate PR.
 - Prefer **conventional commits**: `feat:`, `fix:`, `docs:`, `ci:`, `chore:`, `test:`.
-- Full step-by-step: [docs/development-workflow.md](docs/development-workflow.md).
+- Full checklist: [docs/development-workflow.md](docs/development-workflow.md).
 
 ## Creating GitHub issues from the template backlog
 
