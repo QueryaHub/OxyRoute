@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 from collections.abc import Callable, Mapping
@@ -47,6 +48,7 @@ class App:
         self._app = _oxyroute.App(include_openapi=include_openapi)
         self._app.set_openapi_title(title)
         self.title = title
+        self._websocket_routes: dict[str, Callable[..., Any]] = {}
         # Per-process mutable bag for ``__rsgi_init__`` / factory setup (DB pool, clients, …).
         self.state: SimpleNamespace = SimpleNamespace()
         self._asgi3: Callable[..., Any] = build_asgi_caller(self)
@@ -296,6 +298,35 @@ class App:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
         )
+
+    def websocket(self, path: str) -> Callable[[F], F]:
+        """
+        Register an ASGI websocket handler for exact `path`.
+
+        This route family is available on the optional ASGI bridge (`App.__call__`), not
+        on the RSGI request path.
+        """
+
+        def wrap(handler: F) -> F:
+            self._websocket_routes[path] = handler
+            return handler
+
+        return wrap
+
+    async def _handle_asgi_websocket(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        path = str(scope.get("path", "/") or "/")
+        handler = self._websocket_routes.get(path)
+        if handler is None:
+            await send({"type": "websocket.close", "code": 1000})
+            return
+        from .asgi import WebSocket
+
+        ws = WebSocket(receive, send)
+        out = handler(ws)
+        if inspect.isawaitable(out):
+            await out
+            return
+        await asyncio.get_running_loop().run_in_executor(None, lambda: out)
 
     def _route(
         self,
