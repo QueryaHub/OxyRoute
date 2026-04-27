@@ -7,6 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.3.0] - unreleased
 
+### Added
+
+- Native RSGI WebSocket support: `@app.websocket(path)` and `oxyroute.WebSocket` are
+  exported from the package and dispatched directly inside the Rust extension. No ASGI
+  shim is involved; the helper class wraps Granian's `RSGIWebsocketProtocol` and exposes
+  `accept`, `receive` / `receive_text` / `receive_bytes`, `send_text` / `send_bytes` /
+  `send_json`, and `close`. Path matching uses the same `matchit` syntax as HTTP routes
+  and lives in its own router. Unknown paths produce a polite `close(1000)`; handler
+  errors trigger `close(1011)`.
+
 ### Removed (breaking)
 
 - The optional ASGI 3.0 compatibility bridge (`oxyroute.asgi`) was removed. `App` is no
@@ -15,7 +25,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ``granian --interface rsgi``.
 - The ASGI-based `@app.websocket(path)` decorator and the
   `App._handle_asgi_websocket` plumbing were removed alongside the bridge. Native RSGI
-  WebSocket support will be reintroduced in a follow-up release.
+  WebSocket support is reintroduced in this release (see *Added*).
 
 ### Migration
 
