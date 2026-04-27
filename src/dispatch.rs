@@ -44,6 +44,14 @@ fn oxyroute_debug() -> bool {
         .unwrap_or(false)
 }
 
+fn contains_crlf(s: &str) -> bool {
+    s.contains('\r') || s.contains('\n')
+}
+
+fn is_unsafe_cookie_line(s: &str) -> bool {
+    s.chars().any(|c| c == '\r' || c == '\n' || c.is_control())
+}
+
 /// Map Python `PyErr` to HTTP 500 with a JSON body (no exception text unless `OXYROUTE_DEBUG=1`).
 async fn send_internal_error(
     protocol: &Py<PyAny>,
@@ -98,6 +106,9 @@ async fn try_http_exception(protocol: &Py<PyAny>, err: &PyErr) -> PyResult<Optio
                 let pair = item.downcast::<PyTuple>()?;
                 let k: String = pair.get_item(0)?.extract()?;
                 let v: String = pair.get_item(1)?.extract()?;
+                if contains_crlf(&k) || contains_crlf(&v) {
+                    return Ok(None);
+                }
                 headers.push((k, v));
             }
             Ok(Some((status, body, headers)))
@@ -994,6 +1005,11 @@ fn structured_from_status_body(
             for (k, v) in d.iter() {
                 let key: String = k.extract()?;
                 let val: String = v.extract()?;
+                if contains_crlf(&key) || contains_crlf(&val) {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "unsafe response header contains CR or LF",
+                    ));
+                }
                 if key.eq_ignore_ascii_case("content-type") {
                     has_ct = true;
                 }
@@ -1008,6 +1024,11 @@ fn structured_from_status_body(
         if !c.is_none() {
             for item in c.downcast::<PyList>()?.iter() {
                 let s: String = item.extract()?;
+                if is_unsafe_cookie_line(&s) {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "unsafe set-cookie value contains control characters",
+                    ));
+                }
                 pairs.push(("set-cookie".to_string(), s));
             }
         }
