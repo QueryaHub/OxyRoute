@@ -268,6 +268,24 @@ class App:
             jwt_cookie=jwt_cookie,
         )
 
+    def websocket(self, path: str) -> Callable[[F], F]:
+        """
+        Register a native RSGI WebSocket handler.
+
+        ``path`` uses the same ``matchit`` syntax as HTTP routes (e.g. ``/ws/:room``).
+        The handler receives a single :class:`oxyroute.WebSocket` argument; ``await``
+        :meth:`oxyroute.WebSocket.accept` once before sending or receiving frames.
+
+        Sync handlers run inline (the Rust dispatcher does not bridge them through Tokio
+        twice); async handlers are awaited on Granian's loop.
+        """
+
+        def wrap(handler: F) -> F:
+            self._app.add_websocket_route(path, handler)
+            return handler
+
+        return wrap
+
     def options(
         self,
         path: str,
