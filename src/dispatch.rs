@@ -6,7 +6,7 @@ use parking_lot::RwLock;
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{decode, Validation};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use serde_json::Value as JsonValue;
 
 use crate::form::{self, ParsedFile};
@@ -23,18 +23,18 @@ type RouteCallSnapshot = (
     bool,
     bool,
     Option<String>,
-    Vec<jsonwebtoken::Algorithm>,
+    Arc<[jsonwebtoken::Algorithm]>,
     Option<String>,
     Option<String>,
     u64,
     Option<String>,
     bool, // read_json_body
     bool, // read_form_body
-    Vec<String>,
-    Vec<Py<PyAny>>,
-    Vec<bool>,
-    Vec<bool>,
-    HashSet<String>,
+    Arc<[String]>,
+    Arc<[Py<PyAny>]>,
+    Arc<[bool]>,
+    Arc<[bool]>,
+    Arc<HashSet<String>>,
     bool,
 );
 
@@ -146,6 +146,9 @@ async fn send_python_error(
 }
 
 fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) {
+    if state.read().compiled.is_some() {
+        return;
+    }
     let mut st = state.write();
     if st.compiled.is_none() {
         st.compiled = Some(Arc::new(st.snapshot_routers()));
@@ -157,33 +160,45 @@ pub async fn run_rsgi(
     scope: Py<PyAny>,
     protocol: Py<PyAny>,
 ) -> PyResult<PyObject> {
-    let proto: String = Python::with_gil(|py| scope.bind(py).getattr("proto")?.extract())?;
-    if proto != "http" {
+    // Single GIL block: read scope attributes + clone shared cfg refs in one acquire/release.
+    // Each `Python::with_gil` costs ~100-300ns; coalescing 5 separate blocks saves ~1µs/req.
+    type RsgiPrelim = (
+        String,
+        String,
+        String,
+        bool,
+        Option<Py<PyAny>>,
+        Option<Py<PyAny>>,
+        Option<Py<PyAny>>,
+    );
+    let prelim: Option<RsgiPrelim> = Python::with_gil(|py| -> PyResult<Option<RsgiPrelim>> {
+        let s = scope.bind(py);
+        let proto: String = s.getattr("proto")?.extract()?;
+        if proto != "http" {
+            return Ok(None);
+        }
+        let method: String = s.getattr("method")?.extract()?;
+        let path: String = s.getattr("path")?.extract()?;
+        let qs: String = s
+            .getattr("query_string")
+            .and_then(|x| x.extract())
+            .unwrap_or_default();
+        let is_head = method == "HEAD";
+        let st = state.read();
+        Ok(Some((
+            method,
+            path,
+            qs,
+            is_head,
+            st.cors.clone(),
+            st.security_headers.clone(),
+            st.middleware.clone(),
+        )))
+    })?;
+    let Some((method, path, query_string, is_head, cors_cfg, security_cfg, maybe_mw)) = prelim
+    else {
         return Ok(Python::with_gil(|py| py.None()));
-    }
-    let (method, path, query_string) =
-        Python::with_gil(|py| -> PyResult<(String, String, String)> {
-            let s = scope.bind(py);
-            let qs: String = s
-                .getattr("query_string")
-                .and_then(|x| x.extract())
-                .unwrap_or_default();
-            Ok((
-                s.getattr("method")?.extract()?,
-                s.getattr("path")?.extract()?,
-                qs,
-            ))
-        })?;
-    let is_head = method == "HEAD";
-    // `Py<PyAny>` must be cloned while the GIL is held (see PyO3 0.21+).
-    let cors_cfg = Python::with_gil(|_py| {
-        let s = state.read();
-        s.cors.clone()
-    });
-    let security_cfg = Python::with_gil(|_py| {
-        let s = state.read();
-        s.security_headers.clone()
-    });
+    };
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" {
         let (inc, doc) = {
             let st = state.read();
@@ -208,10 +223,6 @@ pub async fn run_rsgi(
                 .await;
         }
     }
-    let maybe_mw = Python::with_gil(|_py| {
-        let st = state.read();
-        st.middleware.clone()
-    });
     if let Some(mw) = maybe_mw {
         let out: Py<PyAny> = match Python::with_gil(|py| {
             let f = mw.bind(py);
@@ -225,35 +236,26 @@ pub async fn run_rsgi(
         };
         let skip = Python::with_gil(|py| out.bind(py).is_none());
         if !skip {
-            let mapped = match Python::with_gil(|py| map_handler_return(py, &out)) {
-                Ok(m) => m,
-                Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e).await;
-                }
-            };
-            let mapped = match Python::with_gil(|py| {
-                merge_config_response_headers(
-                    py,
-                    &security_cfg,
-                    scope.bind(py).clone(),
-                    mapped,
-                    true,
-                )
+            return match Python::with_gil(|py| -> PyResult<()> {
+                let mapped = map_handler_return(py, &out)?;
+                let mapped = if security_cfg.is_some() || cors_cfg.is_some() {
+                    let scope_bound = scope.bind(py).clone();
+                    let mapped = merge_config_response_headers(
+                        py,
+                        &security_cfg,
+                        scope_bound.clone(),
+                        mapped,
+                        true,
+                    )?;
+                    merge_config_response_headers(py, &cors_cfg, scope_bound, mapped, false)?
+                } else {
+                    mapped
+                };
+                send_handler_map_inline(py, &protocol, is_head, mapped)
             }) {
-                Ok(m) => m,
-                Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e).await;
-                }
+                Ok(()) => Ok(Python::with_gil(|py| py.None())),
+                Err(e) => send_python_error(&protocol, &method, &path, e).await,
             };
-            let mapped = match Python::with_gil(|py| {
-                merge_config_response_headers(py, &cors_cfg, scope.bind(py).clone(), mapped, false)
-            }) {
-                Ok(m) => m,
-                Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e).await;
-                }
-            };
-            return send_handler_map(&protocol, is_head, mapped).await;
         }
     }
     // Auto-enable compiled route snapshot on first request to keep hot-path matching lock-free
@@ -314,48 +316,55 @@ pub async fn run_rsgi(
             e.is_async,
             e.require_jwt,
             e.jwt_secret.clone(),
-            e.algs.clone(),
+            Arc::clone(&e.algs),
             e.jwt_issuer.clone(),
             e.jwt_audience.clone(),
             e.jwt_leeway,
             e.jwt_cookie.clone(),
             e.read_json_body,
             e.read_form_body,
-            e.dep_names.clone(),
-            e.dep_factories.clone(),
-            e.dep_is_async.clone(),
-            e.dep_wants_request.clone(),
-            e.handler_param_names.clone(),
+            Arc::clone(&e.dep_names),
+            Arc::clone(&e.dep_factories),
+            Arc::clone(&e.dep_is_async),
+            Arc::clone(&e.dep_wants_request),
+            Arc::clone(&e.handler_param_names),
             e.handler_varkw,
         ))
     })?;
-    let read_fut = Python::with_gil(|py| {
-        let p = protocol.bind(py);
-        let aw: Bound<PyAny> = p.call0()?;
-        pyo3_async_runtimes::tokio::into_future(aw)
-    })?;
-    let body_obj: PyObject = read_fut.await?;
-    let mut body_bytes: Vec<u8> = Python::with_gil(|py| -> PyResult<Vec<u8>> {
-        let b = body_obj.bind(py);
-        if let Ok(x) = b.extract::<Vec<u8>>() {
-            return Ok(x);
+    let may_need_raw_body = handler_varkw || handler_param_names.contains("body");
+    let should_read_body = read_json_body || read_form_body || may_need_raw_body;
+    let mut body_bytes: Vec<u8> = if should_read_body {
+        let read_fut = Python::with_gil(|py| {
+            let p = protocol.bind(py);
+            let aw: Bound<PyAny> = p.call0()?;
+            pyo3_async_runtimes::tokio::into_future(aw)
+        })?;
+        let body_obj: PyObject = read_fut.await?;
+        let body = Python::with_gil(|py| -> PyResult<Vec<u8>> {
+            let b = body_obj.bind(py);
+            if let Ok(x) = b.extract::<Vec<u8>>() {
+                return Ok(x);
+            }
+            if let Ok(s) = b.str() {
+                return Ok(s.to_string().into_bytes());
+            }
+            Ok(Vec::new())
+        })?;
+        let max = form::max_body_bytes();
+        if (body.len() as u64) > max {
+            return response::send_text(
+                &protocol,
+                413,
+                r#"{"error":"payload too large"}"#,
+                "application/json; charset=utf-8",
+            )
+            .await;
         }
-        if let Ok(s) = b.str() {
-            return Ok(s.to_string().into_bytes());
-        }
-        Ok(Vec::new())
-    })?;
-    let max = form::max_body_bytes();
-    if (body_bytes.len() as u64) > max {
-        return response::send_text(
-            &protocol,
-            413,
-            r#"{"error":"payload too large"}"#,
-            "application/json; charset=utf-8",
-        )
-        .await;
-    }
-    let (auth, cookie_raw) =
+        body
+    } else {
+        Vec::new()
+    };
+    let (auth, cookie_raw): (Option<String>, Option<String>) = if require_jwt {
         Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
             let s = scope.bind(py);
             let headers = s.getattr("headers")?;
@@ -363,7 +372,10 @@ pub async fn run_rsgi(
                 header_get_lax(&headers, "authorization"),
                 header_get_lax(&headers, "cookie"),
             ))
-        })?;
+        })?
+    } else {
+        (None, None)
+    };
     let mut claims_val: Option<JsonValue> = None;
     if require_jwt {
         let key = match jwt_secret {
@@ -415,7 +427,7 @@ pub async fn run_rsgi(
             )
             .await;
         };
-        val.algorithms = algs.clone();
+        val.algorithms = algs.to_vec();
         val.validate_nbf = true;
         val.leeway = jwt_leeway;
         if let Some(ref iss) = jwt_issuer {
@@ -464,7 +476,12 @@ pub async fn run_rsgi(
             }
         }
     }
-    let query_map = parse_query(&query_string);
+    let wants_query = handler_varkw || handler_param_names.contains("query");
+    let query_map = if wants_query {
+        parse_query(&query_string)
+    } else {
+        HashMap::new()
+    };
     let body_json: Option<JsonValue> = if read_json_body
         && !read_form_body
         && (method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE")
@@ -640,7 +657,28 @@ pub async fn run_rsgi(
             dep_out.push(o);
         }
     }
+    let should_pass_form = read_form_body && (handler_varkw || handler_param_names.contains("form"));
+    let should_pass_files = read_form_body && (handler_varkw || handler_param_names.contains("files"));
+    let should_pass_protocol = handler_varkw || handler_param_names.contains("protocol");
+    let should_pass_body = !read_form_body && !body_bytes.is_empty() && body_json.is_none();
+    let has_dep_kwargs = dep_names
+        .iter()
+        .enumerate()
+        .any(|(i, name)| dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(name)));
+    let should_use_kwargs = !param_map.is_empty()
+        || !query_map.is_empty()
+        || has_dep_kwargs
+        || claims_val.is_some()
+        || body_json.is_some()
+        || should_pass_form
+        || should_pass_files
+        || should_pass_body
+        || should_pass_protocol;
     let (res, run_async) = match Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
+        if !should_use_kwargs {
+            let res = handler.bind(py).call0()?.unbind();
+            return Ok((res, is_async));
+        }
         let kwargs = PyDict::new(py);
         for (k, v) in param_map {
             let vpy = value_for_path_param(py, &v);
@@ -669,14 +707,14 @@ pub async fn run_rsgi(
             kwargs.set_item("json", pyv)?;
         }
         if read_form_body {
-            if handler_varkw || handler_param_names.contains("form") {
+            if should_pass_form {
                 let fd = PyDict::new(py);
                 for (k, v) in &form_map {
                     fd.set_item(k, v.as_str())?;
                 }
                 kwargs.set_item("form", fd)?;
             }
-            if handler_varkw || handler_param_names.contains("files") {
+            if should_pass_files {
                 let fl = PyList::empty(py);
                 for f in &form_files {
                     let d = PyDict::new(py);
@@ -691,10 +729,10 @@ pub async fn run_rsgi(
                 }
                 kwargs.set_item("files", fl)?;
             }
-        } else if !body_bytes.is_empty() && body_json.is_none() {
+        } else if should_pass_body {
             kwargs.set_item("body", PyBytes::new(py, &body_bytes))?;
         }
-        if handler_varkw || handler_param_names.contains("protocol") {
+        if should_pass_protocol {
             kwargs.set_item("protocol", protocol.bind(py))?;
         }
         let res = handler.bind(py).call((), Some(&kwargs))?.unbind();
@@ -724,34 +762,52 @@ pub async fn run_rsgi(
     } else {
         res
     };
-    let mapped = match Python::with_gil(|py| map_handler_return(py, &handler_out)) {
-        Ok(m) => m,
-        Err(e) => {
-            return send_python_error(&protocol, &method, &path, e).await;
-        }
-    };
-    let mapped = match Python::with_gil(|py| {
-        merge_config_response_headers(py, &security_cfg, scope.bind(py).clone(), mapped, true)
+    // Inline map + (optional) cfg merge + RSGI send in ONE GIL block. RSGI response_*
+    // calls are fire-and-forget on the protocol object; folding the send here saves
+    // 1-2 extra GIL acquires on the response path.
+    match Python::with_gil(|py| -> PyResult<()> {
+        let mapped = map_handler_return(py, &handler_out)?;
+        let mapped = if security_cfg.is_some() || cors_cfg.is_some() {
+            let scope_bound = scope.bind(py).clone();
+            let mapped = merge_config_response_headers(
+                py,
+                &security_cfg,
+                scope_bound.clone(),
+                mapped,
+                true,
+            )?;
+            merge_config_response_headers(py, &cors_cfg, scope_bound, mapped, false)?
+        } else {
+            mapped
+        };
+        send_handler_map_inline(py, &protocol, is_head, mapped)
     }) {
-        Ok(m) => m,
-        Err(e) => {
-            return send_python_error(&protocol, &method, &path, e).await;
-        }
-    };
-    let mapped = match Python::with_gil(|py| {
-        merge_config_response_headers(py, &cors_cfg, scope.bind(py).clone(), mapped, false)
-    }) {
-        Ok(m) => m,
-        Err(e) => {
-            return send_python_error(&protocol, &method, &path, e).await;
-        }
-    };
-    send_handler_map(&protocol, is_head, mapped).await
+        Ok(()) => Ok(Python::with_gil(|py| py.None())),
+        Err(e) => send_python_error(&protocol, &method, &path, e).await,
+    }
 }
 
 /// Return value of a user handler, mapped to an HTTP body and headers.
 fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
     let b = out.bind(py);
+    // Hot path: try cheap `PyString` / `PyBytes` downcasts FIRST. They cannot be a stream
+    // sentinel (which is a custom object) or an `oxyroute.Response` (a dataclass), so we can
+    // safely skip the more expensive `getattr("__oxyroute_stream_done__")` (which raises
+    // `AttributeError` on plain str) and `is_oxyroute_response` (3× hasattr) checks.
+    if let Ok(s) = b.downcast::<PyString>() {
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: s.to_string().into_bytes(),
+            content_type: "text/plain; charset=utf-8".to_string(),
+        });
+    }
+    if let Ok(buf) = b.downcast::<PyBytes>() {
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: buf.as_bytes().to_vec(),
+            content_type: "application/octet-stream".to_string(),
+        });
+    }
     if b.getattr("__oxyroute_stream_done__")
         .and_then(|x| x.extract::<bool>())
         .unwrap_or(false)
@@ -835,44 +891,54 @@ enum HandlerMap {
     },
 }
 
-async fn send_handler_map(
+/// Sync version of [`send_handler_map`]: caller already holds the GIL. Used by the
+/// non-streaming hot path to avoid re-acquiring the GIL just to call `protocol.response_*`.
+fn send_handler_map_inline(
+    py: Python<'_>,
     protocol: &Py<PyAny>,
     is_head: bool,
     mapped: HandlerMap,
-) -> PyResult<PyObject> {
+) -> PyResult<()> {
     if matches!(mapped, HandlerMap::AlreadySent) {
-        return Ok(Python::with_gil(|py| py.None()));
+        return Ok(());
     }
     if is_head {
         match mapped {
-            HandlerMap::AlreadySent => Ok(Python::with_gil(|py| py.None())),
+            HandlerMap::AlreadySent => Ok(()),
             HandlerMap::WithHeaders {
                 status,
                 body,
                 headers,
-            } => response::send_head_with_headers(protocol, status, &body, headers).await,
+            } => response::send_head_with_headers_sync(py, protocol, status, &body, headers),
             HandlerMap::Simple {
                 status,
                 body,
                 content_type,
-            } => response::send_head_simple(protocol, status, body.len(), &content_type).await,
+            } => response::send_head_simple_sync(py, protocol, status, body.len(), &content_type),
         }
     } else {
         match mapped {
-            HandlerMap::AlreadySent => Ok(Python::with_gil(|py| py.None())),
+            HandlerMap::AlreadySent => Ok(()),
             HandlerMap::WithHeaders {
                 status,
                 body,
                 headers,
-            } => response::send_with_headers(protocol, status, &body, headers).await,
+            } => response::send_with_headers_sync(py, protocol, status, &body, headers),
             HandlerMap::Simple {
                 status,
                 body,
                 content_type,
-            } => response::send_bytes(protocol, status, &body, &content_type).await,
+            } => {
+                if body.is_empty() {
+                    response::send_empty_sync(py, protocol, status, Some(&content_type))
+                } else {
+                    response::send_bytes_sync(py, protocol, status, &body, &content_type)
+                }
+            }
         }
     }
 }
+
 
 /// `if_absent`: only add a header if no same-name (case-insensitive) header is already present
 /// (``security`` preset). `false` replaces/merges like CORS (``replace`` / duplicate header names).
@@ -1055,6 +1121,15 @@ fn structured_from_status_body(
 fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<u8>, String)> {
     if b.is_none() {
         return Ok((Vec::new(), "text/plain; charset=utf-8".to_string()));
+    }
+    if let Ok(s) = b.downcast::<PyString>() {
+        return Ok((
+            s.to_string().into_bytes(),
+            "text/plain; charset=utf-8".to_string(),
+        ));
+    }
+    if let Ok(buf) = b.downcast::<PyBytes>() {
+        return Ok((buf.as_bytes().to_vec(), "application/octet-stream".to_string()));
     }
     if let Ok(s) = b.extract::<String>() {
         return Ok((s.into_bytes(), "text/plain; charset=utf-8".to_string()));
