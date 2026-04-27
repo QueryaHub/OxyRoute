@@ -12,6 +12,68 @@ from collections.abc import Callable
 from typing import Any
 
 
+class WebSocket:
+    """Small ASGI websocket helper used by the optional ASGI bridge."""
+
+    __slots__ = ("_accepted", "_closed", "_connected", "_receive", "_send")
+
+    def __init__(self, receive: Any, send: Any) -> None:
+        self._receive = receive
+        self._send = send
+        self._accepted = False
+        self._closed = False
+        self._connected = False
+
+    async def accept(self, subprotocol: str | None = None) -> None:
+        if self._accepted:
+            return
+        if not self._connected:
+            first = await self._receive()
+            t = first.get("type", "")
+            if t == "websocket.disconnect":
+                self._closed = True
+                raise RuntimeError("websocket disconnected before accept")
+            if t != "websocket.connect":
+                raise RuntimeError(f"unexpected websocket event before accept: {t}")
+            self._connected = True
+        msg: dict[str, Any] = {"type": "websocket.accept"}
+        if subprotocol is not None:
+            msg["subprotocol"] = subprotocol
+        await self._send(msg)
+        self._accepted = True
+
+    async def receive(self) -> dict[str, Any]:
+        return await self._receive()
+
+    async def receive_text(self) -> str:
+        msg = await self._receive()
+        t = msg.get("type", "")
+        if t == "websocket.disconnect":
+            raise RuntimeError("websocket disconnected")
+        if t != "websocket.receive":
+            raise RuntimeError(f"unexpected websocket event: {t}")
+        text = msg.get("text")
+        if text is None:
+            raise RuntimeError("expected text websocket frame")
+        return str(text)
+
+    async def send_text(self, text: str) -> None:
+        if self._closed:
+            return
+        await self._send({"type": "websocket.send", "text": text})
+
+    async def send_bytes(self, data: bytes) -> None:
+        if self._closed:
+            return
+        await self._send({"type": "websocket.send", "bytes": data})
+
+    async def close(self, code: int = 1000) -> None:
+        if self._closed:
+            return
+        await self._send({"type": "websocket.close", "code": int(code)})
+        self._closed = True
+
+
 def _run_handle_rsgi_blocking(
     app_rsgi: Callable[[Any, Any], Any],
     rscope: Any,
@@ -194,11 +256,19 @@ class _RsgiProtocol:
 
 async def asgi_to_rsgi(
     app_rsgi: Callable[[Any, Any], Any],
+    app_ws: Callable[[dict[str, Any], Any, Any], Any] | None,
     scope: dict[str, Any],
     receive: Any,
     send: Any,
 ) -> None:
-    if scope.get("type") != "http":
+    st = scope.get("type")
+    if st == "websocket":
+        if app_ws is None:
+            await send({"type": "websocket.close", "code": 1000})
+            return
+        await app_ws(scope, receive, send)
+        return
+    if st != "http":
         return
     body = b""
     while True:
@@ -249,7 +319,14 @@ def build_asgi_caller(framework_app: Any) -> Callable[..., Any]:
         inner = getattr(c, "_app", c)
         return inner.handle_rsgi(s, p)
 
+    async def _ws(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        h = getattr(framework_app, "_handle_asgi_websocket", None)
+        if h is None or not callable(h):
+            await send({"type": "websocket.close", "code": 1000})
+            return
+        await h(scope, receive, send)
+
     async def asgi3(scope: dict[str, Any], receive: Any, send: Any) -> None:
-        await asgi_to_rsgi(_rsgi, scope, receive, send)
+        await asgi_to_rsgi(_rsgi, _ws, scope, receive, send)
 
     return asgi3
