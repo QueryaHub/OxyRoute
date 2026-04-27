@@ -70,3 +70,37 @@ def test_rsgi_405_does_not_consume_body() -> None:
         assert proto.sent[-1][1] == 405
 
     asyncio.run(_run())
+
+
+def test_rsgi_matched_get_without_body_param_skips_body_read() -> None:
+    app = App()
+
+    @app.get("/ok")
+    def ok() -> str:
+        return "ok"
+
+    async def _run() -> None:
+        proto = _ProbeProtocol()
+        await app.__rsgi__(_scope("GET", "/ok"), proto)
+        assert proto.body_calls == 0
+        assert proto.sent
+        assert proto.sent[-1][1] == 200
+
+    asyncio.run(_run())
+
+
+def test_rsgi_reads_body_when_handler_accepts_body_param() -> None:
+    app = App()
+
+    @app.post("/echo", read_json_body=False)
+    def echo(body: bytes) -> str:
+        return str(len(body))
+
+    async def _run() -> None:
+        proto = _ProbeProtocol()
+        await app.__rsgi__(_scope("POST", "/echo"), proto)
+        assert proto.body_calls == 1
+        assert proto.sent
+        assert proto.sent[-1][1] == 200
+
+    asyncio.run(_run())
