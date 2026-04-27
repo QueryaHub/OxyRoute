@@ -33,7 +33,7 @@ pub struct RouteEntry {
     pub is_async: bool,
     pub require_jwt: bool,
     pub jwt_secret: Option<String>,
-    pub algs: Vec<jsonwebtoken::Algorithm>,
+    pub algs: Arc<[jsonwebtoken::Algorithm]>,
     /// `None` in Python → no issuer check; else `set_issuer` in jsonwebtoken.
     pub jwt_issuer: Option<String>,
     /// `None` in Python → `validate_aud` disabled for this route.
@@ -46,14 +46,14 @@ pub struct RouteEntry {
     /// When set, body is parsed as form data (``application/x-www-form-urlencoded`` or ``multipart/form-data``), not JSON.
     pub read_form_body: bool,
     /// Dependency `name` -> factory callable (linear order; resolved in order, then user handler).
-    pub dep_names: Vec<String>,
-    pub dep_factories: Vec<Py<PyAny>>,
-    pub dep_is_async: Vec<bool>,
+    pub dep_names: Arc<[String]>,
+    pub dep_factories: Arc<[Py<PyAny>]>,
+    pub dep_is_async: Arc<[bool]>,
     /// Per factory: pass a `request` context dict (see `build_request_context` in dispatch).
-    pub dep_wants_request: Vec<bool>,
+    pub dep_wants_request: Arc<[bool]>,
     /// From `inspect.signature(handler)`: which parameter names the handler accepts (excluding
     /// `*args` / only `*`-only); used to forward only matching dependency results.
-    pub handler_param_names: HashSet<String>,
+    pub handler_param_names: Arc<HashSet<String>>,
     /// Handler has `**kwargs` (pass all dependency kwargs).
     pub handler_varkw: bool,
 }
