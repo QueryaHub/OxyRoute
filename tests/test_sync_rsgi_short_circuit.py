@@ -6,8 +6,6 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
-from typing import Any
-
 
 from oxyroute import App
 
