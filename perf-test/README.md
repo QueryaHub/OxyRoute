@@ -39,11 +39,33 @@ Minimal comparison on `GET /` returning plain text, both served by
 - OxyRoute: `--interface rsgi`
 - FastAPI: `--interface asgi`
 
+## Setup
+
+Run these from the **repository root** (the directory that contains `pyproject.toml`). If you `cd perf-test` first, editable installs and `uv sync` must still be run from the parent, or use `uv pip install -e "..[bench]"`.
+
 ```bash
 cd /path/to/OxyRoute
-uv sync --all-extras
+uv sync --extra dev --extra bench
+# or: uv sync --all-extras
+# or: uv pip install -e ".[bench]"
+# wrk: sudo apt install wrk  /  brew install wrk
+```
+
+## Run (`bench_hello.sh`)
+
+From the repository root:
+
+```bash
 ./perf-test/bench_hello.sh
 ```
+
+From inside `perf-test/` (same effect):
+
+```bash
+bash bench_hello.sh
+```
+
+(Ensure the venv has `oxyroute` and `fastapi`— simplest is to stay at repo root and use the paths above.)
 
 Optional environment knobs for `bench_hello.sh`:
 

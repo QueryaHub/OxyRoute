@@ -71,7 +71,7 @@ main() {
   oxy=$(_bench "oxyroute" "app_oxyroute:app" "rsgi")
   local fa
   if ! python3 -c "import fastapi" 2>/dev/null; then
-    echo "FastAPI not installed; install with: uv pip install -e \".[bench]\""
+    echo "FastAPI not installed. From the repo root: uv sync --extra bench  (or uv pip install -e \".[bench]\")" >&2
     echo "OxyRoute Requests/sec: ${oxy}"
     exit 0
   fi
