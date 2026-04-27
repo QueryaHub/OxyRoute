@@ -7,6 +7,7 @@ import threading
 from collections import deque
 from typing import Any
 
+import pytest
 from oxyroute import App
 
 
@@ -93,3 +94,85 @@ def test_asgi_websocket_sync_handler_runs_off_loop_thread() -> None:
     asyncio.run(_run())
     assert sent[0]["type"] == "websocket.accept"
     assert sent[1]["type"] == "websocket.close"
+
+
+def test_asgi_websocket_unknown_path_closes() -> None:
+    app = App()
+    sent: list[dict[str, Any]] = []
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "websocket.connect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "websocket",
+        "path": "/missing",
+        "headers": [],
+        "query_string": b"",
+        "scheme": "ws",
+    }
+
+    asyncio.run(app(scope, receive, send))
+    assert sent == [{"type": "websocket.close", "code": 1000}]
+
+
+def test_asgi_websocket_accept_disconnect_before_connect_raises() -> None:
+    app = App()
+
+    @app.websocket("/ws")
+    async def ws(sock: Any) -> None:
+        await sock.accept()
+
+    incoming: deque[dict[str, Any]] = deque([{"type": "websocket.disconnect", "code": 1000}])
+
+    async def receive() -> dict[str, Any]:
+        return incoming.popleft()
+
+    async def send(_message: dict[str, Any]) -> None:
+        return None
+
+    scope = {
+        "type": "websocket",
+        "path": "/ws",
+        "headers": [],
+        "query_string": b"",
+        "scheme": "ws",
+    }
+
+    with pytest.raises(RuntimeError, match="disconnected before accept"):
+        asyncio.run(app(scope, receive, send))
+
+
+def test_asgi_websocket_receive_text_non_text_frame_raises() -> None:
+    app = App()
+
+    @app.websocket("/ws")
+    async def ws(sock: Any) -> None:
+        await sock.accept()
+        await sock.receive_text()
+
+    incoming: deque[dict[str, Any]] = deque(
+        [
+            {"type": "websocket.connect"},
+            {"type": "websocket.receive", "bytes": b"x"},
+        ]
+    )
+
+    async def receive() -> dict[str, Any]:
+        return incoming.popleft()
+
+    async def send(_message: dict[str, Any]) -> None:
+        return None
+
+    scope = {
+        "type": "websocket",
+        "path": "/ws",
+        "headers": [],
+        "query_string": b"",
+        "scheme": "ws",
+    }
+
+    with pytest.raises(RuntimeError, match="expected text websocket frame"):
+        asyncio.run(app(scope, receive, send))
