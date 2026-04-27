@@ -211,11 +211,7 @@ impl WebSocket {
     }
 
     /// Send a JSON-serialised object as a text frame (uses :func:`json.dumps`).
-    fn send_json<'py>(
-        &self,
-        py: Python<'py>,
-        data: Py<PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
+    fn send_json<'py>(&self, py: Python<'py>, data: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
         let transport = self.transport_clone(py)?;
         let json_mod = py.import("json")?;
         let dumped = json_mod.call_method1("dumps", (data.bind(py),))?;
@@ -230,25 +226,31 @@ impl WebSocket {
         })
     }
 
-    /// Close the connection. ``code`` defaults to 1000 (normal closure). Idempotent.
+    /// Close the connection. ``code`` defaults to 1000 (normal closure).
+    ///
+    /// Returns an awaitable that completes immediately so handlers can use
+    /// ``await ws.close()``. Idempotent — repeated calls are no-ops.
     #[pyo3(signature = (code=None))]
-    fn close(&self, py: Python<'_>, code: Option<i32>) -> PyResult<Py<PyAny>> {
-        {
+    fn close<'py>(&self, py: Python<'py>, code: Option<i32>) -> PyResult<Bound<'py, PyAny>> {
+        let already_closed = {
             let mut g = self.closed.lock();
-            if *g {
-                return Ok(py.None());
-            }
+            let was = *g;
             *g = true;
+            was
+        };
+        if !already_closed {
+            let st = code.unwrap_or(1000);
+            let _ = self
+                .protocol
+                .bind(py)
+                .call_method1("close", (st,))
+                .map_err(|e| {
+                    log::debug!(target: "oxyroute", "websocket close ignored: {e}");
+                    e
+                });
         }
-        let st = code.unwrap_or(1000);
-        let _ = self
-            .protocol
-            .bind(py)
-            .call_method1("close", (st,))
-            .map_err(|e| {
-                log::debug!(target: "oxyroute", "websocket close ignored: {e}");
-                e
-            });
-        Ok(py.None())
+        pyo3_async_runtimes::tokio::future_into_py(py, async {
+            Python::with_gil(|py| Ok(py.None()))
+        })
     }
 }
