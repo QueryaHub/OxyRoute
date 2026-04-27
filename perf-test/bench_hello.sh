@@ -87,16 +87,16 @@ main() {
   fi
   fa=$(_bench "fastapi" "app_fastapi:app" "asgi")
 
-  local pct
-  pct=$("${PYTHON}" -c "o=float('${oxy}'); f=float('${fa}');
+  local stats
+  stats=$("${PYTHON}" -c "o=float('${oxy}'); f=float('${fa}');
 if f <= 0:
-  print('n/a')
+  print('ratio=n/a uplift=n/a')
 else:
-  print(f'{(o/f-1.0)*100.0:+.2f}')")
+  print(f'ratio={o/f:.2f}x uplift={(o/f-1.0)*100.0:+.2f}%')")
 
   echo "OxyRoute  RSGI  Requests/sec: ${oxy}"
   echo "FastAPI   ASGI  Requests/sec: ${fa}"
-  echo "Delta (OxyRoute vs FastAPI): ${pct}%"
+  echo "Ratio / Relative uplift: ${stats}"
 }
 
 main "$@"
