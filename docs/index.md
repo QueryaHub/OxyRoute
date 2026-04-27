@@ -37,6 +37,7 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 
 | Topic | Description |
 |--------|-------------|
+| [Usage guide](usage.md) | End-to-end reference: install, run, routing, bodies, responses, middleware, CORS/CSRF/JWT, WebSockets, production notes |
 | [Installation](installation.md) | `pip`, `oxyroute[dev]`, building with Cargo/maturin, troubleshooting |
 | [RSGI and Granian](rsgi.md) | Why RSGI, `__rsgi__`, lifespan hooks, spec link |
 | [Routing](routing.md) | Path patterns, methods, 404s |
@@ -46,12 +47,13 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 | [CSRF](csrf.md) | Double-submit, `apply_csrf`, `csrf_layer` + CORS |
 | [JWT](jwt.md) | `require_jwt`, HS* / RSA / EC PEM, `decode_jwt_hs` (HS* tests) |
 | [SSE](sse.md) | `send_sse`, event framing, streaming caveats |
+| [WebSockets](websocket.md) | Native RSGI `@app.websocket(path)` and `oxyroute.WebSocket` |
 | [HTTP/2 with Granian](http2.md) | Transport guarantees vs server/proxy responsibilities |
 | [Dependencies](dependencies.md) | `Depends`, `dependencies=[...]`, `freeze` |
 | [OpenAPI](openapi.md) | `openapi.json` route, title, `openapi_json()` |
 | [Development](development.md) | Tests, CI, PyPI releases (tag `v*`), clippy, pytest |
 | [Branching and PRs](development-workflow.md) | `dev` as base, issue branches, `Closes #N`, no mixing code with `ISSUE_BACKLOG` in one commit |
-| [Feature gaps (research)](feature.md) | What is missing vs a “full” HTTP framework (multipart, WS, sub-routers, etc.) — Russian |
+| [Feature gaps (research)](feature.md) | What is missing vs a “full” HTTP framework and what has been implemented — Russian |
 | [Contributing](../CONTRIBUTING.md) | Local setup, issue backlog, GitHub `gh` workflow |
 
 [← Back to project README](../README.md)

@@ -12,6 +12,7 @@ instance to obtain an ASGI 3 callable that proxies into the native RSGI dispatch
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import threading
 from collections.abc import Callable
@@ -98,6 +99,9 @@ def _run_handle_rsgi_blocking(
 ) -> None:
     async def _inner() -> None:
         c = app_rsgi(rscope, proto)
+        # Native ``handle_rsgi`` may return ``None`` (sync short-circuit: openapi / 4xx) or a Future.
+        if c is None or not inspect.isawaitable(c):
+            return
         await c
 
     loop = getattr(_BLOCKING_LOOP_LOCAL, "loop", None)
@@ -195,7 +199,11 @@ class _RsgiProtocol:
         self.status = 200
 
     def _enqueue(self, message: dict[str, Any]) -> None:
-        self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+        # This method runs from the executor thread that drives the native RSGI
+        # dispatcher. Wait until the main loop has actually queued the ASGI
+        # message so the final sentinel cannot overtake response.start/body on
+        # Python 3.14's event-loop scheduling.
+        asyncio.run_coroutine_threadsafe(self._queue.put(message), self._loop).result()
 
     def __call__(self) -> Any:
         async def _body() -> bytes:
