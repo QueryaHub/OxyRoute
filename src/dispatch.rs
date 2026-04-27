@@ -145,6 +145,13 @@ async fn send_python_error(
     send_internal_error(protocol, method, path, err).await
 }
 
+fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) {
+    let mut st = state.write();
+    if st.compiled.is_none() {
+        st.compiled = Some(Arc::new(st.snapshot_routers()));
+    }
+}
+
 pub async fn run_rsgi(
     state: Arc<RwLock<AppState>>,
     scope: Py<PyAny>,
@@ -249,6 +256,9 @@ pub async fn run_rsgi(
             return send_handler_map(&protocol, is_head, mapped).await;
         }
     }
+    // Auto-enable compiled route snapshot on first request to keep hot-path matching lock-free
+    // even when users forget to call `freeze()` explicitly.
+    ensure_compiled_snapshot(&state);
     let route_out: Option<(usize, HashMap<String, String>)> = {
         let st = state.read();
         match match_route(&st, &method, &path) {
