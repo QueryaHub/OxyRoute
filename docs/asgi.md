@@ -8,9 +8,9 @@ The module `oxyroute.asgi` builds a minimal RSGI-shaped `scope` / `protocol` and
 
 ## How responses get back to ASGI
 
-The RSGI response helpers on the protocol object are **synchronous** from the Rust side. The ASGI implementation schedules `send` coroutines on the **ASGI process’s** event loop: that loop is captured in the protocol and native code uses `asyncio.run_coroutine_threadsafe` + `result()` to run each `send` on it.
+The RSGI response helpers on the protocol object are **synchronous** from the Rust side. The ASGI implementation bridges this through a thread-safe outgoing queue: sync `response_*` calls enqueue ASGI messages from the worker thread, and an async drain task on the main loop performs `send(...)` in order.
 
-**Why the bridge does not `await` on that loop directly:** Awaiting the native `handle_rsgi` coroutine on the same loop that must drain `run_coroutine_threadsafe` can **deadlock** (the loop is blocked in `await` and never runs the scheduled `send` tasks). The bridge therefore runs `handle_rsgi` in a **thread-pool** worker using `asyncio.run()` on a **separate** event loop, while the protocol still targets the main ASGI loop for `send` scheduling.
+**Why the bridge does not `await` on that loop directly:** Awaiting the native `handle_rsgi` coroutine on the same loop that must process outgoing messages can **deadlock**. The bridge therefore runs `handle_rsgi` in a **thread-pool** worker using `asyncio.run()` on a **separate** event loop, while the main ASGI loop drains the queued `http.response.*` events.
 
 **Implications:** This bridge is a **practical adapter**, not a full reimplementation of RSGI under every ASGI host. Prefer **RSGI/Granian** for production with OxyRoute if you can. With **Uvicorn**, use a **single worker** process unless you are sure the combination is safe in your app (the usual `workers=N` + in-process `asyncio` footguns can still apply to third-party `asyncio` use).
 
