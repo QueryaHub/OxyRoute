@@ -42,23 +42,6 @@ pub async fn send_empty(
     })
 }
 
-pub async fn send_bytes(
-    protocol: &Py<PyAny>,
-    status: u16,
-    body: &[u8],
-    content_type: &str,
-) -> PyResult<PyObject> {
-    if body.is_empty() {
-        return send_empty(protocol, status, Some(content_type)).await;
-    }
-    Python::with_gil(|py| {
-        let p = protocol.bind(py);
-        let h = build_headers_ct(py, Some(content_type))?;
-        p.getattr("response_bytes")?.call1((status, h, body))?;
-        Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
-    })
-}
-
 /// 405 with [`Allow`][1] and a small plain body (RFC 9110 §15.5.6).
 ///
 /// [1]: https://www.rfc-editor.org/rfc/rfc9110#name-allow
@@ -121,19 +104,6 @@ pub async fn send_head_simple(
     send_empty_with_header_pairs(protocol, status, headers).await
 }
 
-/// Same as [`send_head_simple`] for structured responses: strip body, set `content-length` from `body.len()`.
-pub async fn send_head_with_headers(
-    protocol: &Py<PyAny>,
-    status: u16,
-    full_body: &[u8],
-    mut headers: Vec<(String, String)>,
-) -> PyResult<PyObject> {
-    let len = full_body.len();
-    headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-length"));
-    headers.push(("content-length".to_string(), len.to_string()));
-    send_empty_with_header_pairs(protocol, status, headers).await
-}
-
 fn build_header_list_from_pairs<'py>(
     py: Python<'py>,
     pairs: &[(String, String)],
@@ -168,4 +138,83 @@ fn build_headers_ct<'py>(
             Ok(PyList::new(py, [pair])?)
         }
     }
+}
+
+// ---------- inline (sync, GIL-already-held) RSGI dispatch helpers ----------
+
+/// Sync `protocol.response_bytes(...)`; falls back to `send_empty_sync` on empty body.
+pub fn send_bytes_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    body: &[u8],
+    content_type: &str,
+) -> PyResult<()> {
+    if body.is_empty() {
+        return send_empty_sync(py, protocol, status, Some(content_type));
+    }
+    let p = protocol.bind(py);
+    let h = build_headers_ct(py, Some(content_type))?;
+    p.getattr("response_bytes")?.call1((status, h, body))?;
+    Ok(())
+}
+
+/// Sync equivalent of [`send_empty`].
+pub fn send_empty_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    content_type: Option<&str>,
+) -> PyResult<()> {
+    let p = protocol.bind(py);
+    let h = build_headers_ct(py, content_type)?;
+    p.getattr("response_empty")?.call1((status, h))?;
+    Ok(())
+}
+
+/// Sync equivalent of [`send_with_headers`].
+pub fn send_with_headers_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    body: &[u8],
+    headers: Vec<(String, String)>,
+) -> PyResult<()> {
+    let p = protocol.bind(py);
+    let h = build_header_list_from_pairs(py, &headers)?;
+    if body.is_empty() {
+        p.getattr("response_empty")?.call1((status, h))?;
+    } else {
+        p.getattr("response_bytes")?.call1((status, h, body))?;
+    }
+    Ok(())
+}
+
+/// HEAD: no body, but `content-length` for `full_body_len`.
+pub fn send_head_simple_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    full_body_len: usize,
+    content_type: &str,
+) -> PyResult<()> {
+    let headers = vec![
+        ("content-type".to_string(), content_type.to_string()),
+        ("content-length".to_string(), full_body_len.to_string()),
+    ];
+    send_with_headers_sync(py, protocol, status, b"", headers)
+}
+
+/// HEAD with arbitrary headers; strips body, sets `content-length` from `full_body.len()`.
+pub fn send_head_with_headers_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    full_body: &[u8],
+    mut headers: Vec<(String, String)>,
+) -> PyResult<()> {
+    let len = full_body.len();
+    headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-length"));
+    headers.push(("content-length".to_string(), len.to_string()));
+    send_with_headers_sync(py, protocol, status, b"", headers)
 }
