@@ -17,7 +17,7 @@ mod state;
 mod token;
 mod websocket;
 
-use dispatch::run_rsgi;
+use dispatch::{run_rsgi, try_rsgi_sync_short_circuit};
 use state::AppState;
 
 type ParsedDependencies = (Vec<String>, Vec<Py<PyAny>>, Vec<bool>, Vec<bool>);
@@ -374,6 +374,9 @@ impl App {
         scope: &Bound<'py, PyAny>,
         protocol: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        if let Some(obj) = try_rsgi_sync_short_circuit(py, &this.state, scope, protocol)? {
+            return Ok(obj.into_bound(py));
+        }
         let state = this.state.clone();
         let scope_py: Py<PyAny> = scope.as_any().clone().unbind();
         let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();

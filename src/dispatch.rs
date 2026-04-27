@@ -156,6 +156,94 @@ fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) {
     }
 }
 
+/// Synchronous RSGI handling for **openapi**, **404**, and **405** only: no `protocol()` body read
+/// and no `future_into_py` outer bridge (saves a Tokio task + asyncio Future on these paths).
+///
+/// Returns `Ok(None)` if [`run_rsgi`] (async) must be used. Middleware always defers to async.
+pub fn try_rsgi_sync_short_circuit(
+    py: Python<'_>,
+    state: &Arc<RwLock<AppState>>,
+    scope: &Bound<'_, PyAny>,
+    protocol: &Bound<'_, PyAny>,
+) -> PyResult<Option<PyObject>> {
+    let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
+    let proto: String = scope.getattr("proto")?.extract()?;
+    if proto == "websocket" {
+        return Ok(None);
+    }
+    if proto != "http" {
+        return Ok(Some(py.None()));
+    }
+    let method: String = scope.getattr("method")?.extract()?;
+    let path: String = scope.getattr("path")?.extract()?;
+    let is_head = method == "HEAD";
+    if (method == "GET" || method == "HEAD") && path == "/openapi.json" {
+        let (inc, doc) = {
+            let st = state.read();
+            if !st.include_openapi {
+                (false, String::new())
+            } else {
+                let oa = st.openapi.lock();
+                (true, oa.to_string())
+            }
+        };
+        if inc {
+            if is_head {
+                response::send_head_simple_sync(
+                    py,
+                    &protocol_py,
+                    200,
+                    doc.len(),
+                    "application/json; charset=utf-8",
+                )?;
+            } else {
+                response::send_str_sync(
+                    py,
+                    &protocol_py,
+                    200,
+                    &doc,
+                    "application/json; charset=utf-8",
+                )?;
+            }
+            return Ok(Some(py.None()));
+        }
+    }
+    if state.read().middleware.is_some() {
+        return Ok(None);
+    }
+    ensure_compiled_snapshot(state);
+    let route_out: Option<(usize, HashMap<String, String>)> = {
+        let st = state.read();
+        match match_route(&st, &method, &path) {
+            None => {
+                return Err(pyo3::exceptions::PyValueError::new_err("method"));
+            }
+            Some(m) => m,
+        }
+    };
+    match route_out {
+        Some((_, _)) => Ok(None),
+        None => {
+            let m = {
+                let st = state.read();
+                methods_matching_path(&st, &path)
+            };
+            if m.is_empty() {
+                response::send_text_sync(
+                    py,
+                    &protocol_py,
+                    404,
+                    "Not Found",
+                    "text/plain; charset=utf-8",
+                )?;
+            } else {
+                response::send_405_method_not_allowed_sync(py, &protocol_py, &m)?;
+            }
+            Ok(Some(py.None()))
+        }
+    }
+}
+
 pub async fn run_rsgi(
     state: Arc<RwLock<AppState>>,
     scope: Py<PyAny>,
@@ -667,14 +755,15 @@ pub async fn run_rsgi(
             dep_out.push(o);
         }
     }
-    let should_pass_form = read_form_body && (handler_varkw || handler_param_names.contains("form"));
-    let should_pass_files = read_form_body && (handler_varkw || handler_param_names.contains("files"));
+    let should_pass_form =
+        read_form_body && (handler_varkw || handler_param_names.contains("form"));
+    let should_pass_files =
+        read_form_body && (handler_varkw || handler_param_names.contains("files"));
     let should_pass_protocol = handler_varkw || handler_param_names.contains("protocol");
     let should_pass_body = !read_form_body && !body_bytes.is_empty() && body_json.is_none();
-    let has_dep_kwargs = dep_names
-        .iter()
-        .enumerate()
-        .any(|(i, name)| dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(name)));
+    let has_dep_kwargs = dep_names.iter().enumerate().any(|(i, name)| {
+        dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(name))
+    });
     let should_use_kwargs = !param_map.is_empty()
         || !query_map.is_empty()
         || has_dep_kwargs
@@ -949,7 +1038,6 @@ fn send_handler_map_inline(
     }
 }
 
-
 /// `if_absent`: only add a header if no same-name (case-insensitive) header is already present
 /// (``security`` preset). `false` replaces/merges like CORS (``replace`` / duplicate header names).
 fn merge_config_response_headers(
@@ -1139,7 +1227,10 @@ fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<
         ));
     }
     if let Ok(buf) = b.downcast::<PyBytes>() {
-        return Ok((buf.as_bytes().to_vec(), "application/octet-stream".to_string()));
+        return Ok((
+            buf.as_bytes().to_vec(),
+            "application/octet-stream".to_string(),
+        ));
     }
     if let Ok(s) = b.extract::<String>() {
         return Ok((s.into_bytes(), "text/plain; charset=utf-8".to_string()));

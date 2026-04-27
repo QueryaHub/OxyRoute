@@ -22,9 +22,7 @@ pub async fn send_str(
     content_type: &str,
 ) -> PyResult<PyObject> {
     Python::with_gil(|py| {
-        let p = protocol.bind(py);
-        let h = build_headers_ct(py, Some(content_type))?;
-        p.getattr("response_str")?.call1((status, h, text))?;
+        send_str_sync(py, protocol, status, text, content_type)?;
         Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
     })
 }
@@ -35,9 +33,7 @@ pub async fn send_empty(
     content_type: Option<&str>,
 ) -> PyResult<PyObject> {
     Python::with_gil(|py| {
-        let p = protocol.bind(py);
-        let h = build_headers_ct(py, content_type)?;
-        p.getattr("response_empty")?.call1((status, h))?;
+        send_empty_sync(py, protocol, status, content_type)?;
         Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
     })
 }
@@ -49,14 +45,10 @@ pub async fn send_405_method_not_allowed(
     protocol: &Py<PyAny>,
     allow: &[String],
 ) -> PyResult<PyObject> {
-    let headers = vec![
-        ("allow".to_string(), allow.join(", ")),
-        (
-            "content-type".to_string(),
-            "text/plain; charset=utf-8".to_string(),
-        ),
-    ];
-    send_with_headers(protocol, 405, b"Method Not Allowed", headers).await
+    Python::with_gil(|py| {
+        send_405_method_not_allowed_sync(py, protocol, allow)?;
+        Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
+    })
 }
 
 /// RSGI `response_bytes` / `response_empty` with a full `[(name, value), ...]` header list.
@@ -142,6 +134,34 @@ fn build_headers_ct<'py>(
 
 // ---------- inline (sync, GIL-already-held) RSGI dispatch helpers ----------
 
+/// Sync `protocol.response_str(...)`; for [`try_rsgi_sync_short_circuit`] and async wrappers.
+pub fn send_str_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    text: &str,
+    content_type: &str,
+) -> PyResult<()> {
+    let p = protocol.bind(py);
+    let h = build_headers_ct(py, Some(content_type))?;
+    p.getattr("response_str")?.call1((status, h, text))?;
+    Ok(())
+}
+
+/// Sync [`send_text`]: empty string uses `response_empty`.
+pub fn send_text_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    text: &str,
+    content_type: &str,
+) -> PyResult<()> {
+    if text.is_empty() {
+        return send_empty_sync(py, protocol, status, Some(content_type));
+    }
+    send_str_sync(py, protocol, status, text, content_type)
+}
+
 /// Sync `protocol.response_bytes(...)`; falls back to `send_empty_sync` on empty body.
 pub fn send_bytes_sync(
     py: Python<'_>,
@@ -188,6 +208,22 @@ pub fn send_with_headers_sync(
         p.getattr("response_bytes")?.call1((status, h, body))?;
     }
     Ok(())
+}
+
+/// Sync 405 with `Allow` and plain body.
+pub fn send_405_method_not_allowed_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    allow: &[String],
+) -> PyResult<()> {
+    let headers = vec![
+        ("allow".to_string(), allow.join(", ")),
+        (
+            "content-type".to_string(),
+            "text/plain; charset=utf-8".to_string(),
+        ),
+    ];
+    send_with_headers_sync(py, protocol, 405, b"Method Not Allowed", headers)
 }
 
 /// HEAD: no body, but `content-length` for `full_body_len`.
