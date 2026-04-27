@@ -12,7 +12,6 @@
 - **JWT (HMAC)** verification on the Rust path before your handler runs (`require_jwt`, HS256/384/512)
 - **Optional** `GET /openapi.json` with a minimal OpenAPI-style document
 - **Dependencies**: linear list of named factories (`Depends`, sync or async) passed as kwargs
-- **Optional ASGI 3** bridge: `async def __call__(scope, receive, send)` for servers that speak ASGI (see [docs/asgi.md](docs/asgi.md))
 - Native extension wheel (abi3) for **Python ≥ 3.10**
 
 Full documentation: **[docs/index.md](docs/index.md)**
@@ -73,11 +72,11 @@ granian --interface rsgi examples.rsgi_app:app
 
 Per-worker setup (`__rsgi_init__`) is shown in [examples/rsgi_lifespan_app.py](examples/rsgi_lifespan_app.py) and [docs/rsgi.md](docs/rsgi.md#lifespan-optional).
 
-ASGI and other servers are covered in [docs/asgi.md](docs/asgi.md).
+OxyRoute v0.3.0 supports **only** Granian RSGI; the legacy ASGI bridge (`uvicorn` / `granian --interface asgi`) was removed.
 
 ## Project layout
 
-- `oxyroute/` — Python package (`App`, `Depends`, optional ASGI bridge)
+- `oxyroute/` — Python package (`App`, `Depends`)
 - `src/` — Rust extension (`_oxyroute`, routing, dispatch, JWT helpers)
 - `docs/` — detailed English documentation
 - `tests/` — pytest suite (run from a temp directory or an installed wheel so the source tree does not shadow the package; see [docs/development.md](docs/development.md))
