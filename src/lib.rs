@@ -15,8 +15,9 @@ mod response;
 mod schema;
 mod state;
 mod token;
+mod websocket;
 
-use dispatch::run_rsgi;
+use dispatch::{run_rsgi, try_rsgi_sync_short_circuit};
 use state::AppState;
 
 type ParsedDependencies = (Vec<String>, Vec<Py<PyAny>>, Vec<bool>, Vec<bool>);
@@ -237,24 +238,25 @@ impl App {
             .extract()?;
         let (handler_param_names, handler_varkw) = handler_signature_kinds(py, handler.bind(py))?;
         let mut st = self.state.write();
-        let idx = st.routes.len();
-        st.routes.push(state::RouteEntry {
+        let routes = Arc::make_mut(&mut st.routes);
+        let idx = routes.len();
+        routes.push(state::RouteEntry {
             handler,
             is_async,
             require_jwt,
             jwt_secret,
-            algs: algs.clone(),
+            algs: Arc::<[jsonwebtoken::Algorithm]>::from(algs.clone()),
             jwt_issuer,
             jwt_audience,
             jwt_leeway: jwt_leeway.unwrap_or(60),
             jwt_cookie,
             read_json_body,
             read_form_body,
-            dep_names,
-            dep_factories,
-            dep_is_async,
-            dep_wants_request,
-            handler_param_names,
+            dep_names: Arc::<[String]>::from(dep_names),
+            dep_factories: Arc::<[Py<PyAny>]>::from(dep_factories),
+            dep_is_async: Arc::<[bool]>::from(dep_is_async),
+            dep_wants_request: Arc::<[bool]>::from(dep_wants_request),
+            handler_param_names: Arc::new(handler_param_names),
             handler_varkw,
         });
         let request_schema: Option<serde_json::Value> = match body_schema_json
@@ -277,6 +279,41 @@ impl App {
             m.insert(&path, idx)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))?;
         }
+        // Keep auto-compiled routing snapshots fresh when routes are added before explicit freeze().
+        st.compiled = None;
+        Ok(())
+    }
+
+    /// Register a WebSocket route. ``handler`` receives a single
+    /// :class:`oxyroute._oxyroute.WebSocket` argument; sync handlers run inline, async
+    /// handlers are awaited on Granian's loop. Same matchit ``/ws/:room`` syntax as HTTP routes.
+    fn add_websocket_route(
+        &self,
+        py: Python<'_>,
+        path: String,
+        handler: Py<PyAny>,
+    ) -> PyResult<()> {
+        {
+            let st = self.state.read();
+            if st.frozen {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "app is frozen; no more add_websocket_route",
+                ));
+            }
+        }
+        let inspect = py.import("inspect")?;
+        let f = inspect.getattr("iscoroutinefunction")?;
+        let is_async: bool = f.call1((handler.clone_ref(py),))?.extract()?;
+        let mut st = self.state.write();
+        let ws_routes = Arc::make_mut(&mut st.websocket_routes);
+        let idx = ws_routes.len();
+        ws_routes.push(state::WebsocketRoute { handler, is_async });
+        {
+            let mut m = st.websocket.lock();
+            m.insert(&path, idx)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))?;
+        }
+        st.compiled = None;
         Ok(())
     }
 
@@ -338,6 +375,9 @@ impl App {
         scope: &Bound<'py, PyAny>,
         protocol: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        if let Some(obj) = try_rsgi_sync_short_circuit(py, &this.state, scope, protocol)? {
+            return Ok(obj.into_bound(py));
+        }
         let state = this.state.clone();
         let scope_py: Py<PyAny> = scope.as_any().clone().unbind();
         let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
@@ -376,6 +416,7 @@ impl PyDepends {
 fn _oxyroute(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<App>()?;
     m.add_class::<PyDepends>()?;
+    m.add_class::<websocket::WebSocket>()?;
     m.add_function(wrap_pyfunction!(token::decode_jwt_hs, m)?)?;
     Ok(())
 }

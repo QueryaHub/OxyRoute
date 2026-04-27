@@ -21,6 +21,14 @@ Each is a decorator that registers a route and returns the handler unchanged (so
 - If no route matches, the response is **404** with a plain `Not Found` body (from the Rust dispatch layer).
 - Non-`http` RSGI scopes are ignored in the current implementation (no response is sent for unknown `proto` values).
 
+## Compiled routing snapshot
+
+- OxyRoute now **auto-compiles** the route snapshot on the first HTTP request, so hot-path
+  matching uses the lock-free compiled tables even if `freeze()` was not called explicitly.
+- Calling `freeze()` is still supported and remains the strict "no more route registration" switch.
+- If routes are added before `freeze()`, OxyRoute invalidates the previous compiled snapshot and
+  lazily rebuilds it on the next request.
+
 ## OpenAPI and discovery
 
 If OpenAPI is enabled, route registration also updates a minimal OpenAPI document. See [openapi.md](openapi.md).

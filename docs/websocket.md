@@ -1,49 +1,100 @@
-# WebSocket (ASGI spike)
+# WebSockets (native RSGI)
 
-[← Documentation index](index.md)
+OxyRoute v0.3.0 ships a **native RSGI WebSocket** binding — the Granian
+[`RSGIWebsocketProtocol`](https://github.com/emmett-framework/granian/blob/master/granian/rsgi.py)
+is matched and dispatched directly inside the Rust `_oxyroute` extension. There is no ASGI
+bridge: the legacy `--interface asgi` WebSocket path was removed alongside the rest of the
+ASGI shim.
 
-Current WebSocket support in OxyRoute is an **ASGI bridge spike**, not full RSGI-native support yet.
-
-## Current API
-
-Use `@app.websocket(path)` for exact-path handlers on `App.__call__` (ASGI entry):
+## Quick start
 
 ```python
-from oxyroute import App
+from oxyroute import App, WebSocket
 
 app = App()
 
 
-@app.websocket("/ws")
-async def ws(sock):
-    await sock.accept()
-    text = await sock.receive_text()
-    await sock.send_text(f"echo:{text}")
-    await sock.close()
+@app.websocket("/ws/:room")
+async def chat(ws: WebSocket) -> None:
+    await ws.accept()
+    room = ws.path_params["room"]
+    await ws.send_text(f"hello, {room}")
+    while True:
+        msg = await ws.receive_text()
+        if msg == "bye":
+            break
+        await ws.send_text(f"echo:{msg}")
+    await ws.close()
 ```
 
-The handler receives a small `WebSocket` helper with:
+Run it like any other OxyRoute app:
 
-- `accept(subprotocol=None)`
-- `receive()` / `receive_text()`
-- `send_text(text)` / `send_bytes(data)`
-- `close(code=1000)`
+```bash
+granian app:app --interface rsgi --host 127.0.0.1 --port 8000
+```
 
-## Scope and limitations
+## API
 
-- Works on the optional ASGI entry (`app(scope, receive, send)`).
-- **Not** wired into Rust request routing (`run_rsgi`) yet.
-- Path matching is currently exact string match (no path-params router for WS yet).
-- No first-class dependency/JWT/middleware chain for WS handlers in this spike.
+`oxyroute.WebSocket` is a thin Rust pyclass exported by the native module.
 
-## Design split (what lives where)
+| Member | Kind | Description |
+|---|---|---|
+| `scope` | property | The Granian RSGI scope (`proto == "websocket"`). |
+| `path_params` | property | `dict[str, str]` of path parameters extracted by the router. |
+| `is_closed` | property | `True` once `close()` has run or the peer disconnected. |
+| `await ws.accept()` | coroutine | Performs the handshake; required before send/receive. |
+| `await ws.receive()` | coroutine | Returns the next frame as `str` **or** `bytes`. Raises `RuntimeError` if the peer closed. |
+| `await ws.receive_text()` | coroutine | Like `receive`, but raises `ValueError` on a binary frame. |
+| `await ws.receive_bytes()` | coroutine | Like `receive`, but raises `ValueError` on a text frame. |
+| `await ws.send_text(s)` | coroutine | Send a text frame. |
+| `await ws.send_bytes(b)` | coroutine | Send a binary frame. |
+| `await ws.send_json(obj)` | coroutine | `json.dumps(obj)` then `send_text`. |
+| `await ws.close(code=None)` | coroutine | Close the connection (defaults to 1000). Idempotent. |
 
-- **Python/ASGI now:** websocket handshake + frame loop helper and handler dispatch.
-- **Rust/RSGI later:** unified route table, WS protocol lifecycle in native path, shared middleware/auth story.
+Sync handlers are accepted by `@app.websocket(path)` for symmetry but should generally be
+async — Granian dispatches WebSockets on its event loop and most useful patterns require
+`await`.
 
-This keeps a practical testable path now while preserving room for a proper RSGI-native implementation.
+## Routing semantics
 
-## See also
+* WebSocket routes live in their own `matchit::Router`. They never collide with HTTP routes,
+  so `GET /ws/:room` and `WS /ws/:room` can coexist.
+* Path syntax mirrors HTTP routes: `/ws/:room`, `/ws/:room/*rest`. Captured params are
+  available via `ws.path_params`.
+* Unknown WebSocket paths trigger a polite `protocol.close(1000)` (no 404 — close codes are
+  the WebSocket equivalent).
+* Calling `app.freeze()` locks WebSocket route registration the same way it locks HTTP
+  routes; further `@app.websocket(...)` raises `ValueError`.
 
-- [ASGI bridge](asgi.md)
-- [Feature gaps](feature.md)
+## Error handling
+
+* If the handler raises before completing, OxyRoute logs the error and calls
+  `protocol.close(1011)` (server-side error). The peer sees a clean close, never an open
+  connection that hangs.
+* If the **peer** closes (Granian sends `WebsocketMessageType.close`, kind `0`), the next
+  `receive*` raises `RuntimeError("WebSocket closed by peer")` and `ws.is_closed` becomes
+  `True`. A subsequent `await ws.close()` is a no-op (no double close).
+
+## Testing
+
+Drive the dispatcher in-process with mocked Granian-style scope/protocol/transport
+objects — see [`tests/test_websocket_native.py`](../tests/test_websocket_native.py) for a
+worked example. The pattern:
+
+1. Build an `_WSScope` dataclass with `proto = "websocket"`, the request `path`, etc.
+2. Build a mock `protocol` with an `async accept()` returning a transport, a
+   `close(status)` setter, and the transport's `async receive() / send_str / send_bytes`.
+3. Run `await app.handle_rsgi(scope, protocol)` from inside `asyncio.run(...)`.
+
+For end-to-end coverage with a real Granian server use a subprocess test similar to
+[`tests/test_granian_e2e.py`](../tests/test_granian_e2e.py), connecting with a real
+WebSocket client (e.g. `websockets`).
+
+## Migration from the previous ASGI WebSocket spike
+
+The pre-v0.3.0 ASGI WebSocket helper was removed. If you were using it:
+
+* Replace `from oxyroute.asgi import WebSocket` with `from oxyroute import WebSocket`.
+* Drop any `--interface asgi` Granian command lines — OxyRoute is RSGI-only.
+* `await ws.accept(subprotocol="…")` no longer accepts subprotocols (Granian's RSGI
+  WebSocket handshake selects them via headers; document that explicitly if you need it).

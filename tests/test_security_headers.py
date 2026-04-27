@@ -6,6 +6,7 @@ import asyncio
 
 import httpx
 from oxyroute import App, SecurityHeadersConfig
+from tests._rsgi_test_transport import asgi_test_app
 
 
 def test_security_headers_merged_on_get() -> None:
@@ -22,7 +23,7 @@ def test_security_headers_merged_on_get() -> None:
         return "x"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="https://test") as c:
             r = await c.get("/h")
         assert r.status_code == 200
@@ -47,7 +48,7 @@ def test_security_headers_hsts_not_on_http() -> None:
         return "x"
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/h")
         assert r.status_code == 200
@@ -70,7 +71,7 @@ def test_security_headers_does_not_override_response_header() -> None:
         )
 
     async def _run() -> None:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/h")
         assert (r.headers.get("x-frame-options") or "") == "ALLOWALL"

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "oxyroute"
-version = "0.2.0"
+version = "0.3.0"
 description = "RSGI-first web framework: routing, JSON, and JWT in Rust (PyO3), Python handlers"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
@@ -43,12 +43,21 @@ dev = [
     "cryptography>=42",
     "ruff>=0.8",
 ]
+# Hello-world RPS compare vs FastAPI (see perf-test/bench_hello.sh); not required for library use.
+bench = [
+    "fastapi>=0.100",
+    "granian>=1.0",
+    "httpx>=0.27",
+]
 
 [tool.maturin]
 module-name = "oxyroute._oxyroute"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "bench: optional wrk load test; run with OXYROUTE_BENCH=1 and pip install -e .[bench]",
+]
 
 [tool.ruff]
 line-length = 100
