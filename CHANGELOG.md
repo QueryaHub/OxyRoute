@@ -5,7 +5,9 @@ All notable changes to OxyRoute are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - unreleased
+## [Unreleased]
+
+## [0.3.0] - 2026-04-27
 
 ### Added
 
