@@ -117,3 +117,92 @@ def test_asgi_queue_drain_shutdown_when_executor_path_raises() -> None:
         asyncio.run(_run())
     finally:
         asgi_mod._run_handle_rsgi_blocking = original
+
+
+def test_asgi_chunked_request_body_joins_without_quadratic_path_assumption() -> None:
+    app = App()
+
+    @app.patch("/x")
+    def patch_x(json: dict) -> str:
+        return f"p:{json.get('a')}"
+
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "scheme": "http",
+        "method": "PATCH",
+        "path": "/x",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+    }
+
+    incoming = iter(
+        [
+            {"type": "http.request", "body": b'{"a":', "more_body": True},
+            {"type": "http.request", "body": b"7}", "more_body": False},
+        ]
+    )
+    sent: list[dict] = []
+
+    async def receive() -> dict:
+        return next(incoming)
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    async def _run() -> None:
+        await app(scope, receive, send)
+
+    asyncio.run(_run())
+    assert sent[0]["type"] == "http.response.start"
+    assert sent[0]["status"] == 200
+    assert sent[1]["type"] == "http.response.body"
+    assert sent[1]["body"] == b"p:7"
+
+
+def test_asgi_body_limit_enforced_during_chunk_read() -> None:
+    app = App()
+
+    @app.post("/x")
+    def x(body: bytes) -> str:
+        return body.decode("utf-8")
+
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "scheme": "http",
+        "method": "POST",
+        "path": "/x",
+        "query_string": b"",
+        "headers": [],
+    }
+
+    incoming = iter(
+        [
+            {"type": "http.request", "body": b"abc", "more_body": True},
+            {"type": "http.request", "body": b"de", "more_body": False},
+        ]
+    )
+    sent: list[dict] = []
+
+    async def receive() -> dict:
+        return next(incoming)
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    original = asgi_mod._max_body_bytes
+    asgi_mod._max_body_bytes = lambda: 4
+
+    async def _run() -> None:
+        await app(scope, receive, send)
+
+    try:
+        asyncio.run(_run())
+    finally:
+        asgi_mod._max_body_bytes = original
+
+    assert sent[0]["type"] == "http.response.start"
+    assert sent[0]["status"] == 413
+    assert sent[1]["type"] == "http.response.body"
+    assert sent[1]["body"] == b'{"error":"payload too large"}'
