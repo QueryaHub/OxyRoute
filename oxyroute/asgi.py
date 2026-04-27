@@ -168,18 +168,22 @@ def _norm_headers_asgi(
 
 
 class _RsgiProtocol:
-    __slots__ = ("_body", "_loop", "_send", "_status", "status")
+    __slots__ = ("_body", "_loop", "_queue", "_status", "status")
 
-    def __init__(self, body: bytes, send: Any, main_loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self,
+        body: bytes,
+        queue: asyncio.Queue[dict[str, Any] | None],
+        main_loop: asyncio.AbstractEventLoop,
+    ) -> None:
         self._body = body
-        self._send = send
+        self._queue = queue
         self._loop = main_loop
         self._status: int | None = None
         self.status = 200
 
-    def _run_send(self, coro: Any) -> None:
-        f = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        f.result()
+    def _enqueue(self, message: dict[str, Any]) -> None:
+        self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
 
     def __call__(self) -> Any:
         async def _body() -> bytes:
@@ -192,66 +196,54 @@ class _RsgiProtocol:
         self.status = int(status)
         b = body.encode("utf-8")
         h = _norm_headers_asgi(headers)
-
-        async def _go() -> None:
-            await self._send(
-                {
-                    "type": "http.response.start",
-                    "status": int(status),
-                    "headers": h,
-                }
-            )
-            await self._send(
-                {
-                    "type": "http.response.body",
-                    "body": b,
-                }
-            )
-
-        self._run_send(_go())
+        self._enqueue(
+            {
+                "type": "http.response.start",
+                "status": int(status),
+                "headers": h,
+            }
+        )
+        self._enqueue(
+            {
+                "type": "http.response.body",
+                "body": b,
+            }
+        )
 
     def response_bytes(self, status: int, headers: list, body: bytes) -> None:
         self._status = int(status)
         self.status = int(status)
         h = _norm_headers_asgi(headers)
-
-        async def _go() -> None:
-            await self._send(
-                {
-                    "type": "http.response.start",
-                    "status": int(status),
-                    "headers": h,
-                }
-            )
-            await self._send(
-                {
-                    "type": "http.response.body",
-                    "body": body,
-                }
-            )
-
-        self._run_send(_go())
+        self._enqueue(
+            {
+                "type": "http.response.start",
+                "status": int(status),
+                "headers": h,
+            }
+        )
+        self._enqueue(
+            {
+                "type": "http.response.body",
+                "body": body,
+            }
+        )
 
     def response_empty(self, status: int, headers: list) -> None:
         self._status = int(status)
         self.status = int(status)
         h = _norm_headers_asgi(headers)
-
-        async def _go() -> None:
-            await self._send(
-                {
-                    "type": "http.response.start",
-                    "status": int(status),
-                    "headers": h,
-                }
-            )
-            await self._send(
-                {
-                    "type": "http.response.body",
-                }
-            )
-
-        self._run_send(_go())
+        self._enqueue(
+            {
+                "type": "http.response.start",
+                "status": int(status),
+                "headers": h,
+            }
+        )
+        self._enqueue(
+            {
+                "type": "http.response.body",
+            }
+        )
 
 
 async def asgi_to_rsgi(
@@ -295,7 +287,17 @@ async def asgi_to_rsgi(
         hdrs,
     )
     loop = asyncio.get_running_loop()
-    proto = _RsgiProtocol(body, send, loop)
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def _drain_outgoing() -> None:
+        while True:
+            msg = await queue.get()
+            if msg is None:
+                return
+            await send(msg)
+
+    drain_task = asyncio.create_task(_drain_outgoing())
+    proto = _RsgiProtocol(body, queue, loop)
     await loop.run_in_executor(
         None,
         _run_handle_rsgi_blocking,
@@ -303,6 +305,8 @@ async def asgi_to_rsgi(
         rscope,
         proto,
     )
+    await queue.put(None)
+    await drain_task
 
 
 def build_asgi_caller(framework_app: Any) -> Callable[..., Any]:
