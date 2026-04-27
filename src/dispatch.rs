@@ -325,7 +325,7 @@ pub async fn run_rsgi(
         pyo3_async_runtimes::tokio::into_future(aw)
     })?;
     let body_obj: PyObject = read_fut.await?;
-    let body_bytes: Vec<u8> = Python::with_gil(|py| -> PyResult<Vec<u8>> {
+    let mut body_bytes: Vec<u8> = Python::with_gil(|py| -> PyResult<Vec<u8>> {
         let b = body_obj.bind(py);
         if let Ok(x) = b.extract::<Vec<u8>>() {
             return Ok(x);
@@ -521,7 +521,8 @@ pub async fn run_rsgi(
                         .await
                     }
                 };
-                let parsed = match form::parse_multipart(body_bytes.clone(), &boundary).await {
+                let multipart_body = std::mem::take(&mut body_bytes);
+                let parsed = match form::parse_multipart(multipart_body, &boundary).await {
                     Ok(p) => p,
                     Err(e) => {
                         return response::send_text(
