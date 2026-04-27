@@ -206,3 +206,18 @@ def test_asgi_body_limit_enforced_during_chunk_read() -> None:
     assert sent[0]["status"] == 413
     assert sent[1]["type"] == "http.response.body"
     assert sent[1]["body"] == b'{"error":"payload too large"}'
+
+
+def test_asgi_non_http_non_websocket_scope_is_ignored() -> None:
+    app = App()
+    sent: list[dict] = []
+
+    async def receive() -> dict:
+        return {"type": "lifespan.startup"}
+
+    async def send(message: dict) -> None:
+        sent.append(message)
+
+    scope = {"type": "lifespan"}
+    asyncio.run(app(scope, receive, send))
+    assert sent == []
