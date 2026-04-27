@@ -1,6 +1,6 @@
 # Native extension first — prevents circular import with `app` importing `_oxyroute`.
 import oxyroute._oxyroute  # noqa: F401
-from oxyroute._oxyroute import decode_jwt_hs
+from oxyroute._oxyroute import WebSocket, decode_jwt_hs
 from oxyroute.app import App, Depends
 from oxyroute.cors import CORSConfig, apply_cors
 from oxyroute.csrf import CSRFConfig, apply_csrf, csrf_layer
@@ -20,6 +20,7 @@ __all__ = [
     "Response",
     "SSEEvent",
     "SecurityHeadersConfig",
+    "WebSocket",
     "__version__",
     "apply_cors",
     "apply_csrf",
