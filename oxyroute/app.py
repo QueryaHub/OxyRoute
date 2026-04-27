@@ -376,8 +376,15 @@ class App:
         """RSGI worker teardown (no-op in the base class)."""
         return None
 
-    async def __rsgi__(self, scope: Any, protocol: Any) -> None:
-        return await self._app.handle_rsgi(scope, protocol)
+    async def __rsgi__(self, scope: Any, protocol: Any) -> Any:
+        """
+        Granian awaits this coroutine. Native ``handle_rsgi`` may return ``None`` immediately
+        (sync short-circuit for openapi / 404 / 405) or an awaitable (full async path).
+        """
+        r = self._app.handle_rsgi(scope, protocol)
+        if r is None or not inspect.isawaitable(r):
+            return r
+        return await r
 
     def handle_rsgi(self, scope: Any, protocol: Any) -> Any:
         """Forward to the native ``handle_rsgi`` coroutine."""
