@@ -20,6 +20,7 @@ handler(**kwargs)
 | `form` | `read_form_body` is true on **POST**, **PUT**, **PATCH**, or **DELETE** | `dict` of string keys to string values (same last-wins semantics as `query`). Parsed from `application/x-www-form-urlencoded` or non-file parts of `multipart/form-data` |
 | `files` | `read_form_body` is true and the request is `multipart/form-data` | `list` of `dict`s with `name`, `filename` (`str` or missing), `content_type`, and `data` (`bytes`). In-memory only; there is no streaming spool to disk in the current implementation |
 | `body` | Raw body bytes when JSON and form modes are not used | `bytes`. **Not** passed when `read_form_body` is enabled (use `form` / `files` instead) |
+| `protocol` | Handler declares a `protocol` parameter (or `**kwargs`) | Underlying RSGI protocol object for advanced response flows (e.g. SSE via `send_sse`) |
 | `claims` | `require_jwt` is true and the JWT validates | The decoded JSON claims as a Python object (typically a `dict`) |
 | Named dependencies | `dependencies=[("name", factory), ...]` | Return value of each factory, in order (see [dependencies.md](dependencies.md)). Only dependencies whose **names** appear on the route handler’s signature (or `**kwargs`) are passed to the handler—intermediate-only dependencies are not forwarded |
 
@@ -97,3 +98,4 @@ For a configurable **`allow_origins` / `allow_methods` / `allow_headers`** flow 
 - [CORS](cors.md)
 - [Security headers](security-headers.md)
 - [CSRF](csrf.md)
+- [SSE](sse.md)

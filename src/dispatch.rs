@@ -672,6 +672,9 @@ pub async fn run_rsgi(
         } else if !body_bytes.is_empty() && body_json.is_none() {
             kwargs.set_item("body", PyBytes::new(py, &body_bytes))?;
         }
+        if handler_varkw || handler_param_names.contains("protocol") {
+            kwargs.set_item("protocol", protocol.bind(py))?;
+        }
         let res = handler.bind(py).call((), Some(&kwargs))?.unbind();
         Ok((res, is_async))
     }) {
@@ -727,6 +730,12 @@ pub async fn run_rsgi(
 /// Return value of a user handler, mapped to an HTTP body and headers.
 fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
     let b = out.bind(py);
+    if b.getattr("__oxyroute_stream_done__")
+        .and_then(|x| x.extract::<bool>())
+        .unwrap_or(false)
+    {
+        return Ok(HandlerMap::AlreadySent);
+    }
     // Before `extract::<String>`: some non-`str` objects may still coerce in edge cases;
     // `Response` must be recognized first.
     if is_oxyroute_response(py, b)? {
@@ -791,6 +800,7 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
 }
 
 enum HandlerMap {
+    AlreadySent,
     WithHeaders {
         status: u16,
         body: Vec<u8>,
@@ -808,8 +818,12 @@ async fn send_handler_map(
     is_head: bool,
     mapped: HandlerMap,
 ) -> PyResult<PyObject> {
+    if matches!(mapped, HandlerMap::AlreadySent) {
+        return Ok(Python::with_gil(|py| py.None()));
+    }
     if is_head {
         match mapped {
+            HandlerMap::AlreadySent => Ok(Python::with_gil(|py| py.None())),
             HandlerMap::WithHeaders {
                 status,
                 body,
@@ -823,6 +837,7 @@ async fn send_handler_map(
         }
     } else {
         match mapped {
+            HandlerMap::AlreadySent => Ok(Python::with_gil(|py| py.None())),
             HandlerMap::WithHeaders {
                 status,
                 body,
@@ -867,6 +882,7 @@ fn merge_header_pairs_replace(mapped: HandlerMap, extra: &[(String, String)]) ->
         return mapped;
     }
     match mapped {
+        HandlerMap::AlreadySent => HandlerMap::AlreadySent,
         HandlerMap::WithHeaders {
             status,
             body,
@@ -906,6 +922,7 @@ fn merge_header_pairs_if_absent(mapped: HandlerMap, extra: &[(String, String)]) 
         return mapped;
     }
     match mapped {
+        HandlerMap::AlreadySent => HandlerMap::AlreadySent,
         HandlerMap::WithHeaders {
             status,
             body,
