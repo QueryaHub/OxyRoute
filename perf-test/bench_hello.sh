@@ -6,6 +6,16 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Prefer the repo `.venv` interpreter so Granian / FastAPI match `uv sync` results.
+# Plain `python3` is often the system Python and does not see bench extras.
+if [[ -n "${PYTHON:-}" ]]; then
+  :
+elif [[ -x "${ROOT}/.venv/bin/python" ]]; then
+  PYTHON="${ROOT}/.venv/bin/python"
+else
+  PYTHON="python3"
+fi
+
 DURATION="${OXYROUTE_BENCH_DURATION:-5s}"
 THREADS="${OXYROUTE_BENCH_THREADS:-2}"
 CONN="${OXYROUTE_BENCH_CONNECTIONS:-32}"
@@ -17,7 +27,7 @@ if ! command -v wrk >/dev/null 2>&1; then
 fi
 
 _free_port() {
-  python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()"
+  "${PYTHON}" -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()"
 }
 
 _run_wrk() {
@@ -30,7 +40,7 @@ _wait_http() {
   local port="$1"
   local deadline=$((SECONDS + 30))
   while (( SECONDS < deadline )); do
-    if python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${port}/', timeout=0.5).read()" 2>/dev/null; then
+    if "${PYTHON}" -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${port}/', timeout=0.5).read()" 2>/dev/null; then
       return 0
     fi
     sleep 0.05
@@ -41,7 +51,7 @@ _wait_http() {
 _bench() {
   local name="$1" module_path="$2" iface="$3" port
   port="$(_free_port)"
-  local -a cmd=(python3 -m granian "${module_path}" --host 127.0.0.1 --port "${port}" --interface "${iface}" --workers "${WORKERS}")
+  local -a cmd=("${PYTHON}" -m granian "${module_path}" --host 127.0.0.1 --port "${port}" --interface "${iface}" --workers "${WORKERS}")
   # Silence server logs so command substitution only captures the numeric RPS line.
   (
     export PYTHONPATH="${ROOT}"
@@ -70,15 +80,15 @@ main() {
   local oxy
   oxy=$(_bench "oxyroute" "app_oxyroute:app" "rsgi")
   local fa
-  if ! python3 -c "import fastapi" 2>/dev/null; then
-    echo "FastAPI not installed. From the repo root: uv sync --extra bench  (or uv pip install -e \".[bench]\")" >&2
+  if ! "${PYTHON}" -c "import fastapi" 2>/dev/null; then
+    echo "FastAPI not installed. From the repo root: uv sync --extra dev --extra bench" >&2
     echo "OxyRoute Requests/sec: ${oxy}"
     exit 0
   fi
   fa=$(_bench "fastapi" "app_fastapi:app" "asgi")
 
   local pct
-  pct=$(python3 -c "o=float('${oxy}'); f=float('${fa}');
+  pct=$("${PYTHON}" -c "o=float('${oxy}'); f=float('${fa}');
 if f <= 0:
   print('n/a')
 else:
