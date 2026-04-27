@@ -216,3 +216,19 @@ def test_build_asgi_caller_uses_inner_app_when_handle_rsgi_missing() -> None:
     }
     asyncio.run(app(scope, receive, send))
     assert called == ["inner"]
+
+
+def test_run_handle_rsgi_blocking_does_not_use_asyncio_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("asyncio.run must not be used in blocking bridge path")
+
+    monkeypatch.setattr(asgi_mod.asyncio, "run", _boom)
+
+    async def _coro(_scope: object, _proto: object) -> None:
+        return None
+
+    try:
+        asgi_mod._run_handle_rsgi_blocking(_coro, object(), object())
+        asgi_mod._run_handle_rsgi_blocking(_coro, object(), object())
+    finally:
+        asgi_mod._close_blocking_loop_for_current_thread()
