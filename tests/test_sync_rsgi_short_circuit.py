@@ -80,6 +80,28 @@ def test_handle_rsgi_trivial_matched_route_returns_non_awaitable() -> None:
     assert proto.sent and proto.sent[0][0] == 200 and proto.sent[0][1] == "hello"
 
 
+def test_handle_rsgi_trivial_bytes_response() -> None:
+    app = App()
+
+    @app.get("/bin")
+    def bin_route() -> bytes:
+        return b"\x00\x01"
+
+    scope = SimpleNamespace(
+        proto="http",
+        method="GET",
+        path="/bin",
+        query_string="",
+        headers={},
+    )
+    proto = _ProtoText()
+    r = app.handle_rsgi(scope, proto)
+    assert r is None
+    assert not inspect.isawaitable(r)
+    assert proto.sent[0][0] == 200
+    assert proto.sent[0][1] == "\x00\x01"
+
+
 def test_handle_rsgi_route_with_deps_still_awaitable() -> None:
     app = App()
 

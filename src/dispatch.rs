@@ -949,14 +949,14 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
     if let Ok(s) = b.downcast::<PyString>() {
         return Ok(HandlerMap::Simple {
             status: 200,
-            body: s.to_string().into_bytes(),
+            body: SimpleBody::PyString(s.clone().unbind()),
             content_type: "text/plain; charset=utf-8".to_string(),
         });
     }
     if let Ok(buf) = b.downcast::<PyBytes>() {
         return Ok(HandlerMap::Simple {
             status: 200,
-            body: buf.as_bytes().to_vec(),
+            body: SimpleBody::PyBytes(buf.clone().unbind()),
             content_type: "application/octet-stream".to_string(),
         });
     }
@@ -974,21 +974,21 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
     if let Ok(s) = b.extract::<String>() {
         return Ok(HandlerMap::Simple {
             status: 200,
-            body: s.into_bytes(),
+            body: SimpleBody::Owned(s.into_bytes()),
             content_type: "text/plain; charset=utf-8".to_string(),
         });
     }
     if let Ok(s) = b.extract::<&str>() {
         return Ok(HandlerMap::Simple {
             status: 200,
-            body: s.as_bytes().to_vec(),
+            body: SimpleBody::Owned(s.as_bytes().to_vec()),
             content_type: "text/plain; charset=utf-8".to_string(),
         });
     }
     if let Ok(buf) = b.extract::<Vec<u8>>() {
         return Ok(HandlerMap::Simple {
             status: 200,
-            body: buf,
+            body: SimpleBody::Owned(buf),
             content_type: "application/octet-stream".to_string(),
         });
     }
@@ -1013,7 +1013,7 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
             if let (Ok(code), Ok(bstr)) = (sc.extract::<u16>(), body.str()) {
                 return Ok(HandlerMap::Simple {
                     status: code,
-                    body: bstr.to_string().into_bytes(),
+                    body: SimpleBody::Owned(bstr.to_string().into_bytes()),
                     content_type: "text/plain; charset=utf-8".to_string(),
                 });
             }
@@ -1024,9 +1024,58 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
     let s: String = dumped.extract()?;
     Ok(HandlerMap::Simple {
         status: 200,
-        body: s.into_bytes(),
+        body: SimpleBody::Owned(s.into_bytes()),
         content_type: "application/json; charset=utf-8".to_string(),
     })
+}
+
+fn send_simple_body_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    body: &SimpleBody,
+    content_type: &str,
+) -> PyResult<()> {
+    match body {
+        SimpleBody::Owned(bytes) => {
+            if bytes.is_empty() {
+                response::send_empty_sync(py, protocol, status, Some(content_type))
+            } else {
+                response::send_bytes_sync(py, protocol, status, bytes, content_type)
+            }
+        }
+        SimpleBody::PyString(s) => {
+            let text = s.bind(py).to_str()?;
+            response::send_text_sync(py, protocol, status, text, content_type)
+        }
+        SimpleBody::PyBytes(b) => {
+            response::send_pybytes_sync(py, protocol, status, b.bind(py), content_type)
+        }
+    }
+}
+
+enum SimpleBody {
+    Owned(Vec<u8>),
+    PyString(Py<PyString>),
+    PyBytes(Py<PyBytes>),
+}
+
+impl SimpleBody {
+    fn byte_len(&self, py: Python<'_>) -> PyResult<usize> {
+        match self {
+            SimpleBody::Owned(v) => Ok(v.len()),
+            SimpleBody::PyString(s) => Ok(s.bind(py).to_str()?.len()),
+            SimpleBody::PyBytes(b) => Ok(b.bind(py).as_bytes().len()),
+        }
+    }
+
+    fn into_vec(self, py: Python<'_>) -> PyResult<Vec<u8>> {
+        match self {
+            SimpleBody::Owned(v) => Ok(v),
+            SimpleBody::PyString(s) => Ok(s.bind(py).to_str()?.as_bytes().to_vec()),
+            SimpleBody::PyBytes(b) => Ok(b.bind(py).as_bytes().to_vec()),
+        }
+    }
 }
 
 enum HandlerMap {
@@ -1038,7 +1087,7 @@ enum HandlerMap {
     },
     Simple {
         status: u16,
-        body: Vec<u8>,
+        body: SimpleBody,
         content_type: String,
     },
 }
@@ -1066,7 +1115,13 @@ fn send_handler_map_inline(
                 status,
                 body,
                 content_type,
-            } => response::send_head_simple_sync(py, protocol, status, body.len(), &content_type),
+            } => response::send_head_simple_sync(
+                py,
+                protocol,
+                status,
+                body.byte_len(py)?,
+                &content_type,
+            ),
         }
     } else {
         match mapped {
@@ -1080,13 +1135,7 @@ fn send_handler_map_inline(
                 status,
                 body,
                 content_type,
-            } => {
-                if body.is_empty() {
-                    response::send_empty_sync(py, protocol, status, Some(&content_type))
-                } else {
-                    response::send_bytes_sync(py, protocol, status, &body, &content_type)
-                }
-            }
+            } => send_simple_body_sync(py, protocol, status, &body, &content_type),
         }
     }
 }
@@ -1110,18 +1159,22 @@ fn merge_config_response_headers(
         return Ok(mapped);
     }
     if if_absent {
-        Ok(merge_header_pairs_if_absent(mapped, &pairs))
+        merge_header_pairs_if_absent(py, mapped, &pairs)
     } else {
-        Ok(merge_header_pairs_replace(mapped, &pairs))
+        merge_header_pairs_replace(py, mapped, &pairs)
     }
 }
 
-fn merge_header_pairs_replace(mapped: HandlerMap, extra: &[(String, String)]) -> HandlerMap {
+fn merge_header_pairs_replace(
+    py: Python<'_>,
+    mapped: HandlerMap,
+    extra: &[(String, String)],
+) -> PyResult<HandlerMap> {
     if extra.is_empty() {
-        return mapped;
+        return Ok(mapped);
     }
     match mapped {
-        HandlerMap::AlreadySent => HandlerMap::AlreadySent,
+        HandlerMap::AlreadySent => Ok(HandlerMap::AlreadySent),
         HandlerMap::WithHeaders {
             status,
             body,
@@ -1131,37 +1184,42 @@ fn merge_header_pairs_replace(mapped: HandlerMap, extra: &[(String, String)]) ->
                 headers.retain(|(k, _)| !k.eq_ignore_ascii_case(a));
                 headers.push((a.clone(), b.clone()));
             }
-            HandlerMap::WithHeaders {
+            Ok(HandlerMap::WithHeaders {
                 status,
                 body,
                 headers,
-            }
+            })
         }
         HandlerMap::Simple {
             status,
             body,
             content_type,
         } => {
+            let body = body.into_vec(py)?;
             let mut headers = vec![("content-type".to_string(), content_type)];
             for (a, b) in extra {
                 headers.retain(|(k, _)| !k.eq_ignore_ascii_case(a));
                 headers.push((a.clone(), b.clone()));
             }
-            HandlerMap::WithHeaders {
+            Ok(HandlerMap::WithHeaders {
                 status,
                 body,
                 headers,
-            }
+            })
         }
     }
 }
 
-fn merge_header_pairs_if_absent(mapped: HandlerMap, extra: &[(String, String)]) -> HandlerMap {
+fn merge_header_pairs_if_absent(
+    py: Python<'_>,
+    mapped: HandlerMap,
+    extra: &[(String, String)],
+) -> PyResult<HandlerMap> {
     if extra.is_empty() {
-        return mapped;
+        return Ok(mapped);
     }
     match mapped {
-        HandlerMap::AlreadySent => HandlerMap::AlreadySent,
+        HandlerMap::AlreadySent => Ok(HandlerMap::AlreadySent),
         HandlerMap::WithHeaders {
             status,
             body,
@@ -1172,28 +1230,29 @@ fn merge_header_pairs_if_absent(mapped: HandlerMap, extra: &[(String, String)]) 
                     headers.push((a.clone(), b.clone()));
                 }
             }
-            HandlerMap::WithHeaders {
+            Ok(HandlerMap::WithHeaders {
                 status,
                 body,
                 headers,
-            }
+            })
         }
         HandlerMap::Simple {
             status,
             body,
             content_type,
         } => {
+            let body = body.into_vec(py)?;
             let mut headers = vec![("content-type".to_string(), content_type)];
             for (a, b) in extra {
                 if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(a)) {
                     headers.push((a.clone(), b.clone()));
                 }
             }
-            HandlerMap::WithHeaders {
+            Ok(HandlerMap::WithHeaders {
                 status,
                 body,
                 headers,
-            }
+            })
         }
     }
 }
