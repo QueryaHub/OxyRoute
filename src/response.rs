@@ -1,7 +1,7 @@
 //! RSGI `response_bytes` / `response_str` / `response_empty` helpers (Granian RSGI spec).
 
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PyString, PyTuple};
+use pyo3::types::{PyBytes, PyList, PyString, PyTuple};
 
 pub async fn send_text(
     protocol: &Py<PyAny>,
@@ -160,6 +160,23 @@ pub fn send_text_sync(
         return send_empty_sync(py, protocol, status, Some(content_type));
     }
     send_str_sync(py, protocol, status, text, content_type)
+}
+
+/// Sync `protocol.response_bytes(...)` with a ``PyBytes`` buffer (no ``Vec`` copy).
+pub fn send_pybytes_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    body: &Bound<'_, PyBytes>,
+    content_type: &str,
+) -> PyResult<()> {
+    if body.as_bytes().is_empty() {
+        return send_empty_sync(py, protocol, status, Some(content_type));
+    }
+    let p = protocol.bind(py);
+    let h = build_headers_ct(py, Some(content_type))?;
+    p.getattr("response_bytes")?.call1((status, h, body))?;
+    Ok(())
 }
 
 /// Sync `protocol.response_bytes(...)`; falls back to `send_empty_sync` on empty body.
