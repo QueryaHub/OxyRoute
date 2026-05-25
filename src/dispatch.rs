@@ -122,11 +122,7 @@ async fn try_http_exception(protocol: &Py<PyAny>, err: &PyErr) -> PyResult<Optio
     Ok(Some(out))
 }
 
-fn try_http_exception_sync(
-    py: Python<'_>,
-    protocol: &Py<PyAny>,
-    err: &PyErr,
-) -> PyResult<bool> {
+fn try_http_exception_sync(py: Python<'_>, protocol: &Py<PyAny>, err: &PyErr) -> PyResult<bool> {
     let Some((st, body, mut headers)) = http_exception_payload(py, err)? else {
         return Ok(false);
     };
@@ -160,13 +156,7 @@ fn send_internal_error_sync(
     } else {
         r#"{"error":"internal server error"}"#.to_string()
     };
-    response::send_text_sync(
-        py,
-        protocol,
-        500,
-        &body,
-        "application/json; charset=utf-8",
-    )
+    response::send_text_sync(py, protocol, 500, &body, "application/json; charset=utf-8")
 }
 
 fn send_python_error_sync(
