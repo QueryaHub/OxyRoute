@@ -850,12 +850,12 @@ pub async fn run_rsgi(
                 }
             }
         }
-        if let Some(c) = claims_val {
+        if let Some(ref c) = claims_val {
             let pyv = json_to_py(py, c)?;
             kwargs.set_item("claims", pyv)?;
         }
         if let Some(ref j) = body_json {
-            let pyv = json_to_py(py, j.clone())?;
+            let pyv = json_to_py(py, j)?;
             kwargs.set_item("json", pyv)?;
         }
         if read_form_body {
