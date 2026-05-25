@@ -65,6 +65,14 @@ pub struct RouteEntry {
     pub handler_param_names: Arc<HashSet<String>>,
     /// Handler has `**kwargs` (pass all dependency kwargs).
     pub handler_varkw: bool,
+    /// Sync ``call0()`` route with no body/JWT/deps/kwargs — eligible for RSGI sync fast path.
+    pub trivial_sync: bool,
+}
+
+/// True when the route can be served by [`try_rsgi_sync_short_circuit`](crate::dispatch::try_rsgi_sync_short_circuit)
+/// without body read, JWT, or dependency resolution.
+pub fn route_is_trivial_sync(entry: &RouteEntry) -> bool {
+    entry.trivial_sync
 }
 
 pub struct AppState {

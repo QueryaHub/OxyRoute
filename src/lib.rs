@@ -237,6 +237,13 @@ impl App {
             .getattr(pyo3::intern!(py, "__name__"))?
             .extract()?;
         let (handler_param_names, handler_varkw) = handler_signature_kinds(py, handler.bind(py))?;
+        let trivial_sync = !is_async
+            && !require_jwt
+            && !read_json_body
+            && !read_form_body
+            && dep_factories.is_empty()
+            && !handler_varkw
+            && handler_param_names.is_empty();
         let mut st = self.state.write();
         let routes = Arc::make_mut(&mut st.routes);
         let idx = routes.len();
@@ -258,6 +265,7 @@ impl App {
             dep_wants_request: Arc::<[bool]>::from(dep_wants_request),
             handler_param_names: Arc::new(handler_param_names),
             handler_varkw,
+            trivial_sync,
         });
         let request_schema: Option<serde_json::Value> = match body_schema_json
             .as_deref()

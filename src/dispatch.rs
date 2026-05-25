@@ -14,8 +14,8 @@ use crate::params::{build_request_context, header_get_lax, parse_query, value_fo
 use crate::response;
 use crate::schema::json_to_py;
 use crate::state::{
-    match_route_compiled, match_ws_route_compiled, methods_matching_path_compiled, AppState,
-    CompiledRouters, HotSnapshot, RouteEntry,
+    match_route_compiled, match_ws_route_compiled, methods_matching_path_compiled,
+    route_is_trivial_sync, AppState, CompiledRouters, HotSnapshot, RouteEntry,
 };
 use crate::token::{build_decoding_key, extract_bearer, extract_cookie_value};
 use crate::websocket::WebSocket;
@@ -64,42 +64,38 @@ async fn send_internal_error(
     response::send_text(protocol, 500, &body, "application/json; charset=utf-8").await
 }
 
-/// If ``err`` is :class:`oxyroute.exceptions.HTTPException`, send status/body/headers; else ``None``.
-async fn try_http_exception(protocol: &Py<PyAny>, err: &PyErr) -> PyResult<Option<PyObject>> {
-    let payload: Option<HttpExceptionPayload> =
-        Python::with_gil(|py| -> PyResult<Option<HttpExceptionPayload>> {
-            let m = py.import("oxyroute.exceptions")?;
-            let f = m.getattr("_http_exception_payload")?;
-            let exc = err.value(py);
-            let r = f.call1((exc,))?;
-            if r.is_none() {
-                return Ok(None);
-            }
-            let tup = r.downcast::<PyTuple>()?;
-            if tup.len() != 3 {
-                return Ok(None);
-            }
-            let status: u16 = tup.get_item(0)?.extract()?;
-            let b = tup.get_item(1)?;
-            let body: Vec<u8> = b.extract()?;
-            let h = tup.get_item(2)?;
-            let list = h.downcast::<PyList>()?;
-            let mut headers = Vec::new();
-            for i in 0..list.len() {
-                let item = list.get_item(i)?;
-                let pair = item.downcast::<PyTuple>()?;
-                let k: String = pair.get_item(0)?.extract()?;
-                let v: String = pair.get_item(1)?.extract()?;
-                if contains_crlf(&k) || contains_crlf(&v) {
-                    return Ok(None);
-                }
-                headers.push((k, v));
-            }
-            Ok(Some((status, body, headers)))
-        })?;
-    let Some((st, body, mut headers)) = payload else {
+fn http_exception_payload(py: Python<'_>, err: &PyErr) -> PyResult<Option<HttpExceptionPayload>> {
+    let m = py.import("oxyroute.exceptions")?;
+    let f = m.getattr("_http_exception_payload")?;
+    let exc = err.value(py);
+    let r = f.call1((exc,))?;
+    if r.is_none() {
         return Ok(None);
-    };
+    }
+    let tup = r.downcast::<PyTuple>()?;
+    if tup.len() != 3 {
+        return Ok(None);
+    }
+    let status: u16 = tup.get_item(0)?.extract()?;
+    let b = tup.get_item(1)?;
+    let body: Vec<u8> = b.extract()?;
+    let h = tup.get_item(2)?;
+    let list = h.downcast::<PyList>()?;
+    let mut headers = Vec::new();
+    for i in 0..list.len() {
+        let item = list.get_item(i)?;
+        let pair = item.downcast::<PyTuple>()?;
+        let k: String = pair.get_item(0)?.extract()?;
+        let v: String = pair.get_item(1)?.extract()?;
+        if contains_crlf(&k) || contains_crlf(&v) {
+            return Ok(None);
+        }
+        headers.push((k, v));
+    }
+    Ok(Some((status, body, headers)))
+}
+
+fn ensure_http_exception_content_type(headers: &mut Vec<(String, String)>) {
     let has_ct = headers
         .iter()
         .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
@@ -112,8 +108,95 @@ async fn try_http_exception(protocol: &Py<PyAny>, err: &PyErr) -> PyResult<Optio
             ),
         );
     }
+}
+
+/// If ``err`` is :class:`oxyroute.exceptions.HTTPException`, send status/body/headers; else ``None``.
+async fn try_http_exception(protocol: &Py<PyAny>, err: &PyErr) -> PyResult<Option<PyObject>> {
+    let payload: Option<HttpExceptionPayload> =
+        Python::with_gil(|py| http_exception_payload(py, err))?;
+    let Some((st, body, mut headers)) = payload else {
+        return Ok(None);
+    };
+    ensure_http_exception_content_type(&mut headers);
     let out = response::send_with_headers(protocol, st, &body, headers).await?;
     Ok(Some(out))
+}
+
+fn try_http_exception_sync(py: Python<'_>, protocol: &Py<PyAny>, err: &PyErr) -> PyResult<bool> {
+    let Some((st, body, mut headers)) = http_exception_payload(py, err)? else {
+        return Ok(false);
+    };
+    ensure_http_exception_content_type(&mut headers);
+    response::send_with_headers_sync(py, protocol, st, &body, headers)?;
+    Ok(true)
+}
+
+fn send_internal_error_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    method: &str,
+    path: &str,
+    err: PyErr,
+) -> PyResult<()> {
+    let detail_opt = if oxyroute_debug() {
+        let d = format!("{err}");
+        let d = if d.len() > 4000 {
+            format!("{}…", &d[..4000])
+        } else {
+            d
+        };
+        log::error!(target: "oxyroute", "{method} {path} — {d}");
+        Some(d)
+    } else {
+        log::error!(target: "oxyroute", "{method} {path}: internal error (set OXYROUTE_DEBUG=1 for detail)");
+        None
+    };
+    let body = if let Some(d) = detail_opt {
+        serde_json::json!({ "error": "internal server error", "detail": d }).to_string()
+    } else {
+        r#"{"error":"internal server error"}"#.to_string()
+    };
+    response::send_text_sync(py, protocol, 500, &body, "application/json; charset=utf-8")
+}
+
+fn send_python_error_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    method: &str,
+    path: &str,
+    err: PyErr,
+) -> PyResult<()> {
+    if try_http_exception_sync(py, protocol, &err)? {
+        return Ok(());
+    }
+    send_internal_error_sync(py, protocol, method, path, err)
+}
+
+fn run_trivial_sync_route(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    method: &str,
+    path: &str,
+    is_head: bool,
+    entry: &RouteEntry,
+) -> PyResult<()> {
+    let handler = entry.handler.bind(py);
+    let out = match handler.call0() {
+        Ok(x) => x.unbind(),
+        Err(e) => {
+            return send_python_error_sync(py, protocol, method, path, e);
+        }
+    };
+    let mapped = match map_handler_return(py, &out) {
+        Ok(m) => m,
+        Err(e) => {
+            return send_python_error_sync(py, protocol, method, path, e);
+        }
+    };
+    if let Err(e) = send_handler_map_inline(py, protocol, is_head, mapped) {
+        return send_python_error_sync(py, protocol, method, path, e);
+    }
+    Ok(())
 }
 
 /// Like [`send_internal_error`], but maps :class:`HTTPException` to its status and body.
@@ -140,10 +223,12 @@ fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) -> Arc<CompiledRouter
     Arc::clone(st.compiled.as_ref().expect("just populated"))
 }
 
-/// Synchronous RSGI handling for **openapi**, **404**, and **405** only: no `protocol()` body read
-/// and no `future_into_py` outer bridge (saves a Tokio task + asyncio Future on these paths).
+/// Synchronous RSGI handling for **openapi**, **404**, **405**, and **trivial matched routes**:
+/// no `protocol()` body read and no `future_into_py` outer bridge (saves a Tokio task + asyncio
+/// Future on these paths).
 ///
-/// Returns `Ok(None)` if [`run_rsgi`] (async) must be used. Middleware always defers to async.
+/// Returns `Ok(None)` if [`run_rsgi`] (async) must be used. Middleware, CORS, and security-header
+/// presets always defer to async.
 pub fn try_rsgi_sync_short_circuit(
     py: Python<'_>,
     state: &Arc<RwLock<AppState>>,
@@ -162,6 +247,7 @@ pub fn try_rsgi_sync_short_circuit(
     let path: String = scope.getattr("path")?.extract()?;
     let is_head = method == "HEAD";
     let snapshot = state.read().hot_snapshot();
+    let needs_response_cfg_merge = snapshot.cors.is_some() || snapshot.security_headers.is_some();
     if snapshot.middleware.is_some() {
         return Ok(None);
     }
@@ -201,7 +287,20 @@ pub fn try_rsgi_sync_short_circuit(
         Some(m) => m,
     };
     match route_out {
-        Some((_, _)) => Ok(None),
+        Some((idx, _)) => {
+            if needs_response_cfg_merge {
+                return Ok(None);
+            }
+            let routes = Arc::clone(&snapshot.routes);
+            let Some(entry) = routes.get(idx) else {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err("route index"));
+            };
+            if route_is_trivial_sync(entry) {
+                run_trivial_sync_route(py, &protocol_py, &method, &path, is_head, entry)?;
+                return Ok(Some(py.None()));
+            }
+            Ok(None)
+        }
         None => {
             let m = methods_matching_path_compiled(&compiled, &path);
             if m.is_empty() {
