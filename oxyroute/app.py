@@ -58,6 +58,20 @@ class App:
         """Enable or disable the built-in ``GET /openapi.json`` route."""
         self._app.set_openapi_served(enabled)
 
+    async def setup_database(self, url: str, max_connections: int = 10) -> None:
+        """
+        Connect to a PostgreSQL database and store the pool in the Rust hot path.
+        Must be awaited (e.g. inside ``__rsgi_init__``).
+        """
+        await self._app.setup_database(url, max_connections)
+
+    async def close_database(self) -> None:
+        """
+        Close the global PostgreSQL connection pool.
+        Must be awaited (e.g. inside ``__rsgi_del__``).
+        """
+        await self._app.close_database()
+
     def include_router(
         self,
         router: APIRouter,

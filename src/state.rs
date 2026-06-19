@@ -103,6 +103,8 @@ pub struct AppState {
     /// Optional :class:`oxyroute.security_headers.SecurityHeadersConfig` (or compatible
     /// ``response_header_pairs``) merged if those header names are not already set.
     pub security_headers: Option<Py<PyAny>>,
+    /// Global connection pool for the Postgres database.
+    pub db_pool: Option<sqlx::SqlitePool>,
 }
 
 impl AppState {
@@ -129,6 +131,7 @@ impl AppState {
             middleware: None,
             cors: None,
             security_headers: None,
+            db_pool: None,
         }
     }
 
@@ -147,6 +150,7 @@ impl AppState {
             security_headers: self.security_headers.clone(),
             middleware: self.middleware.clone(),
             include_openapi: self.include_openapi,
+            db_pool: self.db_pool.clone(),
         }
     }
 
@@ -175,6 +179,7 @@ pub struct HotSnapshot {
     pub security_headers: Option<Py<PyAny>>,
     pub middleware: Option<Py<PyAny>>,
     pub include_openapi: bool,
+    pub db_pool: Option<sqlx::SqlitePool>,
 }
 
 /// Lookup a WebSocket route in a precomputed [`CompiledRouters`] (lock-free).
