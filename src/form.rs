@@ -69,13 +69,5 @@ pub async fn parse_multipart(body: Vec<u8>, boundary: &str) -> Result<ParsedForm
 
 /// Default 8 MiB; ``0`` = no limit (not recommended in production). Override with env ``OXYROUTE_MAX_BODY_BYTES``.
 pub fn max_body_bytes() -> u64 {
-    const DEFAULT: u64 = 8 * 1024 * 1024;
-    match std::env::var("OXYROUTE_MAX_BODY_BYTES")
-        .ok()
-        .and_then(|s| s.parse().ok())
-    {
-        None => DEFAULT,
-        Some(0) => u64::MAX,
-        Some(n) => n,
-    }
+    crate::config::max_body_bytes()
 }

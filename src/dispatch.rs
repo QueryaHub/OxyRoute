@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use serde_json::Value as JsonValue;
 
+use crate::config;
 use crate::form::{self, ParsedFile};
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
 use crate::response;
@@ -23,9 +24,7 @@ use crate::websocket::WebSocket;
 type HttpExceptionPayload = (u16, Vec<u8>, Vec<(String, String)>);
 
 fn oxyroute_debug() -> bool {
-    std::env::var("OXYROUTE_DEBUG")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    config::oxyroute_debug()
 }
 
 fn contains_crlf(s: &str) -> bool {
