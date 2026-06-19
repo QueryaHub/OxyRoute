@@ -55,33 +55,42 @@ def test_multipart_file_and_field() -> None:
 
 
 def test_payload_too_large_413() -> None:
-    app = App()
+    """Isolated process: ``OXYROUTE_MAX_BODY_BYTES`` is cached on first body read."""
+    import subprocess
+    import sys
+    from pathlib import Path
 
-    @app.post("/b", read_form_body=True)
-    def b(form: dict) -> str:
-        return "ok" if not form else "bad"
+    repo = Path(__file__).resolve().parents[1]
+    code = """
+import asyncio
+import os
 
-    old = os.environ.get("OXYROUTE_MAX_BODY_BYTES")
-    os.environ["OXYROUTE_MAX_BODY_BYTES"] = "20"
-    try:
+import httpx
+from oxyroute import App
+from tests._rsgi_test_transport import asgi_test_app
 
-        async def _run() -> None:
-            transport = httpx.ASGITransport(app=asgi_test_app(app))
-            async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-                r = await c.post(
-                    "/b",
-                    content="x" * 100,
-                    headers={"content-type": "application/x-www-form-urlencoded"},
-                )
-            assert r.status_code == 413
-            err = (
-                r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-            )
-            assert err.get("error") == "payload too large" or "payload" in (r.text or "")
+os.environ["OXYROUTE_MAX_BODY_BYTES"] = "20"
 
-        asyncio.run(_run())
-    finally:
-        if old is None:
-            del os.environ["OXYROUTE_MAX_BODY_BYTES"]
-        else:
-            os.environ["OXYROUTE_MAX_BODY_BYTES"] = old
+app = App()
+
+@app.post("/b", read_form_body=True)
+def b(form: dict) -> str:
+    return "ok" if not form else "bad"
+
+async def main() -> None:
+    transport = httpx.ASGITransport(app=asgi_test_app(app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.post(
+            "/b",
+            content="x" * 100,
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+    assert r.status_code == 413
+    err = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    assert err.get("error") == "payload too large" or "payload" in (r.text or "")
+
+asyncio.run(main())
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo)
+    subprocess.run([sys.executable, "-c", code], env=env, check=True, cwd=repo)
