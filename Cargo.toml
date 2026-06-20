@@ -28,6 +28,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 multer = "3.1"
 log = "0.4"
 parking_lot = "0.12"
+sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "sqlite", "tls-rustls"] }
 
 [features]
 default = []

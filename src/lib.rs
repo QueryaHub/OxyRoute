@@ -378,6 +378,44 @@ impl App {
         Ok(())
     }
 
+    /// Connect to a PostgreSQL database and store the pool in `AppState`.
+    #[pyo3(signature = (url, max_connections=10))]
+    fn setup_database<'py>(
+        &self,
+        py: Python<'py>,
+        url: String,
+        max_connections: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let state = self.state.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(max_connections)
+                .connect(&url)
+                .await
+                .map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("DB connect error: {}", e))
+                })?;
+            let mut st = state.write();
+            st.db_pool = Some(pool);
+            Ok(())
+        })
+    }
+
+    /// Close the PostgreSQL connection pool.
+    fn close_database<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let state = self.state.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let pool = {
+                let mut st = state.write();
+                st.db_pool.take()
+            };
+            if let Some(p) = pool {
+                p.close().await;
+            }
+            Ok(())
+        })
+    }
+
     fn handle_rsgi<'py>(
         this: PyRef<'py, Self>,
         py: Python<'py>,
