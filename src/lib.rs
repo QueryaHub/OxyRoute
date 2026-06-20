@@ -9,6 +9,7 @@ use pyo3::types::{PyDict, PyList, PyTuple};
 use serde_json::json;
 
 mod config;
+mod db;
 mod dispatch;
 mod form;
 mod params;
@@ -464,6 +465,7 @@ fn _oxyroute(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<App>()?;
     m.add_class::<PyDepends>()?;
     m.add_class::<websocket::WebSocket>()?;
+    m.add_class::<db::DBQuery>()?;
     m.add_function(wrap_pyfunction!(token::decode_jwt_hs, m)?)?;
     Ok(())
 }
