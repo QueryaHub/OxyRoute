@@ -388,7 +388,7 @@ impl App {
     ) -> PyResult<Bound<'py, PyAny>> {
         let state = self.state.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            let pool = sqlx::postgres::PgPoolOptions::new()
                 .max_connections(max_connections)
                 .connect(&url)
                 .await
