@@ -77,7 +77,10 @@ gh issue create --title "feat: expose PATCH routes on Python App" \
 | 52 | [issue](https://github.com/QueryaHub/OxyRoute/issues/52) | [bodies/27.md](bodies/27.md) | research+feat: WebSocket support (Granian / ASGI integration) |
 | 53 | [issue](https://github.com/QueryaHub/OxyRoute/issues/53) | [bodies/28.md](bodies/28.md) | feat: optional CSRF protection for cookie/session-based flows |
 | 54 | [issue](https://github.com/QueryaHub/OxyRoute/issues/54) | [bodies/29.md](bodies/29.md) | feat: security headers preset (HSTS, X-Frame-Options, CSP, etc.) |
-
+| 55 | - | [bodies/47.md](bodies/47.md) | research: sqlx integration in Rust hot path |
+| 56 | - | [bodies/48.md](bodies/48.md) | feat: connection pool management in AppState |
+| 57 | - | [bodies/49.md](bodies/49.md) | feat: dynamic query execution from Python dependencies |
+| 58 | - | [bodies/50.md](bodies/50.md) | feat: serialize DB rows to Python objects via PyO3 |
 ## Priority tier (P0 / P1)
 
 See [PRIORITIES.md](PRIORITIES.md) for the **current** order (milestone **v0.2.0** / release **0.2.0**).

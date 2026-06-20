@@ -33,7 +33,7 @@ Register routes with `read_form_body=True` on `post` / `put` / `patch` (and `del
 - **`Content-Type: application/x-www-form-urlencoded`** — the body is parsed like a query string (percent-decoding, `+` as space).
 - **`Content-Type: multipart/form-data; boundary=...`** — parts with a **filename** are collected as `files`; other parts go into `form`.
 - Wrong or missing `Content-Type` when the body is non-empty → **400** (missing type) or **415** (not a form type). Malformed multipart → **400** with a JSON error.
-- **Size limit:** the full body is buffered in memory before parsing. The default maximum is **8 MiB**; override with the environment variable **`OXYROUTE_MAX_BODY_BYTES`** (set to `0` to disable the check—**not recommended** in production). Oversized bodies → **413** with `{"error":"payload too large"}`.
+- **Size limit:** the full body is buffered in memory before parsing. The default maximum is **8 MiB**; override with the environment variable **`OXYROUTE_MAX_BODY_BYTES`** (set to `0` to disable the check—**not recommended** in production). The value is read once on first body handling in a worker process. Oversized bodies → **413** with `{"error":"payload too large"}`.
 
 Only parameters that appear in the handler signature (or `**kwargs`) receive `form` / `files`, the same as for `query` and dependencies.
 
@@ -77,7 +77,7 @@ raise HTTPException(400, "bad", headers={"X-Reason": "check"})  # optional extra
 
 If a **dependency factory** or the **route handler** raises any other Python exception (or building the response fails), the server answers with **500** and a small **JSON** body: `{"error":"internal server error"}`. Exception text and tracebacks are **not** included in the response by default (to avoid leaking internals to clients).
 
-Set the environment variable **`OXYROUTE_DEBUG=1`** (or `true`) to include a **`detail`** string in that JSON for the same error and to log more at the `log` crate target **`oxyroute`** (see `RUST_LOG`, e.g. `RUST_LOG=oxyroute=error`).
+Set the environment variable **`OXYROUTE_DEBUG=1`** (or `true`) to include a **`detail`** string in that JSON for the same error and to log more at the `log` crate target **`oxyroute`** (see `RUST_LOG`, e.g. `RUST_LOG=oxyroute=error`). Like body limits, this flag is read once on the first error path in a worker process.
 
 There is no **`register_exception_handler`** API yet; map custom exception types by catching them in Python or by a small wrapper.
 
