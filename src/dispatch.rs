@@ -772,7 +772,7 @@ pub async fn run_rsgi(
     };
     let mut dep_out: Vec<PyObject> = Vec::with_capacity(dep_factories.len());
     for (i, fact) in dep_factories.iter().enumerate() {
-        if dep_is_async.get(i) == Some(&true) {
+        let o = if dep_is_async.get(i) == Some(&true) {
             let r = match Python::with_gil(|py| -> PyResult<PyObject> {
                 let kw = PyDict::new(py);
                 if dep_wants_request.get(i) == Some(&true) {
@@ -804,15 +804,14 @@ pub async fn run_rsgi(
                     return send_python_error(&protocol, &method, &path, e).await;
                 }
             };
-            let o = match fut.await {
+            match fut.await {
                 Ok(x) => x,
                 Err(e) => {
                     return send_python_error(&protocol, &method, &path, e).await;
                 }
-            };
-            dep_out.push(o);
+            }
         } else {
-            let o = match Python::with_gil(|py| -> PyResult<PyObject> {
+            match Python::with_gil(|py| -> PyResult<PyObject> {
                 let kw = PyDict::new(py);
                 if dep_wants_request.get(i) == Some(&true) {
                     if let Some(ref rc) = request_ctx {
@@ -833,9 +832,42 @@ pub async fn run_rsgi(
                 Err(e) => {
                     return send_python_error(&protocol, &method, &path, e).await;
                 }
-            };
-            dep_out.push(o);
-        }
+            }
+        };
+
+        let db_query_opt = Python::with_gil(|py| -> PyResult<Option<crate::db::DBQuery>> {
+            let b = o.bind(py);
+            if b.is_instance_of::<crate::db::DBQuery>() {
+                Ok(Some(b.extract::<crate::db::DBQuery>()?))
+            } else {
+                Ok(None)
+            }
+        });
+
+        let resolved = match db_query_opt {
+            Ok(Some(db_query)) => {
+                if let Some(pool) = snapshot.db_pool.as_ref() {
+                    match crate::db::execute_query(pool, &db_query).await {
+                        Ok(res) => res,
+                        Err(e) => return send_python_error(&protocol, &method, &path, e).await,
+                    }
+                } else {
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        pyo3::exceptions::PyRuntimeError::new_err(
+                            "DBQuery returned by dependency but no database pool configured",
+                        ),
+                    )
+                    .await;
+                }
+            }
+            Ok(None) => o,
+            Err(e) => return send_python_error(&protocol, &method, &path, e).await,
+        };
+
+        dep_out.push(resolved);
     }
     let should_pass_form =
         read_form_body && (handler_varkw || handler_param_names.contains("form"));
