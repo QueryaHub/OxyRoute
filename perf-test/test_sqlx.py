@@ -5,7 +5,7 @@ class DBApp(App):
         async def init():
             try:
                 print("Setting up DB...")
-                await self.setup_database("sqlite::memory:", max_connections=10)
+                await self.setup_database("postgresql://postgres:postgres@127.0.0.1:5433/postgres", max_connections=10)
                 print("DB Setup Complete!")
             except Exception as e:
                 print("DB Setup Error:", e)
