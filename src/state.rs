@@ -65,6 +65,14 @@ pub struct RouteEntry {
     pub handler_param_names: Arc<HashSet<String>>,
     /// Handler has `**kwargs` (pass all dependency kwargs).
     pub handler_varkw: bool,
+    /// Sync ``call0()`` route with no body/JWT/deps/kwargs — eligible for RSGI sync fast path.
+    pub trivial_sync: bool,
+}
+
+/// True when the route can be served by [`try_rsgi_sync_short_circuit`](crate::dispatch::try_rsgi_sync_short_circuit)
+/// without body read, JWT, or dependency resolution.
+pub fn route_is_trivial_sync(entry: &RouteEntry) -> bool {
+    entry.trivial_sync
 }
 
 pub struct AppState {
@@ -95,6 +103,8 @@ pub struct AppState {
     /// Optional :class:`oxyroute.security_headers.SecurityHeadersConfig` (or compatible
     /// ``response_header_pairs``) merged if those header names are not already set.
     pub security_headers: Option<Py<PyAny>>,
+    /// Global connection pool for the Postgres database.
+    pub db_pool: Option<sqlx::PgPool>,
 }
 
 impl AppState {
@@ -121,6 +131,7 @@ impl AppState {
             middleware: None,
             cors: None,
             security_headers: None,
+            db_pool: None,
         }
     }
 
@@ -139,6 +150,7 @@ impl AppState {
             security_headers: self.security_headers.clone(),
             middleware: self.middleware.clone(),
             include_openapi: self.include_openapi,
+            db_pool: self.db_pool.clone(),
         }
     }
 
@@ -167,6 +179,7 @@ pub struct HotSnapshot {
     pub security_headers: Option<Py<PyAny>>,
     pub middleware: Option<Py<PyAny>>,
     pub include_openapi: bool,
+    pub db_pool: Option<sqlx::PgPool>,
 }
 
 /// Lookup a WebSocket route in a precomputed [`CompiledRouters`] (lock-free).

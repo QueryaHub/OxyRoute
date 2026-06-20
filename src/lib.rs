@@ -8,6 +8,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use serde_json::json;
 
+mod config;
+mod db;
 mod dispatch;
 mod form;
 mod params;
@@ -237,6 +239,13 @@ impl App {
             .getattr(pyo3::intern!(py, "__name__"))?
             .extract()?;
         let (handler_param_names, handler_varkw) = handler_signature_kinds(py, handler.bind(py))?;
+        let trivial_sync = !is_async
+            && !require_jwt
+            && !read_json_body
+            && !read_form_body
+            && dep_factories.is_empty()
+            && !handler_varkw
+            && handler_param_names.is_empty();
         let mut st = self.state.write();
         let routes = Arc::make_mut(&mut st.routes);
         let idx = routes.len();
@@ -258,6 +267,7 @@ impl App {
             dep_wants_request: Arc::<[bool]>::from(dep_wants_request),
             handler_param_names: Arc::new(handler_param_names),
             handler_varkw,
+            trivial_sync,
         });
         let request_schema: Option<serde_json::Value> = match body_schema_json
             .as_deref()
@@ -369,6 +379,44 @@ impl App {
         Ok(())
     }
 
+    /// Connect to a PostgreSQL database and store the pool in `AppState`.
+    #[pyo3(signature = (url, max_connections=10))]
+    fn setup_database<'py>(
+        &self,
+        py: Python<'py>,
+        url: String,
+        max_connections: u32,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let state = self.state.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(max_connections)
+                .connect(&url)
+                .await
+                .map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("DB connect error: {}", e))
+                })?;
+            let mut st = state.write();
+            st.db_pool = Some(pool);
+            Ok(())
+        })
+    }
+
+    /// Close the PostgreSQL connection pool.
+    fn close_database<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let state = self.state.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let pool = {
+                let mut st = state.write();
+                st.db_pool.take()
+            };
+            if let Some(p) = pool {
+                p.close().await;
+            }
+            Ok(())
+        })
+    }
+
     fn handle_rsgi<'py>(
         this: PyRef<'py, Self>,
         py: Python<'py>,
@@ -417,6 +465,7 @@ fn _oxyroute(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<App>()?;
     m.add_class::<PyDepends>()?;
     m.add_class::<websocket::WebSocket>()?;
+    m.add_class::<db::DBQuery>()?;
     m.add_function(wrap_pyfunction!(token::decode_jwt_hs, m)?)?;
     Ok(())
 }
