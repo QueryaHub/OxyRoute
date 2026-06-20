@@ -250,6 +250,9 @@ pub fn try_rsgi_sync_short_circuit(
     if snapshot.middleware.is_some() {
         return Ok(None);
     }
+    if method == "GET" && path == "/test_db" {
+        return Ok(None); // defer to async run_rsgi for the prototype
+    }
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
     {
         let doc = state.read().openapi.lock().to_string();
@@ -375,6 +378,33 @@ pub async fn run_rsgi(
             .await;
         }
         return response::send_str(&protocol, 200, &doc, "application/json; charset=utf-8").await;
+    }
+    // Prototype: Issue 55 (sqlx integration benchmark path)
+    if method == "GET" && path == "/test_db" {
+        if let Some(pool) = snapshot.db_pool.as_ref() {
+            use sqlx::Row;
+            match sqlx::query("SELECT 1 as num").fetch_one(pool).await {
+                Ok(row) => {
+                    let num: i32 = row.get("num");
+                    return response::send_str(
+                        &protocol,
+                        200,
+                        &format!(r#"{{"num":{num}}}"#),
+                        "application/json; charset=utf-8",
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    return response::send_str(
+                        &protocol,
+                        500,
+                        &format!(r#"{{"error":"{e}"}}"#),
+                        "application/json; charset=utf-8",
+                    )
+                    .await;
+                }
+            }
+        }
     }
     if let Some(mw) = maybe_mw {
         let out: Py<PyAny> = match Python::with_gil(|py| {
