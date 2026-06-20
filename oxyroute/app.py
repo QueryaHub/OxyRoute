@@ -387,8 +387,8 @@ class App:
         return None
 
     async def __rsgi_del__(self, *args: Any, **kwargs: Any) -> None:
-        """RSGI worker teardown (no-op in the base class)."""
-        return None
+        """RSGI worker teardown. Closes the global connection pool if it exists."""
+        await self.close_database()
 
     async def __rsgi__(self, scope: Any, protocol: Any) -> Any:
         """
