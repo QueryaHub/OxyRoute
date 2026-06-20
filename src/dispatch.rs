@@ -391,7 +391,8 @@ pub async fn run_rsgi(
                         200,
                         &format!(r#"{{"num":{num}}}"#),
                         "application/json; charset=utf-8",
-                    ).await;
+                    )
+                    .await;
                 }
                 Err(e) => {
                     return response::send_str(
@@ -399,7 +400,8 @@ pub async fn run_rsgi(
                         500,
                         &format!(r#"{{"error":"{e}"}}"#),
                         "application/json; charset=utf-8",
-                    ).await;
+                    )
+                    .await;
                 }
             }
         }
