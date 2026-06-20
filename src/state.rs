@@ -104,7 +104,7 @@ pub struct AppState {
     /// ``response_header_pairs``) merged if those header names are not already set.
     pub security_headers: Option<Py<PyAny>>,
     /// Global connection pool for the Postgres database.
-    pub db_pool: Option<sqlx::SqlitePool>,
+    pub db_pool: Option<sqlx::PgPool>,
 }
 
 impl AppState {
@@ -179,7 +179,7 @@ pub struct HotSnapshot {
     pub security_headers: Option<Py<PyAny>>,
     pub middleware: Option<Py<PyAny>>,
     pub include_openapi: bool,
-    pub db_pool: Option<sqlx::SqlitePool>,
+    pub db_pool: Option<sqlx::PgPool>,
 }
 
 /// Lookup a WebSocket route in a precomputed [`CompiledRouters`] (lock-free).
