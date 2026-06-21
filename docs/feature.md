@@ -27,7 +27,7 @@
 | Тема | Зазор | Комментарий |
 |------|--------|-------------|
 | **WebSockets** | Реализованы | Native RSGI WebSocket: `@app.websocket(path)`, `oxyroute.WebSocket`; см. [websocket.md](websocket.md). Нет high-level subprotocol API. |
-| **SSE / длинный стрим ответа** | Частично | Есть `send_sse` (см. [sse.md](sse.md)); инкрементальный стрим использует `response_stream` Granian RSGI. |
+| **SSE / длинный стрим ответа** | Частично | Есть `send_sse` (см. [streaming.md](streaming.md)); инкрементальный стрим использует `response_stream` Granian RSGI. |
 | **HTTP/2 push, trailers** | Не в фокусе | Обычно на стороне сервера; фреймворк редко экспонирует. |
 | **ASGI совместимость** | Удалена в v0.3.0 | Поддерживается только RSGI (Granian `--interface rsgi`). |
 

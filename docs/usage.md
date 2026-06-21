@@ -465,7 +465,7 @@ async def events(protocol):
     return await send_sse(protocol, [SSEEvent(data="hello")])
 ```
 
-See [sse.md](sse.md) for details and caveats.
+See [streaming.md](streaming.md) for details and caveats.
 
 ## OpenAPI
 
