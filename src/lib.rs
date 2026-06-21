@@ -163,7 +163,7 @@ impl App {
 
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
-        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None)
+        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None)
     )]
     #[allow(clippy::too_many_arguments)]
     fn add_route(
@@ -183,6 +183,7 @@ impl App {
         jwt_leeway: Option<u64>,
         jwt_cookie: Option<String>,
         body_schema_json: Option<String>,
+        body_model: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         {
             let st = self.state.read();
@@ -268,6 +269,7 @@ impl App {
             handler_param_names: Arc::new(handler_param_names),
             handler_varkw,
             trivial_sync,
+            body_model,
         });
         let request_schema: Option<serde_json::Value> = match body_schema_json
             .as_deref()

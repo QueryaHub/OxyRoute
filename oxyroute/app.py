@@ -382,6 +382,7 @@ class App:
                 jwt_leeway,
                 jwt_cookie,
                 body_schema_json,
+                body_model,
             )
             return handler
 
