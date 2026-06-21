@@ -2,43 +2,22 @@
 
 [← Documentation index](index.md)
 
-## Rust
+## Local Development & Tests
+
+The project uses `uv` for dependency management and a `Makefile` to handle building the Rust extension and running tests safely. You do not need to manually run `maturin develop` or create virtual environments.
 
 ```bash
-cargo build
-cargo clippy
+# Install dependencies, build the extension, and run all linters & tests
+make test
 ```
 
-Release settings are in `Cargo.toml` (`lto`, `codegen-units`).
+**Shadowing the installed package:** If you run `pytest` directly from the repository root, Python might import the raw source tree `oxyroute/` without the compiled `._oxyroute` binary, causing failures. 
+The `make test` and `make pytest` commands automatically run tests from a temporary directory to avoid this issue.
 
-## Python extension (Maturin)
-
-```bash
-maturin develop
-# or
-maturin build --release
-```
-
-See [installation.md](installation.md) for venvs and the `patchelf` note on some Linux systems.
-
-## Tests
-
-The suite uses **pytest** and is configured in `pyproject.toml` with `testpaths = ["tests"]`.
-
-**Shadowing the installed package:** If you run `pytest` from the **repository root**, Python can import the **source tree** `oxyroute/` (without a rebuilt `._oxyroute` binary) and fail in confusing ways. The CI job runs from a **temporary directory** and points pytest at the workspace tests, so the **installed** wheel is imported.
-
-**Locally**, either:
-
-- `cd` to a different directory and run:  
-  `python -m pytest /path/to/OxyRoute/tests`  
-  after `pip install` / `maturin develop` in your environment, or  
-- `pip install -e` / install the wheel, then use a **clean** working directory for pytest.
-
-**Optional dev extra:**
-
-```bash
-pip install "oxyroute[dev]"  # in your dev env, from source after maturin develop
-```
+### Other useful commands:
+- `make lint` — Run `ruff` and `cargo clippy/fmt` checks.
+- `make fix` — Auto-format code with `ruff format` and `cargo fmt`.
+- `make develop` — Build the Rust extension into `.venv` without running tests.
 
 ## Granian RSGI (end-to-end)
 
