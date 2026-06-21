@@ -75,6 +75,8 @@ pub fn route_is_trivial_sync(entry: &RouteEntry) -> bool {
     entry.trivial_sync
 }
 
+pub type ExceptionHandlerList = Arc<Vec<(Py<pyo3::types::PyType>, Py<PyAny>, bool)>>;
+
 pub struct AppState {
     /// Wrapped in `Arc<Vec<…>>` so the hot path can clone a cheap pointer **once** per request and
     /// release [`AppState`]'s `RwLock` immediately. Mutation goes through [`Arc::make_mut`].
@@ -100,6 +102,7 @@ pub struct AppState {
     pub request_middleware: Arc<Vec<Py<PyAny>>>,
     /// Stack of `(scope, response_dict) -> Response | dict` response hooks. Runs before CORS/Security headers.
     pub response_middleware: Arc<Vec<Py<PyAny>>>,
+    pub exception_handlers: ExceptionHandlerList,
     /// Optional Python CORS config (e.g. :class:`oxyroute.cors.CORSConfig`) for response headers.
     pub cors: Option<Py<PyAny>>,
     /// Optional :class:`oxyroute.security_headers.SecurityHeadersConfig` (or compatible
@@ -132,6 +135,7 @@ impl AppState {
             include_openapi: true,
             request_middleware: Arc::new(Vec::new()),
             response_middleware: Arc::new(Vec::new()),
+            exception_handlers: Arc::new(Vec::new()),
             cors: None,
             security_headers: None,
             db_pool: None,
@@ -153,6 +157,7 @@ impl AppState {
             security_headers: self.security_headers.clone(),
             request_middleware: Arc::clone(&self.request_middleware),
             response_middleware: Arc::clone(&self.response_middleware),
+            exception_handlers: Arc::clone(&self.exception_handlers),
             include_openapi: self.include_openapi,
             db_pool: self.db_pool.clone(),
         }
@@ -183,6 +188,7 @@ pub struct HotSnapshot {
     pub security_headers: Option<Py<PyAny>>,
     pub request_middleware: Arc<Vec<Py<PyAny>>>,
     pub response_middleware: Arc<Vec<Py<PyAny>>>,
+    pub exception_handlers: ExceptionHandlerList,
     pub include_openapi: bool,
     pub db_pool: Option<sqlx::PgPool>,
 }
