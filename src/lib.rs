@@ -374,7 +374,6 @@ impl App {
                 .extract::<bool>()
         })
         .unwrap_or(false);
-        println!("is_async = {}", is_async);
         Arc::make_mut(&mut st.exception_handlers).push((exc_type.unbind(), handler, is_async));
         Ok(())
     }
