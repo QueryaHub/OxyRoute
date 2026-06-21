@@ -96,8 +96,10 @@ pub struct AppState {
     pub frozen: bool,
     /// Serve `GET /openapi.json` from the built document without a user route.
     pub include_openapi: bool,
-    /// Optional `(scope, protocol) ->` hook; return ``None`` to continue to routing (see `docs/handlers.md`).
-    pub middleware: Option<Py<PyAny>>,
+    /// Stack of `(scope, protocol) -> None | Response | dict` request hooks. Return ``None`` to continue to routing.
+    pub request_middleware: Arc<Vec<Py<PyAny>>>,
+    /// Stack of `(scope, response_dict) -> Response | dict` response hooks. Runs before CORS/Security headers.
+    pub response_middleware: Arc<Vec<Py<PyAny>>>,
     /// Optional Python CORS config (e.g. :class:`oxyroute.cors.CORSConfig`) for response headers.
     pub cors: Option<Py<PyAny>>,
     /// Optional :class:`oxyroute.security_headers.SecurityHeadersConfig` (or compatible
@@ -128,7 +130,8 @@ impl AppState {
             compiled: None,
             frozen: false,
             include_openapi: true,
-            middleware: None,
+            request_middleware: Arc::new(Vec::new()),
+            response_middleware: Arc::new(Vec::new()),
             cors: None,
             security_headers: None,
             db_pool: None,
@@ -148,7 +151,8 @@ impl AppState {
             compiled: self.compiled.as_ref().map(Arc::clone),
             cors: self.cors.clone(),
             security_headers: self.security_headers.clone(),
-            middleware: self.middleware.clone(),
+            request_middleware: Arc::clone(&self.request_middleware),
+            response_middleware: Arc::clone(&self.response_middleware),
             include_openapi: self.include_openapi,
             db_pool: self.db_pool.clone(),
         }
@@ -177,7 +181,8 @@ pub struct HotSnapshot {
     pub compiled: Option<Arc<CompiledRouters>>,
     pub cors: Option<Py<PyAny>>,
     pub security_headers: Option<Py<PyAny>>,
-    pub middleware: Option<Py<PyAny>>,
+    pub request_middleware: Arc<Vec<Py<PyAny>>>,
+    pub response_middleware: Arc<Vec<Py<PyAny>>>,
     pub include_openapi: bool,
     pub db_pool: Option<sqlx::PgPool>,
 }
