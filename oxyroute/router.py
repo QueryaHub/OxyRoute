@@ -67,6 +67,15 @@ class APIRouter:
             full = join_path(prefix, rel)
             self._routes.append((method, full, handler, merged))
 
+    def mount(self, path: str, app: Any) -> None:
+        """Mount another application or handler at a specific path prefix."""
+        path = path.rstrip("/")
+        # Mount the exact prefix
+        self.get(path)(app)
+        self.get(path + "/")(app)
+        # Mount all subpaths
+        self.get(path + "/*path")(app)
+
     def get(
         self,
         path: str,

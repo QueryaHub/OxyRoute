@@ -132,6 +132,15 @@ class App:
         """
         self._app.set_security_headers(config)
 
+    def mount(self, path: str, app: Any) -> None:
+        """Mount another application or handler at a specific path prefix."""
+        path = path.rstrip("/")
+        # Mount the exact prefix
+        self.get(path)(app)
+        self.get(path + "/")(app)
+        # Mount all subpaths
+        self.get(path + "/*path")(app)
+
     def get(
         self,
         path: str,
