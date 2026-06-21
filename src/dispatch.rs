@@ -932,7 +932,7 @@ pub async fn run_rsgi(
         match Python::with_gil(|py| -> PyResult<Py<PyAny>> {
             let s = scope.bind(py);
             let d = build_request_context(py, s, &method, &path, &query_string)?;
-            Ok(d.unbind().into())
+            Ok(d.unbind())
         }) {
             Ok(o) => Some(o),
             Err(e) => {

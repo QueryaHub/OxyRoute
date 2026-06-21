@@ -342,6 +342,9 @@ async def asgi_to_rsgi(
         qs.decode("utf-8") if qs else "",
         hdrs,
     )
+    client = scope.get("client")
+    if client:
+        rscope.client = f"{client[0]}:{client[1]}"
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
