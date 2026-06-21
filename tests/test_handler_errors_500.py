@@ -8,7 +8,7 @@ import os
 
 import httpx
 from oxyroute import App
-from tests._rsgi_test_transport import asgi_test_app
+from oxyroute.testing import asgi_test_app
 
 
 def _make_app() -> App:
@@ -59,7 +59,7 @@ import os
 
 import httpx
 from oxyroute import App
-from tests._rsgi_test_transport import asgi_test_app
+from oxyroute.testing import asgi_test_app
 
 os.environ["OXYROUTE_DEBUG"] = "1"
 

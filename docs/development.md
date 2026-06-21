@@ -19,6 +19,29 @@ The `make test` and `make pytest` commands automatically run tests from a tempor
 - `make fix` — Auto-format code with `ruff format` and `cargo fmt`.
 - `make develop` — Build the Rust extension into `.venv` without running tests.
 
+## Writing Application Tests
+
+OxyRoute ships with an integrated `TestClient` for writing synchronous HTTP tests against your application without needing to start a real server.
+
+```python
+from oxyroute import App
+from oxyroute.testing import TestClient
+
+app = App()
+
+@app.get("/")
+def home():
+    return {"status": "ok"}
+
+def test_home():
+    with TestClient(app) as client:
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+```
+
+Using `with TestClient(app)` ensures that the application's `__rsgi_init__` and `__rsgi_del__` lifespan hooks are run synchronously.
+
 ## Granian RSGI (end-to-end)
 
 `tests/test_granian_e2e.py` starts a real **Granian** subprocess with `--interface rsgi`, sends HTTP requests with **httpx**, then stops the server. It is part of the normal **pytest** run when `granian` is installed (`oxyroute[dev]` includes it). The same file runs in **CI** on every matrix combination (Linux, macOS, Windows), so the native RSGI path is exercised against a real server, not only the in-process httpx test transport.
