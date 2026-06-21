@@ -67,6 +67,8 @@ pub struct RouteEntry {
     pub handler_varkw: bool,
     /// Sync ``call0()`` route with no body/JWT/deps/kwargs — eligible for RSGI sync fast path.
     pub trivial_sync: bool,
+    /// Pydantic model for request body validation.
+    pub body_model: Option<Py<PyAny>>,
 }
 
 /// True when the route can be served by [`try_rsgi_sync_short_circuit`](crate::dispatch::try_rsgi_sync_short_circuit)
