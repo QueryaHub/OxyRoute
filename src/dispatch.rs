@@ -6,8 +6,8 @@ use parking_lot::RwLock;
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::{decode, Validation};
 use pyo3::prelude::*;
-use pyo3::IntoPyObjectExt;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
+use pyo3::IntoPyObjectExt;
 use serde_json::Value as JsonValue;
 
 use crate::config;
@@ -174,15 +174,28 @@ fn send_python_error_sync(
             if let Ok(exc_obj) = err.clone_ref(py).into_bound_py_any(py) {
                 if exc_obj.is_instance(exc_type.bind(py)).unwrap_or(false) {
                     if *is_async {
-                        log::error!("Async exception handler cannot be called in sync route fallback: {}", method);
+                        log::error!(
+                            "Async exception handler cannot be called in sync route fallback: {}",
+                            method
+                        );
                         continue;
                     }
                     let exc_obj_any = exc_obj.clone().into_any();
                     if let Ok(res) = handler.bind(py).call1((sc.clone(), exc_obj_any)) {
                         match map_handler_return(py, &res.clone().unbind()) {
-                            Ok(mapped) => return send_handler_map_inline(py, protocol, method == "HEAD", mapped),
+                            Ok(mapped) => {
+                                return send_handler_map_inline(
+                                    py,
+                                    protocol,
+                                    method == "HEAD",
+                                    mapped,
+                                )
+                            }
                             Err(e) => {
-                                log::error!("Exception handler returned invalid type or map failed: {:?}", e);
+                                log::error!(
+                                    "Exception handler returned invalid type or map failed: {:?}",
+                                    e
+                                );
                             }
                         }
                     }
@@ -241,7 +254,8 @@ async fn send_python_error(
                 if let Ok(exc_obj) = err.clone_ref(py).into_bound_py_any(py) {
                     if exc_obj.is_instance(exc_type.bind(py)).unwrap_or(false) {
                         let exc_obj_any = exc_obj.clone().into_any();
-                        if let Ok(res) = handler.bind(py).call1((sc.bind(py).clone(), exc_obj_any)) {
+                        if let Ok(res) = handler.bind(py).call1((sc.bind(py).clone(), exc_obj_any))
+                        {
                             return Ok(Some((res.unbind(), *is_async)));
                         }
                     }
@@ -269,12 +283,17 @@ async fn send_python_error(
 
             let mapped_res = Python::with_gil(|py| map_handler_return(py, &final_res));
             if let Ok(mapped) = mapped_res {
-                let res = Python::with_gil(|py| send_handler_map_inline(py, protocol, method == "HEAD", mapped));
+                let res = Python::with_gil(|py| {
+                    send_handler_map_inline(py, protocol, method == "HEAD", mapped)
+                });
                 if res.is_ok() {
                     return Ok(Python::with_gil(|py| py.None()));
                 }
             } else {
-                log::error!("Async exception handler returned invalid type or map failed: {:?}", mapped_res.err());
+                log::error!(
+                    "Async exception handler returned invalid type or map failed: {:?}",
+                    mapped_res.err()
+                );
             }
         }
     }
@@ -371,7 +390,16 @@ pub fn try_rsgi_sync_short_circuit(
                 return Err(pyo3::exceptions::PyRuntimeError::new_err("route index"));
             };
             if route_is_trivial_sync(entry) {
-                run_trivial_sync_route(py, &protocol_py, &method, &path, is_head, entry, scope, state)?;
+                run_trivial_sync_route(
+                    py,
+                    &protocol_py,
+                    &method,
+                    &path,
+                    is_head,
+                    entry,
+                    scope,
+                    state,
+                )?;
                 return Ok(Some(py.None()));
             }
             Ok(None)
@@ -493,7 +521,8 @@ pub async fn run_rsgi(
         }) {
             Ok(x) => x,
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await;
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    .await;
             }
         };
         let skip = Python::with_gil(|py| out.bind(py).is_none());
@@ -566,7 +595,10 @@ pub async fn run_rsgi(
                 send_handler_map_inline(py, &protocol, is_head, mapped)
             }) {
                 Ok(()) => Ok(Python::with_gil(|py| py.None())),
-                Err(e) => send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await,
+                Err(e) => {
+                    send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                        .await
+                }
             };
         }
     }
@@ -828,7 +860,15 @@ pub async fn run_rsgi(
             let ct = match ct {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await;
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        e,
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             };
             if ct.as_deref().map(str::is_empty) != Some(false) {
@@ -893,7 +933,8 @@ pub async fn run_rsgi(
         }) {
             Ok(o) => Some(o),
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await;
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    .await;
             }
         }
     } else {
@@ -921,7 +962,15 @@ pub async fn run_rsgi(
             }) {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await;
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        e,
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             };
             let fut = match Python::with_gil(|py| {
@@ -930,13 +979,29 @@ pub async fn run_rsgi(
             }) {
                 Ok(f) => f,
                 Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await;
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        e,
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             };
             match fut.await {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await;
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        e,
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             }
         } else {
@@ -959,7 +1024,15 @@ pub async fn run_rsgi(
             }) {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await;
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        e,
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             }
         };
@@ -978,7 +1051,17 @@ pub async fn run_rsgi(
                 if let Some(pool) = snapshot.db_pool.as_ref() {
                     match crate::db::execute_query(pool, &db_query).await {
                         Ok(res) => res,
-                        Err(e) => return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await,
+                        Err(e) => {
+                            return send_python_error(
+                                &protocol,
+                                &method,
+                                &path,
+                                e,
+                                Some(&scope),
+                                Some(&state),
+                            )
+                            .await
+                        }
                     }
                 } else {
                     return send_python_error(
@@ -988,12 +1071,17 @@ pub async fn run_rsgi(
                         pyo3::exceptions::PyRuntimeError::new_err(
                             "DBQuery returned by dependency but no database pool configured",
                         ),
-                        Some(&scope), Some(&state),
-                    ).await;
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             }
             Ok(None) => o,
-            Err(e) => return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await,
+            Err(e) => {
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    .await
+            }
         };
 
         dep_out.push(resolved);
@@ -1082,7 +1170,8 @@ pub async fn run_rsgi(
     }) {
         Ok(x) => x,
         Err(e) => {
-            return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await;
+            return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                .await;
         }
     };
     let handler_out: PyObject = if run_async {
@@ -1092,13 +1181,15 @@ pub async fn run_rsgi(
         }) {
             Ok(f) => f,
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await;
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    .await;
             }
         };
         match fut.await {
             Ok(x) => x,
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await;
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    .await;
             }
         }
     } else {
