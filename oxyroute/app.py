@@ -98,8 +98,9 @@ class App:
             kw: dict[str, Any] = {k: v for k, v in merged.items() if k in allowed}
             reg(self, full, **kw)(handler)
 
-    
-    def add_exception_handler(self, exc_type: type[BaseException], handler: Callable[..., Any]) -> None:
+    def add_exception_handler(
+        self, exc_type: type[BaseException], handler: Callable[..., Any]
+    ) -> None:
         """
         Register a global exception handler for a specific exception type.
         """
