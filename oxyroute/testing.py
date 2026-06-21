@@ -250,6 +250,16 @@ class _RsgiProtocol:
             }
         )
 
+    def response_file(self, status: int, headers: list, file: str) -> None:
+        import anyio
+
+        async def _read_file() -> bytes:
+            async with await anyio.open_file(file, "rb") as f:
+                return await f.read()
+
+        body = asyncio.run_coroutine_threadsafe(_read_file(), self._loop).result()
+        self.response_bytes(status, headers, body)
+
     def response_empty(self, status: int, headers: list) -> None:
         self._status = int(status)
         self.status = int(status)
