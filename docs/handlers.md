@@ -98,4 +98,4 @@ For a configurable **`allow_origins` / `allow_methods` / `allow_headers`** flow 
 - [CORS](cors.md)
 - [Security headers](security-headers.md)
 - [CSRF](csrf.md)
-- [SSE](sse.md)
+- [SSE](streaming.md)
