@@ -247,7 +247,7 @@ pub fn try_rsgi_sync_short_circuit(
     let is_head = method == "HEAD";
     let snapshot = state.read().hot_snapshot();
     let needs_response_cfg_merge = snapshot.cors.is_some() || snapshot.security_headers.is_some();
-    if snapshot.middleware.is_some() {
+    if !snapshot.request_middleware.is_empty() || !snapshot.response_middleware.is_empty() {
         return Ok(None);
     }
     if method == "GET" && path == "/test_db" {
@@ -357,12 +357,18 @@ pub async fn run_rsgi(
     let Some((method, path, query_string, is_head, snapshot)) = prelim else {
         return Ok(Python::with_gil(|py| py.None()));
     };
-    type CfgClones = (Option<Py<PyAny>>, Option<Py<PyAny>>, Option<Py<PyAny>>);
-    let (cors_cfg, security_cfg, maybe_mw): CfgClones = Python::with_gil(|_py| {
+    type CfgClones = (
+        Option<Py<PyAny>>,
+        Option<Py<PyAny>>,
+        Arc<Vec<Py<PyAny>>>,
+        Arc<Vec<Py<PyAny>>>,
+    );
+    let (cors_cfg, security_cfg, req_mw, res_mw): CfgClones = Python::with_gil(|_py| {
         (
             snapshot.cors.clone(),
             snapshot.security_headers.clone(),
-            snapshot.middleware.clone(),
+            snapshot.request_middleware.clone(),
+            snapshot.response_middleware.clone(),
         )
     });
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
@@ -406,7 +412,7 @@ pub async fn run_rsgi(
             }
         }
     }
-    if let Some(mw) = maybe_mw {
+    for mw in req_mw.iter() {
         let out: Py<PyAny> = match Python::with_gil(|py| {
             let f = mw.bind(py);
             f.call1((scope.bind(py), protocol.bind(py)))
@@ -420,7 +426,57 @@ pub async fn run_rsgi(
         let skip = Python::with_gil(|py| out.bind(py).is_none());
         if !skip {
             return match Python::with_gil(|py| -> PyResult<()> {
-                let mapped = map_handler_return(py, &out)?;
+                let mut mapped = map_handler_return(py, &out)?;
+
+                if !res_mw.is_empty() && !matches!(mapped, HandlerMap::AlreadySent) {
+                    let response_module = py.import("oxyroute.response")?;
+                    let response_class = response_module.getattr("Response")?;
+                    for res_m in res_mw.iter() {
+                        let kwargs = pyo3::types::PyDict::new(py);
+                        match &mapped {
+                            HandlerMap::Simple {
+                                status,
+                                body,
+                                content_type,
+                            } => {
+                                let hdrs = pyo3::types::PyDict::new(py);
+                                hdrs.set_item("content-type", content_type)?;
+                                kwargs.set_item("status", status)?;
+                                kwargs.set_item("headers", hdrs)?;
+                                match body {
+                                    SimpleBody::Owned(v) => kwargs.set_item(
+                                        "body",
+                                        pyo3::types::PyBytes::new(py, v.as_slice()),
+                                    )?,
+                                    SimpleBody::PyBytes(b) => kwargs.set_item("body", b)?,
+                                    SimpleBody::PyString(s) => kwargs.set_item("body", s)?,
+                                }
+                            }
+                            HandlerMap::WithHeaders {
+                                status,
+                                body,
+                                headers,
+                            } => {
+                                kwargs.set_item("status", status)?;
+                                let hdrs = pyo3::types::PyDict::new(py);
+                                for (k, v) in headers {
+                                    hdrs.set_item(k, v)?;
+                                }
+                                kwargs.set_item("headers", hdrs)?;
+                                kwargs.set_item("body", pyo3::types::PyBytes::new(py, body))?;
+                            }
+                            HandlerMap::AlreadySent => unreachable!(),
+                        }
+                        let res_obj = response_class.call((), Some(&kwargs))?;
+                        let next_out = res_m.bind(py).call1((scope.bind(py).clone(), res_obj))?;
+                        let next_out_py = next_out.unbind();
+                        mapped = map_handler_return(py, &next_out_py)?;
+                        if matches!(mapped, HandlerMap::AlreadySent) {
+                            break;
+                        }
+                    }
+                }
+
                 let mapped = if security_cfg.is_some() || cors_cfg.is_some() {
                     let scope_bound = scope.bind(py).clone();
                     let mapped = merge_config_response_headers(
@@ -979,7 +1035,55 @@ pub async fn run_rsgi(
     // calls are fire-and-forget on the protocol object; folding the send here saves
     // 1-2 extra GIL acquires on the response path.
     match Python::with_gil(|py| -> PyResult<()> {
-        let mapped = map_handler_return(py, &handler_out)?;
+        let mut mapped = map_handler_return(py, &handler_out)?;
+
+        if !res_mw.is_empty() && !matches!(mapped, HandlerMap::AlreadySent) {
+            let response_module = py.import("oxyroute.response")?;
+            let response_class = response_module.getattr("Response")?;
+            for res_m in res_mw.iter() {
+                let kwargs = pyo3::types::PyDict::new(py);
+                match &mapped {
+                    HandlerMap::Simple {
+                        status,
+                        body,
+                        content_type,
+                    } => {
+                        let hdrs = pyo3::types::PyDict::new(py);
+                        hdrs.set_item("content-type", content_type)?;
+                        kwargs.set_item("status", status)?;
+                        kwargs.set_item("headers", hdrs)?;
+                        match body {
+                            SimpleBody::Owned(v) => kwargs
+                                .set_item("body", pyo3::types::PyBytes::new(py, v.as_slice()))?,
+                            SimpleBody::PyBytes(b) => kwargs.set_item("body", b)?,
+                            SimpleBody::PyString(s) => kwargs.set_item("body", s)?,
+                        }
+                    }
+                    HandlerMap::WithHeaders {
+                        status,
+                        body,
+                        headers,
+                    } => {
+                        kwargs.set_item("status", status)?;
+                        let hdrs = pyo3::types::PyDict::new(py);
+                        for (k, v) in headers {
+                            hdrs.set_item(k, v)?;
+                        }
+                        kwargs.set_item("headers", hdrs)?;
+                        kwargs.set_item("body", pyo3::types::PyBytes::new(py, body))?;
+                    }
+                    HandlerMap::AlreadySent => unreachable!(),
+                }
+                let res_obj = response_class.call((), Some(&kwargs))?;
+                let next_out = res_m.bind(py).call1((scope.bind(py).clone(), res_obj))?;
+                let next_out_py = next_out.unbind();
+                mapped = map_handler_return(py, &next_out_py)?;
+                if matches!(mapped, HandlerMap::AlreadySent) {
+                    break;
+                }
+            }
+        }
+
         let mapped = if security_cfg.is_some() || cors_cfg.is_some() {
             let scope_bound = scope.bind(py).clone();
             let mapped = merge_config_response_headers(

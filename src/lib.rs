@@ -360,7 +360,29 @@ impl App {
     /// is mapped like a route handler (e.g. :class:`oxyroute.Response`, ``dict`` with ``status`` / ``body`` / ``headers``).
     fn set_middleware(&self, handler: Option<Py<PyAny>>) -> PyResult<()> {
         let mut st = self.state.write();
-        st.middleware = handler;
+        if let Some(h) = handler {
+            st.request_middleware = Arc::new(vec![h]);
+        } else {
+            st.request_middleware = Arc::new(Vec::new());
+        }
+        Ok(())
+    }
+
+    /// Add a middleware to the stack. `phase` must be "request", "response", or "both".
+    #[pyo3(signature = (handler, phase="request"))]
+    fn add_middleware(&self, handler: Py<PyAny>, phase: &str) -> PyResult<()> {
+        let mut st = self.state.write();
+        if phase == "request" || phase == "both" {
+            Arc::make_mut(&mut st.request_middleware).push(handler.clone());
+        }
+        if phase == "response" || phase == "both" {
+            Arc::make_mut(&mut st.response_middleware).push(handler);
+        }
+        if phase != "request" && phase != "response" && phase != "both" {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "phase must be 'request', 'response', or 'both'",
+            ));
+        }
         Ok(())
     }
 
