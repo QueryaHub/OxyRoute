@@ -649,6 +649,7 @@ pub async fn run_rsgi(
         dep_wants_request,
         handler_param_names,
         handler_varkw,
+        body_model,
     ) = Python::with_gil(|_py| -> PyResult<_> {
         let e = routes_arc
             .get(route_idx)
@@ -671,6 +672,7 @@ pub async fn run_rsgi(
             Arc::clone(&e.dep_wants_request),
             Arc::clone(&e.handler_param_names),
             e.handler_varkw,
+            e.body_model.clone(),
         ))
     })?;
     let may_need_raw_body = handler_varkw || handler_param_names.contains("body");
@@ -1105,10 +1107,15 @@ pub async fn run_rsgi(
         || should_pass_files
         || should_pass_body
         || should_pass_protocol;
-    let (res, run_async) = match Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
+    enum RunHandlerResult {
+        Ok((PyObject, bool)),
+        ValidationError(String),
+    }
+
+    let (res, run_async) = match Python::with_gil(|py| -> PyResult<RunHandlerResult> {
         if !should_use_kwargs {
             let res = handler.bind(py).call0()?.unbind();
-            return Ok((res, is_async));
+            return Ok(RunHandlerResult::Ok((res, is_async)));
         }
         let kwargs = PyDict::new(py);
         for (k, v) in param_map {
@@ -1135,7 +1142,31 @@ pub async fn run_rsgi(
         }
         if let Some(ref j) = body_json {
             let pyv = json_to_py(py, j)?;
-            kwargs.set_item("json", pyv)?;
+            if let Some(ref bm) = body_model {
+                match bm.bind(py).call_method1("model_validate", (&pyv,)) {
+                    Ok(validated) => {
+                        kwargs.set_item("json", validated)?;
+                    }
+                    Err(e) => {
+                        let err_str: String =
+                            if let Ok(exc_obj) = e.clone_ref(py).into_bound_py_any(py) {
+                                if let Ok(j_method) = exc_obj.call_method0("json") {
+                                    j_method
+                                        .extract::<String>()
+                                        .unwrap_or_else(|_| "[]".to_string())
+                                } else {
+                                    "[]".to_string()
+                                }
+                            } else {
+                                "[]".to_string()
+                            };
+                        let err_json = format!(r#"{{"detail":{err_str}}}"#);
+                        return Ok(RunHandlerResult::ValidationError(err_json));
+                    }
+                }
+            } else {
+                kwargs.set_item("json", pyv)?;
+            }
         }
         if read_form_body {
             if should_pass_form {
@@ -1167,9 +1198,18 @@ pub async fn run_rsgi(
             kwargs.set_item("protocol", protocol.bind(py))?;
         }
         let res = handler.bind(py).call((), Some(&kwargs))?.unbind();
-        Ok((res, is_async))
+        Ok(RunHandlerResult::Ok((res, is_async)))
     }) {
-        Ok(x) => x,
+        Ok(RunHandlerResult::Ok((res, is_async))) => (res, is_async),
+        Ok(RunHandlerResult::ValidationError(err_json)) => {
+            return response::send_text(
+                &protocol,
+                422,
+                &err_json,
+                "application/json; charset=utf-8",
+            )
+            .await;
+        }
         Err(e) => {
             return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
                 .await;
