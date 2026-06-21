@@ -5,6 +5,7 @@ from oxyroute.app import App, Depends
 from oxyroute.cors import CORSConfig, apply_cors
 from oxyroute.csrf import CSRFConfig, apply_csrf, csrf_layer
 from oxyroute.exceptions import HTTPException
+from oxyroute.request import Request
 from oxyroute.response import Response
 from oxyroute.router import APIRouter
 from oxyroute.security_headers import SecurityHeadersConfig
@@ -18,6 +19,7 @@ __all__ = [
     "DBQuery",
     "Depends",
     "HTTPException",
+    "Request",
     "Response",
     "SSEEvent",
     "SecurityHeadersConfig",
