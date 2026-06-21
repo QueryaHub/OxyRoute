@@ -209,6 +209,7 @@ fn send_python_error_sync(
     send_internal_error_sync(py, protocol, method, path, err)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_trivial_sync_route(
     py: Python<'_>,
     protocol: &Py<PyAny>,
