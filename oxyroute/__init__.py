@@ -10,6 +10,7 @@ from oxyroute.response import Response
 from oxyroute.router import APIRouter
 from oxyroute.security_headers import SecurityHeadersConfig
 from oxyroute.sse import SSEEvent, send_sse, sse_done
+from oxyroute.static import StaticFiles
 from oxyroute.streaming import stream_bytes, stream_jsonl, stream_text
 
 __all__ = [
@@ -24,6 +25,7 @@ __all__ = [
     "Response",
     "SSEEvent",
     "SecurityHeadersConfig",
+    "StaticFiles",
     "WebSocket",
     "__version__",
     "apply_cors",
