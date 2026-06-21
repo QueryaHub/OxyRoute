@@ -358,6 +358,19 @@ impl App {
 
     /// Single optional pre-route hook. Return ``None`` to continue; otherwise the return value
     /// is mapped like a route handler (e.g. :class:`oxyroute.Response`, ``dict`` with ``status`` / ``body`` / ``headers``).
+    
+    #[pyo3(signature = (exc_type, handler))]
+    fn add_exception_handler(&self, exc_type: pyo3::Bound<'_, pyo3::types::PyType>, handler: Py<PyAny>) -> PyResult<()> {
+        let mut st = self.state.write();
+        let is_async = pyo3::Python::with_gil(|py| -> PyResult<bool> {
+            let inspect = py.import("inspect")?;
+            inspect.getattr("iscoroutinefunction")?.call1((&handler,))?.extract::<bool>()
+        }).unwrap_or(false);
+        println!("is_async = {}", is_async);
+        Arc::make_mut(&mut st.exception_handlers).push((exc_type.unbind(), handler, is_async));
+        Ok(())
+    }
+
     fn set_middleware(&self, handler: Option<Py<PyAny>>) -> PyResult<()> {
         let mut st = self.state.write();
         if let Some(h) = handler {
