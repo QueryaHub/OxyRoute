@@ -2,8 +2,8 @@ import asyncio
 
 import httpx
 from oxyroute import App
+from oxyroute.testing import asgi_test_app
 from pydantic import BaseModel
-from tests._rsgi_test_transport import asgi_test_app
 
 
 class UserBody(BaseModel):
