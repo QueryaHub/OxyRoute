@@ -38,6 +38,7 @@ pub struct WebsocketRoute {
 
 #[derive(Clone)]
 pub struct RouteEntry {
+    pub path_template: String,
     pub handler: Py<PyAny>,
     pub is_async: bool,
     pub require_jwt: bool,
