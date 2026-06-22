@@ -220,6 +220,11 @@ fn run_trivial_sync_route(
     scope: &pyo3::Bound<'_, PyAny>,
     state: &std::sync::Arc<parking_lot::RwLock<crate::state::AppState>>,
 ) -> PyResult<()> {
+    let _ = protocol.setattr(
+        py,
+        "__oxyroute_path_template__",
+        entry.path_template.clone(),
+    );
     let handler = entry.handler.bind(py);
     let out = match handler.call0() {
         Ok(x) => x.unbind(),
@@ -348,6 +353,7 @@ pub fn try_rsgi_sync_short_circuit(
     }
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
     {
+        let _ = protocol_py.setattr(py, "__oxyroute_path_template__", "/openapi.json");
         let doc = state.read().openapi.lock().to_string();
         if is_head {
             response::send_head_simple_sync(
@@ -475,6 +481,9 @@ pub async fn run_rsgi(
     });
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
     {
+        let _ = Python::with_gil(|py| {
+            protocol.setattr(py, "__oxyroute_path_template__", "/openapi.json")
+        });
         let doc = state.read().openapi.lock().to_string();
         if is_head {
             return response::send_head_simple(
@@ -489,6 +498,8 @@ pub async fn run_rsgi(
     }
     // Prototype: Issue 55 (sqlx integration benchmark path)
     if method == "GET" && path == "/test_db" {
+        let _ =
+            Python::with_gil(|py| protocol.setattr(py, "__oxyroute_path_template__", "/test_db"));
         if let Some(pool) = snapshot.db_pool.as_ref() {
             use sqlx::Row;
             match sqlx::query("SELECT 1 as num").fetch_one(pool).await {
@@ -677,6 +688,13 @@ pub async fn run_rsgi(
     })?;
     let may_need_raw_body = handler_varkw || handler_param_names.contains("body");
     let should_read_body = read_json_body || read_form_body || may_need_raw_body;
+    let _ = Python::with_gil(|py| {
+        protocol.setattr(
+            py,
+            "__oxyroute_path_template__",
+            routes_arc[route_idx].path_template.clone(),
+        )
+    });
     let mut body_bytes: Vec<u8> = if should_read_body {
         let read_fut = Python::with_gil(|py| {
             let p = protocol.bind(py);

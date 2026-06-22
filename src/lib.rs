@@ -251,6 +251,7 @@ impl App {
         let routes = Arc::make_mut(&mut st.routes);
         let idx = routes.len();
         routes.push(state::RouteEntry {
+            path_template: path.to_string(),
             handler,
             is_async,
             require_jwt,

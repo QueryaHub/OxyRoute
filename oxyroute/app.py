@@ -18,6 +18,37 @@ def _unwrap_dep(f: Dep) -> Any:
         return f.dependency()
     return f
 
+class _ProtocolWrapper:
+    __slots__ = ("_inner", "status", "__oxyroute_path_template__")
+    
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.status: int = 500
+        self.__oxyroute_path_template__: str = ""
+
+    def __oxyroute_set_path_template__(self, template: str) -> None:
+        self.__oxyroute_path_template__ = template
+
+    def response_empty(self, status: int, headers: list[tuple[str, str]]) -> None:
+        self.status = status
+        self._inner.response_empty(status, headers)
+
+    def response_str(self, status: int, headers: list[tuple[str, str]], body: str) -> None:
+        self.status = status
+        self._inner.response_str(status, headers, body)
+
+    def response_bytes(self, status: int, headers: list[tuple[str, str]], body: bytes) -> None:
+        self.status = status
+        self._inner.response_bytes(status, headers, body)
+
+    def response_file(self, status: int, headers: list[tuple[str, str]], file_path: str) -> None:
+        self.status = status
+        self._inner.response_file(status, headers, file_path)
+
+    def response_stream(self, status: int, headers: list[tuple[str, str]]) -> Any:
+        self.status = status
+        return self._inner.response_stream(status, headers)
+
 
 def _norm_dependencies(
     deps: list[tuple[str, Dep]] | None,
@@ -43,10 +74,17 @@ class App:
     Granian worker processes.
     """
 
-    def __init__(self, title: str = "OxyRoute", *, include_openapi: bool = True) -> None:
+    def __init__(
+        self,
+        title: str = "OxyRoute",
+        *,
+        include_openapi: bool = True,
+        access_log_hook: Callable[[Any, int, float, str], None] | None = None,
+    ) -> None:
         self._app = _oxyroute.App(include_openapi=include_openapi)
         self._app.set_openapi_title(title)
         self.title = title
+        self.access_log_hook = access_log_hook
         # Per-process mutable bag for ``__rsgi_init__`` / factory setup (DB pool, clients, …).
         self.state: SimpleNamespace = SimpleNamespace()
 
@@ -413,6 +451,17 @@ class App:
         Granian awaits this coroutine. Native ``handle_rsgi`` may return ``None`` immediately
         (sync short-circuit for openapi / 404 / 405) or an awaitable (full async path).
         """
+        if self.access_log_hook:
+            import time
+            start = time.perf_counter_ns()
+            p = _ProtocolWrapper(protocol)
+            r = self._app.handle_rsgi(scope, p)
+            if r is not None and inspect.isawaitable(r):
+                await r
+            dur = (time.perf_counter_ns() - start) / 1000000.0
+            self.access_log_hook(scope, p.status, dur, p.__oxyroute_path_template__)
+            return r
+        
         r = self._app.handle_rsgi(scope, protocol)
         if r is None or not inspect.isawaitable(r):
             return r
