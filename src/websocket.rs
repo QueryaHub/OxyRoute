@@ -34,11 +34,7 @@ pub struct WebSocket {
 }
 
 impl WebSocket {
-    pub fn new(
-        protocol: Py<PyAny>,
-        scope: Py<PyAny>,
-        path_params: Vec<(String, String)>,
-    ) -> Self {
+    pub fn new(protocol: Py<PyAny>, scope: Py<PyAny>, path_params: Vec<(String, String)>) -> Self {
         Self {
             protocol,
             scope,
