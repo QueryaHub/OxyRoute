@@ -354,7 +354,14 @@ pub fn try_rsgi_sync_short_circuit(
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
     {
         let _ = protocol_py.setattr(py, "__oxyroute_path_template__", "/openapi.json");
-        let doc = state.read().openapi.lock().to_string();
+        let doc: Arc<String> = {
+            let state_guard = state.read();
+            let mut oa = state_guard.openapi.lock();
+            if oa.1.is_none() {
+                oa.1 = Some(Arc::new(oa.0.to_string()));
+            }
+            Arc::clone(oa.1.as_ref().unwrap())
+        };
         if is_head {
             response::send_head_simple_sync(
                 py,
@@ -484,7 +491,14 @@ pub async fn run_rsgi(
         let _ = Python::with_gil(|py| {
             protocol.setattr(py, "__oxyroute_path_template__", "/openapi.json")
         });
-        let doc = state.read().openapi.lock().to_string();
+        let doc: Arc<String> = {
+            let state_guard = state.read();
+            let mut oa = state_guard.openapi.lock();
+            if oa.1.is_none() {
+                oa.1 = Some(Arc::new(oa.0.to_string()));
+            }
+            Arc::clone(oa.1.as_ref().unwrap())
+        };
         if is_head {
             return response::send_head_simple(
                 &protocol,
