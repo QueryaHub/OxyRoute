@@ -8,13 +8,16 @@ __all__ = ["stream_bytes", "stream_done", "stream_jsonl", "stream_text"]
 
 
 class _StreamDone:
-    __slots__ = ()
+    __slots__ = ("status",)
     __oxyroute_stream_done__ = True
 
+    def __init__(self, status: int = 200) -> None:
+        self.status = status
 
-def stream_done() -> Any:
+
+def stream_done(status: int = 200) -> Any:
     """Return a marker value telling OxyRoute the response was already sent."""
-    return _StreamDone()
+    return _StreamDone(status)
 
 
 async def stream_bytes(
@@ -44,7 +47,7 @@ async def stream_bytes(
         else:
             for chunk in iterable:  # type: ignore[not-an-iterable]
                 await stream.send_bytes(chunk)
-        return stream_done()
+        return stream_done(status)
 
     # Fallback for test/ASGI transports
     chunks: list[bytes] = []
@@ -55,7 +58,7 @@ async def stream_bytes(
         for chunk in iterable:  # type: ignore[not-an-iterable]
             chunks.append(chunk)
     protocol.response_bytes(status, base_headers, b"".join(chunks))
-    return stream_done()
+    return stream_done(status)
 
 
 async def stream_text(
@@ -85,7 +88,7 @@ async def stream_text(
         else:
             for chunk in iterable:  # type: ignore[not-an-iterable]
                 await stream.send_str(chunk)
-        return stream_done()
+        return stream_done(status)
 
     chunks: list[str] = []
     if hasattr(iterable, "__aiter__"):
@@ -95,7 +98,7 @@ async def stream_text(
         for chunk in iterable:  # type: ignore[not-an-iterable]
             chunks.append(chunk)
     protocol.response_str(status, base_headers, "".join(chunks))
-    return stream_done()
+    return stream_done(status)
 
 
 async def stream_jsonl(
