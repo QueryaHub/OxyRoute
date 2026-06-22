@@ -18,9 +18,10 @@ def _unwrap_dep(f: Dep) -> Any:
         return f.dependency()
     return f
 
+
 class _ProtocolWrapper:
     __slots__ = ("__oxyroute_path_template__", "_inner", "status")
-    
+
     def __init__(self, inner: Any) -> None:
         self._inner = inner
         self.status: int = 500
@@ -453,6 +454,7 @@ class App:
         """
         if self.access_log_hook:
             import time
+
             start = time.perf_counter_ns()
             p = _ProtocolWrapper(protocol)
             r = self._app.handle_rsgi(scope, p)
@@ -461,7 +463,7 @@ class App:
             dur = (time.perf_counter_ns() - start) / 1000000.0
             self.access_log_hook(scope, p.status, dur, p.__oxyroute_path_template__)
             return r
-        
+
         r = self._app.handle_rsgi(scope, protocol)
         if r is None or not inspect.isawaitable(r):
             return r
