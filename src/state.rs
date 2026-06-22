@@ -93,7 +93,7 @@ pub struct AppState {
     pub delete: Mutex<Router<usize>>,
     pub options: Mutex<Router<usize>>,
     pub websocket: Mutex<Router<usize>>,
-    pub openapi: Mutex<serde_json::Value>,
+    pub openapi: Mutex<(serde_json::Value, Option<Arc<String>>)>,
     /// When `Some`, route matching uses these tables without taking per-router mutexes
     /// (populated in [`App::freeze`](crate::App::freeze)).
     pub compiled: Option<Arc<CompiledRouters>>,
@@ -132,7 +132,7 @@ impl AppState {
             delete: Mutex::new(Router::new()),
             options: Mutex::new(Router::new()),
             websocket: Mutex::new(Router::new()),
-            openapi: Mutex::new(openapi),
+            openapi: Mutex::new((openapi, None)),
             compiled: None,
             frozen: false,
             include_openapi: true,
@@ -213,6 +213,7 @@ pub fn match_ws_route_compiled(
 /// Lookup an HTTP route in a precomputed [`CompiledRouters`] (lock-free).
 ///
 /// Returns ``None`` for unsupported method, ``Some(None)`` for no match, ``Some(Some(...))`` on hit.
+#[allow(clippy::type_complexity)]
 pub fn match_route_compiled(
     compiled: &CompiledRouters,
     method: &str,
@@ -353,26 +354,27 @@ fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
 /// Returns route index and path params, or `None` if the method is unsupported; `Some(None)` if
 /// no match; `Some(Some)` on success. Uses [`CompiledRouters`] when set (lock-free).
 #[cfg(test)]
+#[allow(clippy::type_complexity)]
 fn match_route(
     state: &AppState,
     method: &str,
     path: &str,
-) -> Option<Option<(usize, HashMap<String, String>)>> {
+) -> Option<Option<(usize, Vec<(String, String)>)>> {
     if let Some(c) = &state.compiled {
         let g = router_for_compiled(c, method)?;
         return Some(g.at(path).ok().map(|m| {
-            let mut pmap = HashMap::new();
+            let mut pmap = Vec::new();
             for (k, v) in m.params.iter() {
-                pmap.insert(k.to_string(), v.to_string());
+                pmap.push((k.to_string(), v.to_string()));
             }
             (*m.value, pmap)
         }));
     }
     let g = map_method_router(state, method)?;
     Some(g.at(path).ok().map(|m| {
-        let mut pmap = HashMap::new();
+        let mut pmap = Vec::new();
         for (k, v) in m.params.iter() {
-            pmap.insert(k.to_string(), v.to_string());
+            pmap.push((k.to_string(), v.to_string()));
         }
         (*m.value, pmap)
     }))
@@ -394,7 +396,7 @@ mod tests {
         assert_eq!(pre, post);
         let inner = pre.expect("match");
         assert_eq!(inner.0, 7);
-        assert_eq!(inner.1.get("id").map(String::as_str), Some("5"));
+        assert_eq!(inner.1.iter().find(|(k, _)| k == "id").map(|(_, v)| v.as_str()), Some("5"));
     }
 
     #[test]
