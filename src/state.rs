@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use matchit::Router;
@@ -200,11 +200,11 @@ pub struct HotSnapshot {
 pub fn match_ws_route_compiled(
     compiled: &CompiledRouters,
     path: &str,
-) -> Option<(usize, HashMap<String, String>)> {
+) -> Option<(usize, Vec<(String, String)>)> {
     compiled.websocket.at(path).ok().map(|m| {
-        let mut pmap = HashMap::new();
+        let mut pmap = Vec::new();
         for (k, v) in m.params.iter() {
-            pmap.insert(k.to_string(), v.to_string());
+            pmap.push((k.to_string(), v.to_string()));
         }
         (*m.value, pmap)
     })
@@ -217,12 +217,12 @@ pub fn match_route_compiled(
     compiled: &CompiledRouters,
     method: &str,
     path: &str,
-) -> Option<Option<(usize, HashMap<String, String>)>> {
+) -> Option<Option<(usize, Vec<(String, String)>)>> {
     let g = router_for_compiled(compiled, method)?;
     Some(g.at(path).ok().map(|m| {
-        let mut pmap = HashMap::new();
+        let mut pmap = Vec::new();
         for (k, v) in m.params.iter() {
-            pmap.insert(k.to_string(), v.to_string());
+            pmap.push((k.to_string(), v.to_string()));
         }
         (*m.value, pmap)
     }))
