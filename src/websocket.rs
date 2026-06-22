@@ -7,7 +7,6 @@
 //! it would have awaited natively — no extra Tokio future bridge, no scheduling cost.
 //!
 //! [1]: https://github.com/emmett-framework/granian — see `granian/rsgi.py`.
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -30,7 +29,7 @@ pub struct WebSocket {
     protocol: Py<PyAny>,
     scope: Py<PyAny>,
     transport: Arc<Mutex<Option<Py<PyAny>>>>,
-    path_params: HashMap<String, String>,
+    path_params: Vec<(String, String)>,
     closed: Arc<Mutex<bool>>,
 }
 
@@ -38,7 +37,7 @@ impl WebSocket {
     pub fn new(
         protocol: Py<PyAny>,
         scope: Py<PyAny>,
-        path_params: HashMap<String, String>,
+        path_params: Vec<(String, String)>,
     ) -> Self {
         Self {
             protocol,
