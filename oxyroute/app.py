@@ -19,7 +19,7 @@ def _unwrap_dep(f: Dep) -> Any:
     return f
 
 class _ProtocolWrapper:
-    __slots__ = ("_inner", "status", "__oxyroute_path_template__")
+    __slots__ = ("__oxyroute_path_template__", "_inner", "status")
     
     def __init__(self, inner: Any) -> None:
         self._inner = inner
