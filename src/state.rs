@@ -93,7 +93,7 @@ pub struct AppState {
     pub delete: Mutex<Router<usize>>,
     pub options: Mutex<Router<usize>>,
     pub websocket: Mutex<Router<usize>>,
-    pub openapi: Mutex<serde_json::Value>,
+    pub openapi: Mutex<(serde_json::Value, Option<Arc<String>>)>,
     /// When `Some`, route matching uses these tables without taking per-router mutexes
     /// (populated in [`App::freeze`](crate::App::freeze)).
     pub compiled: Option<Arc<CompiledRouters>>,
@@ -132,7 +132,7 @@ impl AppState {
             delete: Mutex::new(Router::new()),
             options: Mutex::new(Router::new()),
             websocket: Mutex::new(Router::new()),
-            openapi: Mutex::new(openapi),
+            openapi: Mutex::new((openapi, None)),
             compiled: None,
             frozen: false,
             include_openapi: true,

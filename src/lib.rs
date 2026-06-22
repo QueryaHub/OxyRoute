@@ -283,7 +283,8 @@ impl App {
         };
         {
             let mut oa = st.openapi.lock();
-            App::openapi_add_path(&mut oa, &method, &path, &op_id, request_schema);
+            App::openapi_add_path(&mut oa.0, &method, &path, &op_id, request_schema);
+            oa.1 = None;
         }
         {
             let mut m = state::map_method_router(&st, &method).ok_or_else(|| {
@@ -349,12 +350,13 @@ impl App {
     fn set_openapi_title(&self, title: &str) -> PyResult<()> {
         let st = self.state.read();
         let mut oa = st.openapi.lock();
-        if let Some(info) = oa
-            .as_object_mut()
-            .and_then(|m| m.get_mut("info"))
-            .and_then(|i| i.as_object_mut())
+        if let Some(info) =
+            oa.0.as_object_mut()
+                .and_then(|m| m.get_mut("info"))
+                .and_then(|i| i.as_object_mut())
         {
             info.insert("title".to_string(), json!(title));
+            oa.1 = None;
         }
         Ok(())
     }
@@ -481,8 +483,11 @@ impl App {
 
     fn openapi_json(&self) -> PyResult<String> {
         let st = self.state.read();
-        let oa = st.openapi.lock();
-        Ok(oa.to_string())
+        let mut oa = st.openapi.lock();
+        if oa.1.is_none() {
+            oa.1 = Some(Arc::new(oa.0.to_string()));
+        }
+        Ok(oa.1.as_ref().unwrap().to_string())
     }
 }
 
