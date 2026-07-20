@@ -1389,6 +1389,18 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
     })
 }
 
+/// Criterion helper (issue #110): run [`map_handler_return`] and return the mapped status.
+#[doc(hidden)]
+pub(crate) fn microbench_map_handler_return(
+    py: Python<'_>,
+    out: &Bound<'_, PyAny>,
+) -> PyResult<u16> {
+    match map_handler_return(py, &out.clone().unbind())? {
+        HandlerMap::AlreadySent => Ok(0),
+        HandlerMap::WithHeaders { status, .. } | HandlerMap::Simple { status, .. } => Ok(status),
+    }
+}
+
 fn send_simple_body_sync(
     py: Python<'_>,
     protocol: &Py<PyAny>,
