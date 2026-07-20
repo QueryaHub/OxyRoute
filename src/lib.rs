@@ -146,15 +146,11 @@ impl App {
         let Some(root) = oa.as_object_mut() else {
             return;
         };
-        let components = root
-            .entry("components")
-            .or_insert_with(|| json!({}));
+        let components = root.entry("components").or_insert_with(|| json!({}));
         let Some(comp) = components.as_object_mut() else {
             return;
         };
-        let schemes = comp
-            .entry("securitySchemes")
-            .or_insert_with(|| json!({}));
+        let schemes = comp.entry("securitySchemes").or_insert_with(|| json!({}));
         if let Some(s) = schemes.as_object_mut() {
             s.entry("bearerAuth").or_insert_with(|| {
                 json!({
@@ -213,10 +209,7 @@ impl App {
                         op_obj.insert("parameters".to_string(), json!(path_params));
                     }
                     if require_jwt {
-                        op_obj.insert(
-                            "security".to_string(),
-                            json!([{ "bearerAuth": [] }]),
-                        );
+                        op_obj.insert("security".to_string(), json!([{ "bearerAuth": [] }]));
                     }
                     if let Some(t) = tags {
                         if !t.is_empty() {
@@ -475,10 +468,7 @@ impl App {
             return Ok(());
         };
         if let Some(desc) = description {
-            if let Some(info) = root
-                .get_mut("info")
-                .and_then(|i| i.as_object_mut())
-            {
+            if let Some(info) = root.get_mut("info").and_then(|i| i.as_object_mut()) {
                 info.insert("description".to_string(), json!(desc));
             }
         }
@@ -486,10 +476,7 @@ impl App {
             let contact: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!("invalid contact JSON: {e}"))
             })?;
-            if let Some(info) = root
-                .get_mut("info")
-                .and_then(|i| i.as_object_mut())
-            {
+            if let Some(info) = root.get_mut("info").and_then(|i| i.as_object_mut()) {
                 info.insert("contact".to_string(), contact);
             }
         }
