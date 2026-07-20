@@ -1502,6 +1502,9 @@ fn send_handler_map_inline(
 
 /// `if_absent`: only add a header if no same-name (case-insensitive) header is already present
 /// (``security`` preset). `false` replaces/merges like CORS (``replace`` / duplicate header names).
+///
+/// For CORS (`if_absent == false`), skip the Python `response_header_pairs` call when the
+/// request has no ``Origin`` header (issue #108) — same outcome as an empty pair list.
 fn merge_config_response_headers(
     py: Python<'_>,
     config: &Option<Py<PyAny>>,
@@ -1512,6 +1515,12 @@ fn merge_config_response_headers(
     let Some(c) = config else {
         return Ok(mapped);
     };
+    if !if_absent {
+        let headers = scope.getattr("headers")?;
+        if header_get_lax(&headers, "origin").is_none() {
+            return Ok(mapped);
+        }
+    }
     let pairs: Vec<(String, String)> = c
         .call_method1(py, "response_header_pairs", (&scope,))?
         .extract(py)?;
