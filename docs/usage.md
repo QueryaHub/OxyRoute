@@ -3,7 +3,7 @@
 [← Documentation index](index.md)
 
 This guide is the recommended end-to-end reference for using OxyRoute as an
-application framework. It describes the current **v0.3.0** behavior: OxyRoute is
+application framework. It describes the current **v0.5.0** behavior: OxyRoute is
 **RSGI-only** and is intended to run behind **Granian** with `--interface rsgi`.
 The removed ASGI bridge is not part of the supported runtime path.
 
@@ -565,12 +565,9 @@ Production checklist:
 - Keep `OXYROUTE_DEBUG` unset in production.
 - Use external storage for cross-worker state.
 
-## Known limitations in v0.3.0
+## Known limitations in v0.5.0
 
 - Request bodies and multipart files are buffered in memory before parsing.
-- There is one pre-route middleware hook; compose middleware manually or with
-  helpers such as `apply_cors(..., chain=...)`.
-- There is no global exception-handler registry yet.
 - WebSocket subprotocol negotiation is not exposed as a high-level API.
 - Benchmark scripts are for local comparison and are not CI performance gates.
 

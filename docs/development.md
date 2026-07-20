@@ -55,11 +55,11 @@ The workflow at `.github/workflows/ci.yml` (job name: **ci**):
 
 ## Releasing to PyPI
 
-Tag a release with a **`v`-prefixed** semver tag (example: **`v0.3.0`**). That triggers `.github/workflows/release-pypi.yml`, which builds an **sdist**, **manylinux** x86_64 wheels, **Windows** x64, and **macOS** arm64 + x86_64 wheels, then uploads to **PyPI** using a **project-scoped API token** stored in GitHub as **`PYPI_API_TOKEN`** (Secret or Environment variable) on the **`pypi`** environment. The publish step uses `secrets` first, then `vars` (so you can start with a variable and move the value to a **Secret** later).
+Tag a release with a **`v`-prefixed** semver tag (example: **`v0.5.0`**). That triggers `.github/workflows/release-pypi.yml`, which builds an **sdist**, **manylinux** x86_64 wheels, **Windows** x64, and **macOS** arm64 + x86_64 wheels, then uploads to **PyPI** using a **project-scoped API token** stored in GitHub as **`PYPI_API_TOKEN`** (Secret or Environment variable) on the **`pypi`** environment. The publish step uses `secrets` first, then `vars` (so you can start with a variable and move the value to a **Secret** later).
 
 **Before the first upload:**
 
-1. Keep **`pyproject.toml`**, **`Cargo.toml`**, and **`oxyroute/__init__.py`** `__version__` in sync with the version you are releasing, and with the tag (e.g. `0.3.0` → tag `v0.3.0`).
+1. Keep **`pyproject.toml`**, **`Cargo.toml`**, and **`oxyroute/__init__.py`** `__version__` in sync with the version you are releasing, and with the tag (e.g. `0.5.0` → tag `v0.5.0`).
 2. On [PyPI](https://pypi.org), create a **scoped API token** for this project, then in GitHub → **Settings → Environments** create the **`pypi`** environment and add **`PYPI_API_TOKEN`** (strongly prefer an **Environment secret** over a **Variable**; tokens in Variables are visible to people with access to the environment).
 3. Optional alternative to API tokens: [trusted publishing](https://docs.pypi.org/trusted-publishers/) (OIDC) — no long-lived token; then the workflow’s publish job should omit `with.password` and set `id-token: write` (see the PyPA action README).
 
