@@ -22,6 +22,37 @@ mod websocket;
 use dispatch::{run_rsgi, try_rsgi_sync_short_circuit};
 use state::AppState;
 
+/// Hidden Criterion / microbench surface (issue #110). Not part of the stable Python API.
+#[doc(hidden)]
+pub mod microbench {
+    use matchit::Router;
+    use pyo3::prelude::*;
+
+    pub use crate::schema::json_to_py;
+    pub use crate::state::{match_route_compiled, CompiledRouters};
+
+    /// Build a compiled GET router with one static and one param route for matching benches.
+    pub fn sample_compiled_routers() -> CompiledRouters {
+        let mut get = Router::new();
+        get.insert("/hello", 0usize).expect("static route");
+        get.insert("/items/:id", 1usize).expect("param route");
+        CompiledRouters {
+            get,
+            post: Router::new(),
+            put: Router::new(),
+            patch: Router::new(),
+            delete: Router::new(),
+            options: Router::new(),
+            websocket: Router::new(),
+        }
+    }
+
+    /// Map a handler return value; returns HTTP status (0 if already sent).
+    pub fn map_handler_return_status(py: Python<'_>, out: &Bound<'_, PyAny>) -> PyResult<u16> {
+        crate::dispatch::microbench_map_handler_return(py, out)
+    }
+}
+
 type ParsedDependencies = (Vec<String>, Vec<Py<PyAny>>, Vec<bool>, Vec<bool>);
 
 /// Parameter names the route handler accepts, plus whether it has `**kwargs`.

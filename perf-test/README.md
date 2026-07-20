@@ -1,76 +1,63 @@
 # perf-test
 
-Reproducible micro-bench harness for OxyRoute vs FastAPI.
+Reproducible load and micro-bench harness for OxyRoute (issue #110).
 
 ## Apps
 
-- `app.py` -> OxyRoute hello endpoint (`GET /`)
-- `fastapi_app.py` -> FastAPI hello endpoint (`GET /`)
-
-Both return plain text `hello world` to keep payloads equivalent.
+| File | Purpose |
+|------|---------|
+| `app_oxyroute.py` | Minimal hello `GET /` (RSGI) for `bench_hello.sh` |
+| `app_fastapi.py` | FastAPI hello for compare |
+| `app_scenarios.py` | Multi-route app for `bench_scenarios.sh` (text, JSON, JWT, CORS, Depends) |
+| `app.py` / `fastapi_app.py` | Older compare harness used by `bench.sh` |
 
 ## Prerequisites
 
-- `wrk` installed
-- `granian` installed
-- For FastAPI runs: `uv` (uses temporary dependency install via `--with fastapi`)
+- `wrk`
+- `granian`
+- Editable OxyRoute (`uv sync --extra dev --extra bench`)
+- For FastAPI compare: FastAPI (bench extra)
+- For JWT scenario token: PyJWT (bench extra)
 
-## Default benchmark profile
+## Criterion microbenchmarks (Rust)
 
-- Server tuning: `--workers 2 --runtime-mode mt --runtime-threads 1`
-- Load profile: `wrk -t4 -c128 -d15s`
-- Repetitions: `3`
+Opt-in; **not** required in default CI. Measures hot-path primitives without wrk:
 
-## Run (full compare)
-
-From repository root:
+| Group | Cases |
+|-------|--------|
+| `match_route_compiled` | static `/hello`, param `/items/:id` |
+| `map_handler_return` | Python `str` / `bytes` |
+| `json_to_py` | small object, nested document |
 
 ```bash
-bash perf-test/bench.sh
+# From repo root (needs a Python interpreter for PyO3 link)
+cargo bench --bench hot_path
 ```
 
-The script prints per-run metrics plus average/median RPS and relative delta.
+HTML reports land under `target/criterion/`. **Before opening a perf PR**, run the same bench on `dev` and on your branch and paste key numbers (or attach the report) so reviewers can see deltas.
 
 ## Hello-world RPS (OxyRoute vs FastAPI)
 
-Minimal comparison on `GET /` returning plain text, both served by
-[Granian](https://github.com/emmett-framework/granian):
+Minimal comparison on `GET /` returning plain text, both served by Granian:
 
-- OxyRoute: `--interface rsgi`
-- FastAPI: `--interface asgi`
+- OxyRoute: `--interface rsgi` (`app_oxyroute.py`)
+- FastAPI: `--interface asgi` (`app_fastapi.py`)
 
-## Setup
-
-Run these from the **repository root** (the directory that contains `pyproject.toml`). If you `cd perf-test` first, editable installs and `uv sync` must still be run from the parent, or use `uv pip install -e "..[bench]"`.
+### Setup
 
 ```bash
 cd /path/to/OxyRoute
-# Include both `dev` and `bench` — `uv sync --extra bench` alone drops the `dev` group (pytest, ruff, …).
 uv sync --extra dev --extra bench
-# or: uv sync --all-extras
-# or: uv pip install -e ".[bench]"
 # wrk: sudo apt install wrk  /  brew install wrk
 ```
 
-`bench_hello.sh` uses `REPO/.venv/bin/python` when present so it does not fall back to **system** `python3` (where FastAPI is usually missing). Override with `PYTHON=/path/to/python` if needed.
+`bench_hello.sh` prefers `REPO/.venv/bin/python` when present.
 
-## Run (`bench_hello.sh`)
-
-From the repository root:
+### Run
 
 ```bash
 ./perf-test/bench_hello.sh
 ```
-
-From inside `perf-test/` (same effect):
-
-```bash
-bash bench_hello.sh
-```
-
-(Ensure the venv has `oxyroute` and `fastapi`— simplest is to stay at repo root and use the paths above.)
-
-Optional environment knobs for `bench_hello.sh`:
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -79,12 +66,41 @@ Optional environment knobs for `bench_hello.sh`:
 | `OXYROUTE_BENCH_CONNECTIONS` | `32` | `wrk -c` |
 | `OXYROUTE_BENCH_WORKERS` | `1` | Granian `--workers` |
 
-## Optional pytest (short run)
+## Scenario suite (`bench_scenarios.sh`)
 
-With `wrk` and `fastapi` available:
+Hits routes on `app_scenarios.py`:
+
+| Scenario | Path | Notes |
+|----------|------|--------|
+| `text` | `GET /` | Plain text |
+| `json` | `POST /json` | JSON body + JSON response |
+| `jwt` | `GET /jwt` | Bearer HS256 |
+| `cors` | `GET /` | `Origin` header (CORS enabled on app) |
+| `dep` | `GET /dep` | One `Depends` factory |
+
+```bash
+./perf-test/bench_scenarios.sh
+# or one scenario:
+OXYROUTE_BENCH_SCENARIO=json ./perf-test/bench_scenarios.sh
+```
+
+Same `OXYROUTE_BENCH_*` knobs as hello, plus `OXYROUTE_BENCH_SCENARIO` (`all` \| `text` \| `json` \| `jwt` \| `cors` \| `dep`).
+
+## Optional pytest (short hello run)
 
 ```bash
 OXYROUTE_BENCH=1 uv run pytest tests/test_perf_hello_bench.py -m bench -v
 ```
 
-By default the bench test is skipped (no load on normal `pytest`).
+Skipped unless `OXYROUTE_BENCH=1` (not for default CI).
+
+## Full compare (`bench.sh`)
+
+Older multi-rep harness — see script header. Default profile uses higher connection counts than the hello script.
+
+## Baseline checklist (perf PRs)
+
+1. `git checkout dev && cargo bench --bench hot_path` (save summary)
+2. Your branch: same command
+3. Optionally `./perf-test/bench_scenarios.sh` with fixed `OXYROUTE_BENCH_DURATION` / connections
+4. Paste before/after numbers in the PR
