@@ -96,7 +96,11 @@ class App:
         self.state: SimpleNamespace = SimpleNamespace()
         self._docs_ui: str | None = normalize_docs_ui(docs_ui)
         self._docs_mounted: bool = False
-        if openapi_description is not None or openapi_contact is not None or openapi_servers is not None:
+        if (
+            openapi_description is not None
+            or openapi_contact is not None
+            or openapi_servers is not None
+        ):
             self.set_openapi_info(
                 description=openapi_description,
                 contact=openapi_contact,
