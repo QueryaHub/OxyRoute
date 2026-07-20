@@ -22,7 +22,8 @@ class CORSConfig:
     response header merging without the built-in ``OPTIONS`` handler.
 
     ``response_header_pairs`` is called from Rust to merge CORS headers into normal responses
-    (after a route or middleware that returns a body).
+    (after a route or middleware that returns a body). The native layer skips this call when
+    the request has no ``Origin`` header (same outcome as an empty pair list).
     """
 
     allow_origins: list[str] = field(default_factory=lambda: ["*"])
