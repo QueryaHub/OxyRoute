@@ -10,7 +10,7 @@ High-performance web framework for **Granian RSGI**, tuned for high **single-wor
 - **Routing** via [matchit](https://crates.io/crates/matchit) (path parameters like `/users/:id`)
 - **JSON, form, and multipart bodies** parsed on the native path; successful values passed to handlers as kwargs
 - **JWT** verification on the Rust path before your handler runs (`require_jwt`, HS*, RSA, EC, EdDSA public-key verification)
-- **Optional** `GET /openapi.json` with a minimal OpenAPI-style document
+- **OpenAPI** `GET /openapi.json` plus optional Scalar/Swagger UI at `/docs`
 - **Dependencies**: linear list of named factories (`Depends`, sync or async) passed as kwargs
 - **Optional middleware layers** for pre-route decisions, CORS, CSRF, and browser security headers
 - **Native RSGI WebSockets** via `@app.websocket(path)` and `oxyroute.WebSocket`
@@ -72,9 +72,9 @@ Run (from the repo, after `maturin develop` or an editable install):
 granian --interface rsgi examples.rsgi_app:app
 ```
 
-Per-worker setup (`__rsgi_init__`) is shown in [examples/rsgi_lifespan_app.py](examples/rsgi_lifespan_app.py) and [docs/rsgi.md](docs/rsgi.md#lifespan-optional).
+Per-worker setup (`on_startup` / Granian-compatible `__rsgi_init__`) is shown in [examples/rsgi_lifespan_app.py](examples/rsgi_lifespan_app.py) and [docs/rsgi.md](docs/rsgi.md#lifespan-optional).
 
-OxyRoute v0.3.0 supports **only** Granian RSGI; the legacy ASGI bridge (`uvicorn` / `granian --interface asgi`) was removed.
+OxyRoute supports **only** Granian RSGI; the legacy ASGI bridge (`uvicorn` / `granian --interface asgi`) was removed in v0.3.0.
 
 ## Usage docs
 
