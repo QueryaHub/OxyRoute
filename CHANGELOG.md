@@ -7,6 +7,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- First-class OpenAPI docs UI: `App(..., docs_ui="scalar"|"swagger")` and
+  `app.mount_docs(...)` serve CDN-backed Scalar / Swagger UI at `/docs` (or a custom
+  path) against `/openapi.json` ([#130](https://github.com/QueryaHub/OxyRoute/issues/130)).
+- OpenAPI enrichment for interactive explorers: matchit `:param` / `*rest` → `{param}` /
+  `{rest}` with path `parameters`; JWT `bearerAuth` security scheme when
+  `require_jwt=True`; operation `tags=` and `include_router(..., tags=[...])`;
+  `set_openapi_info` / constructor `openapi_description` / `openapi_contact` /
+  `openapi_servers`.
+- Granian-compatible lifespan: sync `__rsgi_init__(loop)` / `__rsgi_del__(loop)` run
+  `on_startup` / `on_shutdown` via `loop.run_until_complete`. Prefer overriding
+  `on_startup` / `on_shutdown` instead of async `__rsgi_init__`.
+
+### Changed
+
+- OpenAPI path keys use `{param}` form (breaking for consumers that asserted matchit
+  `:param` strings in `openapi_json()`).
+
 ## [0.3.0] - 2026-04-27
 
 ### Added

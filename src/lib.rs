@@ -107,22 +107,87 @@ pub struct App {
 }
 
 impl App {
+    /// Convert matchit `:name` / `*rest` templates to OpenAPI `{name}` / `{rest}` and
+    /// collect path parameter objects.
+    fn openapi_path_and_params(path: &str) -> (String, Vec<serde_json::Value>) {
+        let mut out = String::with_capacity(path.len() + 8);
+        let mut params = Vec::new();
+        let chars: Vec<char> = path.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if c == ':' || c == '*' {
+                i += 1;
+                let start = i;
+                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+                let name: String = chars[start..i].iter().collect();
+                if !name.is_empty() {
+                    out.push('{');
+                    out.push_str(&name);
+                    out.push('}');
+                    params.push(json!({
+                        "name": name,
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    }));
+                }
+            } else {
+                out.push(c);
+                i += 1;
+            }
+        }
+        (out, params)
+    }
+
+    fn openapi_ensure_bearer_auth(oa: &mut serde_json::Value) {
+        let Some(root) = oa.as_object_mut() else {
+            return;
+        };
+        let components = root
+            .entry("components")
+            .or_insert_with(|| json!({}));
+        let Some(comp) = components.as_object_mut() else {
+            return;
+        };
+        let schemes = comp
+            .entry("securitySchemes")
+            .or_insert_with(|| json!({}));
+        if let Some(s) = schemes.as_object_mut() {
+            s.entry("bearerAuth").or_insert_with(|| {
+                json!({
+                    "type": "http",
+                    "scheme": "bearer",
+                    "bearerFormat": "JWT"
+                })
+            });
+        }
+    }
+
     fn openapi_add_path(
         oa: &mut serde_json::Value,
         method: &str,
         path: &str,
         op_id: &str,
         request_schema: Option<serde_json::Value>,
+        require_jwt: bool,
+        tags: Option<Vec<String>>,
     ) {
+        let (oa_path, path_params) = Self::openapi_path_and_params(path);
+        if require_jwt {
+            Self::openapi_ensure_bearer_auth(oa);
+        }
         if let Some(paths) = oa
             .as_object_mut()
             .and_then(|m| m.get_mut("paths"))
             .and_then(|p| p.as_object_mut())
         {
             let method_lc = method.to_lowercase();
-            let path_entry = paths.entry(path).or_insert_with(|| json!({}));
+            let path_entry = paths.entry(oa_path).or_insert_with(|| json!({}));
             if let Some(obj) = path_entry.as_object_mut() {
-                let op = if let Some(schema) = request_schema {
+                let mut op = if let Some(schema) = request_schema {
                     json!({
                         "summary": op_id,
                         "operationId": op_id,
@@ -143,6 +208,22 @@ impl App {
                         "responses": { "200": { "description": "OK" } }
                     })
                 };
+                if let Some(op_obj) = op.as_object_mut() {
+                    if !path_params.is_empty() {
+                        op_obj.insert("parameters".to_string(), json!(path_params));
+                    }
+                    if require_jwt {
+                        op_obj.insert(
+                            "security".to_string(),
+                            json!([{ "bearerAuth": [] }]),
+                        );
+                    }
+                    if let Some(t) = tags {
+                        if !t.is_empty() {
+                            op_obj.insert("tags".to_string(), json!(t));
+                        }
+                    }
+                }
                 obj.insert(method_lc, op);
             }
         }
@@ -163,7 +244,7 @@ impl App {
 
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
-        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None)
+        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None)
     )]
     #[allow(clippy::too_many_arguments)]
     fn add_route(
@@ -184,6 +265,7 @@ impl App {
         jwt_cookie: Option<String>,
         body_schema_json: Option<String>,
         body_model: Option<Py<PyAny>>,
+        tags: Option<Bound<'_, PyList>>,
     ) -> PyResult<()> {
         {
             let st = self.state.read();
@@ -281,9 +363,27 @@ impl App {
                 pyo3::exceptions::PyValueError::new_err(format!("invalid body_schema JSON: {e}"))
             })?),
         };
+        let tag_list: Option<Vec<String>> = if let Some(list) = tags {
+            let n = list.len();
+            let mut v = Vec::with_capacity(n);
+            for i in 0..n {
+                v.push(list.get_item(i)?.extract()?);
+            }
+            Some(v)
+        } else {
+            None
+        };
         {
             let mut oa = st.openapi.lock();
-            App::openapi_add_path(&mut oa.0, &method, &path, &op_id, request_schema);
+            App::openapi_add_path(
+                &mut oa.0,
+                &method,
+                &path,
+                &op_id,
+                request_schema,
+                require_jwt,
+                tag_list,
+            );
             oa.1 = None;
         }
         {
@@ -358,6 +458,48 @@ impl App {
             info.insert("title".to_string(), json!(title));
             oa.1 = None;
         }
+        Ok(())
+    }
+
+    /// Enrich OpenAPI ``info`` / ``servers``. Pass JSON strings for ``contact`` and ``servers``.
+    #[pyo3(signature = (description=None, contact_json=None, servers_json=None))]
+    fn set_openapi_info(
+        &self,
+        description: Option<String>,
+        contact_json: Option<String>,
+        servers_json: Option<String>,
+    ) -> PyResult<()> {
+        let st = self.state.read();
+        let mut oa = st.openapi.lock();
+        let Some(root) = oa.0.as_object_mut() else {
+            return Ok(());
+        };
+        if let Some(desc) = description {
+            if let Some(info) = root
+                .get_mut("info")
+                .and_then(|i| i.as_object_mut())
+            {
+                info.insert("description".to_string(), json!(desc));
+            }
+        }
+        if let Some(raw) = contact_json {
+            let contact: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid contact JSON: {e}"))
+            })?;
+            if let Some(info) = root
+                .get_mut("info")
+                .and_then(|i| i.as_object_mut())
+            {
+                info.insert("contact".to_string(), contact);
+            }
+        }
+        if let Some(raw) = servers_json {
+            let servers: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid servers JSON: {e}"))
+            })?;
+            root.insert("servers".to_string(), servers);
+        }
+        oa.1 = None;
         Ok(())
     }
 

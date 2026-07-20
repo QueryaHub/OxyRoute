@@ -2,7 +2,7 @@
 
 [← Documentation index](index.md)
 
-OxyRoute maintains a small **OpenAPI 3.0**-shaped JSON document in Rust while routes are registered. It is **not** a full OpenAPI model of every type and body schema; it is a **minimal** view suitable for discovery and tooling, and can be extended in future versions.
+OxyRoute maintains an **OpenAPI 3.0**-shaped JSON document in Rust while routes are registered. It is suitable for discovery and interactive docs (Scalar / Swagger UI), and can be extended further in future versions.
 
 ## Constructor and toggles
 
@@ -15,16 +15,55 @@ Served vs built: one flag, two ways to set it.
 - **While serving is off** (`include_openapi=False` at build time, or after `set_openapi_served(False)`):
   - The engine does **not** return the spec for **`GET /openapi.json`** or **`HEAD /openapi.json`**. The request is **not** special-cased, so it goes through normal routing. Unless you add your own handler for that path, the client usually gets **404 Not Found**. If you **do** register a handler for `/openapi.json`, that handler can serve a custom response.
   - Route registration still **merges** operations into the in-memory OpenAPI document. The document is not discarded.
-- **Export:** **`openapi_json()`** on the Python `App` still returns the current JSON as a string (handy in tests, admin tools, or a custom response), regardless of the serving toggle.
+- **Export:** **`openapi_json()`** on the Python `App` still returns the current JSON as a string (handy in tests, admin tools, or a custom response), regardless of the serving toggle. The exported document is the **same** enriched spec the UI uses.
 
-## Title and export
+## Docs UI (Scalar / Swagger)
 
-- **`set_openapi_title`** is applied from `App(..., title="...")` at construction.
-- **`openapi_json()`** is described above; it is independent of whether `/openapi.json` is exposed over HTTP.
+Optional interactive explorer (CDN-backed HTML):
+
+```python
+from oxyroute import App
+
+app = App(title="My API", docs_ui="scalar")  # or "swagger"
+# → GET /docs
+
+# or later / custom path:
+app.mount_docs("/api/docs", ui="swagger")
+```
+
+| Option | Meaning |
+|--------|---------|
+| `docs_ui="scalar"` \| `"swagger"` | Mount `GET /docs` at construction |
+| `mount_docs(path, ui=...)` | Mount at a custom path |
+| Spec URL | Built-in `/openapi.json` |
+
+UI scripts load from **jsDelivr**. If you use `SecurityHeadersConfig` (or a strict CSP), allow `cdn.jsdelivr.net` in `script-src` / `style-src` for the docs route, or disable those headers on `/docs`.
+
+## Title, info, and servers
+
+- **`title=`** / **`set_openapi_title`** — `info.title`.
+- **`openapi_description=`**, **`openapi_contact=`**, **`openapi_servers=`** constructor kwargs, or **`app.set_openapi_info(description=..., contact=..., servers=...)`**.
+
+```python
+app = App(
+    title="Market API",
+    openapi_description="Public marketplace HTTP API",
+    openapi_contact={"name": "API", "email": "api@example.com"},
+    openapi_servers=[{"url": "https://api.example.com"}],
+    docs_ui="scalar",
+)
+```
 
 ## What is in the document today
 
-Per route, the code records path, method, a short `summary` / `operationId` derived from the **handler’s** `__name__`, and a simple `200` response placeholder.
+Per route, the code records:
+
+- OpenAPI path templates: matchit **`:id` → `{id}`**, catch-all **`*rest` → `{rest}`**
+- Path **`parameters`** (`in: path`, `required: true`, string schema)
+- Method, short `summary` / `operationId` from the handler’s `__name__`
+- Simple `200` response placeholder
+- Optional **`tags`** from the route decorator or `include_router(..., tags=[...])` (per-route `tags=` wins over include defaults)
+- If **`require_jwt=True`**: `components.securitySchemes.bearerAuth` (`http` + `bearer` + `JWT`) and `security: [{ bearerAuth: [] }]` on that operation
 
 For **`POST`**, **`PUT`**, and **`PATCH`**, you can document the JSON request body in OpenAPI in two ways (pass **at most one**):
 
@@ -35,3 +74,4 @@ For **`POST`**, **`PUT`**, and **`PATCH`**, you can document the JSON request bo
 
 - [Routing](routing.md)
 - [Handlers](handlers.md)
+- [RSGI / lifespan](rsgi.md)
