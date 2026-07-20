@@ -396,7 +396,14 @@ mod tests {
         assert_eq!(pre, post);
         let inner = pre.expect("match");
         assert_eq!(inner.0, 7);
-        assert_eq!(inner.1.iter().find(|(k, _)| k == "id").map(|(_, v)| v.as_str()), Some("5"));
+        assert_eq!(
+            inner
+                .1
+                .iter()
+                .find(|(k, _)| k == "id")
+                .map(|(_, v)| v.as_str()),
+            Some("5")
+        );
     }
 
     #[test]
