@@ -295,15 +295,29 @@ impl App {
                 "require_jwt needs jwt_secret (HMAC shared secret, or public key PEM for RS*/PS*/ES*/EdDSA)",
             ));
         }
-        if require_jwt {
-            if let Some(k) = jwt_secret.as_deref() {
-                crate::token::build_decoding_key(k, &algs).map_err(|e| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "jwt_secret and algorithms are incompatible: {e}"
-                    ))
-                })?;
-            }
-        }
+        let jwt_leeway_v = jwt_leeway.unwrap_or(60);
+        let (jwt_decoding_key, jwt_validation) = if require_jwt {
+            let k = jwt_secret.as_deref().ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "require_jwt needs jwt_secret (HMAC shared secret, or public key PEM for RS*/PS*/ES*/EdDSA)",
+                )
+            })?;
+            let (dk, val) = crate::token::build_route_jwt_state(
+                k,
+                &algs,
+                jwt_issuer.as_deref(),
+                jwt_audience.as_deref(),
+                jwt_leeway_v,
+            )
+            .map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "jwt_secret and algorithms are incompatible: {e}"
+                ))
+            })?;
+            (Some(Arc::new(dk)), Some(Arc::new(val)))
+        } else {
+            (None, None)
+        };
         let (dep_names, dep_factories, dep_is_async, dep_wants_request) =
             if let Some(d) = dependencies {
                 parse_dependencies(py, &d)?
@@ -330,12 +344,9 @@ impl App {
             handler,
             is_async,
             require_jwt,
-            jwt_secret,
-            algs: Arc::<[jsonwebtoken::Algorithm]>::from(algs.clone()),
-            jwt_issuer,
-            jwt_audience,
-            jwt_leeway: jwt_leeway.unwrap_or(60),
             jwt_cookie,
+            jwt_decoding_key,
+            jwt_validation,
             read_json_body,
             read_form_body,
             dep_names: Arc::<[String]>::from(dep_names),

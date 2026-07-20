@@ -94,6 +94,40 @@ pub fn build_decoding_key(
     }
 }
 
+/// Prebuild decoding key + validation template for a route (issue #109).
+///
+/// Matches the former per-request setup in `dispatch`: algorithms, nbf, leeway,
+/// optional issuer/audience (audience check disabled when unset).
+pub fn build_route_jwt_state(
+    key_material: &str,
+    algs: &[Algorithm],
+    jwt_issuer: Option<&str>,
+    jwt_audience: Option<&str>,
+    jwt_leeway: u64,
+) -> jsonwebtoken::errors::Result<(DecodingKey, Validation)> {
+    if algs.is_empty() {
+        return Err(jsonwebtoken::errors::Error::from(
+            jsonwebtoken::errors::ErrorKind::InvalidAlgorithm,
+        ));
+    }
+    let dk = build_decoding_key(key_material, algs)?;
+    let mut val = Validation::new(algs[0]);
+    val.algorithms = algs.to_vec();
+    val.validate_nbf = true;
+    val.leeway = jwt_leeway;
+    if let Some(iss) = jwt_issuer {
+        val.set_issuer(&[iss]);
+    }
+    if let Some(aud) = jwt_audience {
+        val.set_audience(&[aud]);
+    } else {
+        // jsonwebtoken 9: with validate_aud + aud=None, a token that includes `aud` fails
+        // (InvalidAudience). Disable unless the route opts in to an expected audience.
+        val.validate_aud = false;
+    }
+    Ok((dk, val))
+}
+
 /// Used by the request path and for golden tests against `oxyjwt.decode`.
 pub fn decode_hs_claims(
     token: &str,
@@ -164,6 +198,38 @@ mod tests {
     use super::*;
     use jsonwebtoken::{encode, Header};
     use serde_json::json;
+
+    #[test]
+    fn build_route_jwt_state_hs256_roundtrip() {
+        let dk_val =
+            build_route_jwt_state("secret", &[Algorithm::HS256], None, None, 60).expect("state");
+        let (dk, val) = dk_val;
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &json!({ "sub": "u1", "exp": 4_000_000_000_i64 }),
+            &jsonwebtoken::EncodingKey::from_secret(b"secret"),
+        )
+        .expect("encode");
+        let claims = decode::<JsonValue>(&token, &dk, &val)
+            .expect("decode")
+            .claims;
+        assert_eq!(claims.get("sub"), Some(&json!("u1")));
+        assert!(!val.validate_aud);
+    }
+
+    #[test]
+    fn build_route_jwt_state_sets_issuer_audience() {
+        let (_, val) = build_route_jwt_state(
+            "secret",
+            &[Algorithm::HS256],
+            Some("issuer-a"),
+            Some("aud-b"),
+            30,
+        )
+        .expect("state");
+        assert_eq!(val.leeway, 30);
+        assert!(val.validate_aud);
+    }
 
     #[test]
     fn build_decoding_key_rs256_verifies() {
