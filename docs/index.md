@@ -46,11 +46,11 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 | [Security headers](security-headers.md) | `SecurityHeadersConfig`, HSTS, CSP |
 | [CSRF](csrf.md) | Double-submit, `apply_csrf`, `csrf_layer` + CORS |
 | [JWT](jwt.md) | `require_jwt`, HS* / RSA / EC PEM, `decode_jwt_hs` (HS* tests) |
-| [SSE](sse.md) | `send_sse`, event framing, streaming caveats |
+| [Streaming & SSE](streaming.md) | `stream_bytes`, `stream_text`, `send_sse`, streaming caveats |
 | [WebSockets](websocket.md) | Native RSGI `@app.websocket(path)` and `oxyroute.WebSocket` |
 | [HTTP/2 with Granian](http2.md) | Transport guarantees vs server/proxy responsibilities |
 | [Dependencies](dependencies.md) | `Depends`, `dependencies=[...]`, `freeze` |
-| [OpenAPI](openapi.md) | `openapi.json` route, title, `openapi_json()` |
+| [OpenAPI](openapi.md) | `openapi.json`, docs UI (Scalar/Swagger), tags, JWT security |
 | [Development](development.md) | Tests, CI, PyPI releases (tag `v*`), clippy, pytest |
 | [Branching and PRs](development-workflow.md) | `dev` as base, issue branches, `Closes #N`, no mixing code with `ISSUE_BACKLOG` in one commit |
 | [Feature gaps (research)](feature.md) | What is missing vs a “full” HTTP framework and what has been implemented — Russian |

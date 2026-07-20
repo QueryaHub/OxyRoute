@@ -22,6 +22,37 @@ mod websocket;
 use dispatch::{run_rsgi, try_rsgi_sync_short_circuit};
 use state::AppState;
 
+/// Hidden Criterion / microbench surface (issue #110). Not part of the stable Python API.
+#[doc(hidden)]
+pub mod microbench {
+    use matchit::Router;
+    use pyo3::prelude::*;
+
+    pub use crate::schema::json_to_py;
+    pub use crate::state::{match_route_compiled, CompiledRouters};
+
+    /// Build a compiled GET router with one static and one param route for matching benches.
+    pub fn sample_compiled_routers() -> CompiledRouters {
+        let mut get = Router::new();
+        get.insert("/hello", 0usize).expect("static route");
+        get.insert("/items/:id", 1usize).expect("param route");
+        CompiledRouters {
+            get,
+            post: Router::new(),
+            put: Router::new(),
+            patch: Router::new(),
+            delete: Router::new(),
+            options: Router::new(),
+            websocket: Router::new(),
+        }
+    }
+
+    /// Map a handler return value; returns HTTP status (0 if already sent).
+    pub fn map_handler_return_status(py: Python<'_>, out: &Bound<'_, PyAny>) -> PyResult<u16> {
+        crate::dispatch::microbench_map_handler_return(py, out)
+    }
+}
+
 type ParsedDependencies = (Vec<String>, Vec<Py<PyAny>>, Vec<bool>, Vec<bool>);
 
 /// Parameter names the route handler accepts, plus whether it has `**kwargs`.
@@ -107,22 +138,83 @@ pub struct App {
 }
 
 impl App {
+    /// Convert matchit `:name` / `*rest` templates to OpenAPI `{name}` / `{rest}` and
+    /// collect path parameter objects.
+    fn openapi_path_and_params(path: &str) -> (String, Vec<serde_json::Value>) {
+        let mut out = String::with_capacity(path.len() + 8);
+        let mut params = Vec::new();
+        let chars: Vec<char> = path.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if c == ':' || c == '*' {
+                i += 1;
+                let start = i;
+                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+                let name: String = chars[start..i].iter().collect();
+                if !name.is_empty() {
+                    out.push('{');
+                    out.push_str(&name);
+                    out.push('}');
+                    params.push(json!({
+                        "name": name,
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    }));
+                }
+            } else {
+                out.push(c);
+                i += 1;
+            }
+        }
+        (out, params)
+    }
+
+    fn openapi_ensure_bearer_auth(oa: &mut serde_json::Value) {
+        let Some(root) = oa.as_object_mut() else {
+            return;
+        };
+        let components = root.entry("components").or_insert_with(|| json!({}));
+        let Some(comp) = components.as_object_mut() else {
+            return;
+        };
+        let schemes = comp.entry("securitySchemes").or_insert_with(|| json!({}));
+        if let Some(s) = schemes.as_object_mut() {
+            s.entry("bearerAuth").or_insert_with(|| {
+                json!({
+                    "type": "http",
+                    "scheme": "bearer",
+                    "bearerFormat": "JWT"
+                })
+            });
+        }
+    }
+
     fn openapi_add_path(
         oa: &mut serde_json::Value,
         method: &str,
         path: &str,
         op_id: &str,
         request_schema: Option<serde_json::Value>,
+        require_jwt: bool,
+        tags: Option<Vec<String>>,
     ) {
+        let (oa_path, path_params) = Self::openapi_path_and_params(path);
+        if require_jwt {
+            Self::openapi_ensure_bearer_auth(oa);
+        }
         if let Some(paths) = oa
             .as_object_mut()
             .and_then(|m| m.get_mut("paths"))
             .and_then(|p| p.as_object_mut())
         {
             let method_lc = method.to_lowercase();
-            let path_entry = paths.entry(path).or_insert_with(|| json!({}));
+            let path_entry = paths.entry(oa_path).or_insert_with(|| json!({}));
             if let Some(obj) = path_entry.as_object_mut() {
-                let op = if let Some(schema) = request_schema {
+                let mut op = if let Some(schema) = request_schema {
                     json!({
                         "summary": op_id,
                         "operationId": op_id,
@@ -143,6 +235,19 @@ impl App {
                         "responses": { "200": { "description": "OK" } }
                     })
                 };
+                if let Some(op_obj) = op.as_object_mut() {
+                    if !path_params.is_empty() {
+                        op_obj.insert("parameters".to_string(), json!(path_params));
+                    }
+                    if require_jwt {
+                        op_obj.insert("security".to_string(), json!([{ "bearerAuth": [] }]));
+                    }
+                    if let Some(t) = tags {
+                        if !t.is_empty() {
+                            op_obj.insert("tags".to_string(), json!(t));
+                        }
+                    }
+                }
                 obj.insert(method_lc, op);
             }
         }
@@ -163,7 +268,7 @@ impl App {
 
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
-        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None)
+        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None)
     )]
     #[allow(clippy::too_many_arguments)]
     fn add_route(
@@ -183,6 +288,8 @@ impl App {
         jwt_leeway: Option<u64>,
         jwt_cookie: Option<String>,
         body_schema_json: Option<String>,
+        body_model: Option<Py<PyAny>>,
+        tags: Option<Bound<'_, PyList>>,
     ) -> PyResult<()> {
         {
             let st = self.state.read();
@@ -219,15 +326,29 @@ impl App {
                 "require_jwt needs jwt_secret (HMAC shared secret, or public key PEM for RS*/PS*/ES*/EdDSA)",
             ));
         }
-        if require_jwt {
-            if let Some(k) = jwt_secret.as_deref() {
-                crate::token::build_decoding_key(k, &algs).map_err(|e| {
-                    pyo3::exceptions::PyValueError::new_err(format!(
-                        "jwt_secret and algorithms are incompatible: {e}"
-                    ))
-                })?;
-            }
-        }
+        let jwt_leeway_v = jwt_leeway.unwrap_or(60);
+        let (jwt_decoding_key, jwt_validation) = if require_jwt {
+            let k = jwt_secret.as_deref().ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "require_jwt needs jwt_secret (HMAC shared secret, or public key PEM for RS*/PS*/ES*/EdDSA)",
+                )
+            })?;
+            let (dk, val) = crate::token::build_route_jwt_state(
+                k,
+                &algs,
+                jwt_issuer.as_deref(),
+                jwt_audience.as_deref(),
+                jwt_leeway_v,
+            )
+            .map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "jwt_secret and algorithms are incompatible: {e}"
+                ))
+            })?;
+            (Some(Arc::new(dk)), Some(Arc::new(val)))
+        } else {
+            (None, None)
+        };
         let (dep_names, dep_factories, dep_is_async, dep_wants_request) =
             if let Some(d) = dependencies {
                 parse_dependencies(py, &d)?
@@ -250,15 +371,13 @@ impl App {
         let routes = Arc::make_mut(&mut st.routes);
         let idx = routes.len();
         routes.push(state::RouteEntry {
+            path_template: path.to_string(),
             handler,
             is_async,
             require_jwt,
-            jwt_secret,
-            algs: Arc::<[jsonwebtoken::Algorithm]>::from(algs.clone()),
-            jwt_issuer,
-            jwt_audience,
-            jwt_leeway: jwt_leeway.unwrap_or(60),
             jwt_cookie,
+            jwt_decoding_key,
+            jwt_validation,
             read_json_body,
             read_form_body,
             dep_names: Arc::<[String]>::from(dep_names),
@@ -268,6 +387,7 @@ impl App {
             handler_param_names: Arc::new(handler_param_names),
             handler_varkw,
             trivial_sync,
+            body_model,
         });
         let request_schema: Option<serde_json::Value> = match body_schema_json
             .as_deref()
@@ -278,9 +398,28 @@ impl App {
                 pyo3::exceptions::PyValueError::new_err(format!("invalid body_schema JSON: {e}"))
             })?),
         };
+        let tag_list: Option<Vec<String>> = if let Some(list) = tags {
+            let n = list.len();
+            let mut v = Vec::with_capacity(n);
+            for i in 0..n {
+                v.push(list.get_item(i)?.extract()?);
+            }
+            Some(v)
+        } else {
+            None
+        };
         {
             let mut oa = st.openapi.lock();
-            App::openapi_add_path(&mut oa, &method, &path, &op_id, request_schema);
+            App::openapi_add_path(
+                &mut oa.0,
+                &method,
+                &path,
+                &op_id,
+                request_schema,
+                require_jwt,
+                tag_list,
+            );
+            oa.1 = None;
         }
         {
             let mut m = state::map_method_router(&st, &method).ok_or_else(|| {
@@ -346,18 +485,75 @@ impl App {
     fn set_openapi_title(&self, title: &str) -> PyResult<()> {
         let st = self.state.read();
         let mut oa = st.openapi.lock();
-        if let Some(info) = oa
-            .as_object_mut()
-            .and_then(|m| m.get_mut("info"))
-            .and_then(|i| i.as_object_mut())
+        if let Some(info) =
+            oa.0.as_object_mut()
+                .and_then(|m| m.get_mut("info"))
+                .and_then(|i| i.as_object_mut())
         {
             info.insert("title".to_string(), json!(title));
+            oa.1 = None;
         }
+        Ok(())
+    }
+
+    /// Enrich OpenAPI ``info`` / ``servers``. Pass JSON strings for ``contact`` and ``servers``.
+    #[pyo3(signature = (description=None, contact_json=None, servers_json=None))]
+    fn set_openapi_info(
+        &self,
+        description: Option<String>,
+        contact_json: Option<String>,
+        servers_json: Option<String>,
+    ) -> PyResult<()> {
+        let st = self.state.read();
+        let mut oa = st.openapi.lock();
+        let Some(root) = oa.0.as_object_mut() else {
+            return Ok(());
+        };
+        if let Some(desc) = description {
+            if let Some(info) = root.get_mut("info").and_then(|i| i.as_object_mut()) {
+                info.insert("description".to_string(), json!(desc));
+            }
+        }
+        if let Some(raw) = contact_json {
+            let contact: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid contact JSON: {e}"))
+            })?;
+            if let Some(info) = root.get_mut("info").and_then(|i| i.as_object_mut()) {
+                info.insert("contact".to_string(), contact);
+            }
+        }
+        if let Some(raw) = servers_json {
+            let servers: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid servers JSON: {e}"))
+            })?;
+            root.insert("servers".to_string(), servers);
+        }
+        oa.1 = None;
         Ok(())
     }
 
     /// Single optional pre-route hook. Return ``None`` to continue; otherwise the return value
     /// is mapped like a route handler (e.g. :class:`oxyroute.Response`, ``dict`` with ``status`` / ``body`` / ``headers``).
+
+    #[pyo3(signature = (exc_type, handler))]
+    fn add_exception_handler(
+        &self,
+        exc_type: pyo3::Bound<'_, pyo3::types::PyType>,
+        handler: Py<PyAny>,
+    ) -> PyResult<()> {
+        let mut st = self.state.write();
+        let is_async = pyo3::Python::with_gil(|py| -> PyResult<bool> {
+            let inspect = py.import("inspect")?;
+            inspect
+                .getattr("iscoroutinefunction")?
+                .call1((&handler,))?
+                .extract::<bool>()
+        })
+        .unwrap_or(false);
+        Arc::make_mut(&mut st.exception_handlers).push((exc_type.unbind(), handler, is_async));
+        Ok(())
+    }
+
     fn set_middleware(&self, handler: Option<Py<PyAny>>) -> PyResult<()> {
         let mut st = self.state.write();
         if let Some(h) = handler {
@@ -458,8 +654,11 @@ impl App {
 
     fn openapi_json(&self) -> PyResult<String> {
         let st = self.state.read();
-        let oa = st.openapi.lock();
-        Ok(oa.to_string())
+        let mut oa = st.openapi.lock();
+        if oa.1.is_none() {
+            oa.1 = Some(Arc::new(oa.0.to_string()));
+        }
+        Ok(oa.1.as_ref().unwrap().to_string())
     }
 }
 

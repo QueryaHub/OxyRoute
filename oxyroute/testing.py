@@ -18,6 +18,8 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+import httpx
+
 _BLOCKING_LOOP_LOCAL = threading.local()
 
 
@@ -248,6 +250,16 @@ class _RsgiProtocol:
             }
         )
 
+    def response_file(self, status: int, headers: list, file: str) -> None:
+        import anyio
+
+        async def _read_file() -> bytes:
+            async with await anyio.open_file(file, "rb") as f:
+                return await f.read()
+
+        body = asyncio.run_coroutine_threadsafe(_read_file(), self._loop).result()
+        self.response_bytes(status, headers, body)
+
     def response_empty(self, status: int, headers: list) -> None:
         self._status = int(status)
         self.status = int(status)
@@ -342,6 +354,9 @@ async def asgi_to_rsgi(
         qs.decode("utf-8") if qs else "",
         hdrs,
     )
+    client = scope.get("client")
+    if client:
+        rscope.client = f"{client[0]}:{client[1]}"
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
 
@@ -406,3 +421,62 @@ def build_test_app(framework_app: Any) -> Callable[..., Any]:
 
 asgi_test_app = build_test_app
 """Alias: ``asgi_test_app(app)`` returns an ASGI3 callable for httpx.ASGITransport."""
+
+
+class TestClient(httpx.Client):
+    """Synchronous test client for OxyRoute apps.
+
+    Wraps the RSGI testing transport and an async httpx client in a background
+    thread so it can be used in fully synchronous tests.
+    """
+
+    def __init__(self, app: Any, base_url: str = "http://testserver", **kwargs: Any) -> None:
+        self.app = app
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+
+        transport = httpx.ASGITransport(app=asgi_test_app(app), client=("127.0.0.1", 12345))
+        self.async_client = httpx.AsyncClient(transport=transport, base_url=base_url, **kwargs)
+
+        super().__init__(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200)),
+            base_url=base_url,
+            **kwargs,
+        )
+
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
+
+    def _run_sync(self, coro: Any) -> Any:
+        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+
+    def send(self, request: httpx.Request, **kwargs: Any) -> httpx.Response:
+        resp = self._run_sync(self.async_client.send(request, **kwargs))
+        self._run_sync(resp.aread())
+        return resp
+
+    def close(self) -> None:
+        self._run_sync(self.async_client.aclose())
+        if self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            self._thread.join()
+        super().close()
+
+    def __enter__(self) -> TestClient:
+        self._run_sync(self.async_client.__aenter__())
+        if hasattr(self.app, "__rsgi_init__"):
+            init = self.app.__rsgi_init__()
+            if asyncio.iscoroutine(init):
+                self._run_sync(init)
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        self._run_sync(self.async_client.__aexit__(exc_type, exc_value, traceback))
+        if hasattr(self.app, "__rsgi_del__"):
+            dele = self.app.__rsgi_del__()
+            if asyncio.iscoroutine(dele):
+                self._run_sync(dele)
+        self.close()
+        super().__exit__(exc_type, exc_value, traceback)

@@ -15,43 +15,10 @@ pub fn build_request_context<'py>(
     method: &str,
     path: &str,
     query_string: &str,
-) -> PyResult<Bound<'py, PyDict>> {
-    let d = PyDict::new(py);
-    d.set_item("method", method)?;
-    d.set_item("path", path)?;
-    d.set_item("query_string", query_string)?;
-    d.set_item("headers", copy_scope_headers_to_dict(py, scope)?)?;
-    Ok(d)
-}
-
-/// Best-effort copy of RSGI/ASGI scope `headers` into a `dict` of strings.
-fn copy_scope_headers_to_dict<'py>(
-    py: Python<'py>,
-    scope: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let out = PyDict::new(py);
-    let h = match scope.getattr("headers") {
-        Ok(x) => x,
-        Err(_) => return Ok(out),
-    };
-    if let Ok(inner) = h.getattr("_d") {
-        if let Ok(hd) = inner.downcast::<PyDict>() {
-            for (k, v) in hd.iter() {
-                let ks: String = k.extract()?;
-                let vs: String = v.extract()?;
-                out.set_item(ks, vs)?;
-            }
-            return Ok(out);
-        }
-    }
-    if let Ok(hd) = h.downcast::<PyDict>() {
-        for (k, v) in hd.iter() {
-            let ks: String = k.extract()?;
-            let vs: String = v.extract()?;
-            out.set_item(ks, vs)?;
-        }
-    }
-    Ok(out)
+) -> PyResult<Bound<'py, PyAny>> {
+    let module = py.import("oxyroute.request")?;
+    let req_cls = module.getattr("Request")?;
+    req_cls.call1((scope, method, path, query_string))
 }
 
 /// Parse an HTTP `query` string (the part after `?`, without the `?`).

@@ -1,5 +1,5 @@
 """
-Per-worker RSGI lifecycle: override ``__rsgi_init__`` / ``__rsgi_del__`` (issue #18).
+Per-worker RSGI lifecycle: override ``on_startup`` / ``on_shutdown`` (issue #18 / #130).
 
 Run (from the repo root after an editable / wheel install)::
 
@@ -8,7 +8,12 @@ Run (from the repo root after an editable / wheel install)::
 ``examples/rsgi_app.py`` is the minimal app. This file shows **subclassing** ``App`` to
 open resources when the host starts a worker, using :attr:`oxyroute.app.App.state` and a
 :func:`concurrent.futures.ThreadPoolExecutor` (typical for blocking I/O in sync handlers;
-use ``asyncio`` primitives in ``__rsgi_init__`` when your stack is natively async).
+use ``asyncio`` primitives in ``on_startup`` when your stack is natively async).
+
+**Granian** calls sync ``__rsgi_init__(loop)`` / ``__rsgi_del__(loop)`` with a
+**non-running** loop. The base ``App`` runs ``on_startup`` / ``on_shutdown`` via
+``loop.run_until_complete``. Do **not** override ``__rsgi_init__`` as ``async def`` —
+that coroutine is never awaited under Granian.
 
 In-memory data is **per OS process**; with ``granian --workers N`` each worker has its
 own object graph — use Redis, a DB pool, or a message bus for **cross-worker** or
@@ -29,7 +34,7 @@ _WORKERS = 4  # per-process pool size; not shared across ``granian --workers N``
 
 
 class LifespanApp(App):
-    """Example: attach per-process state when the RSGI worker calls ``__rsgi_init__``."""
+    """Example: attach per-process state when the RSGI worker calls ``on_startup``."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -37,7 +42,7 @@ class LifespanApp(App):
         self.state.ready_at = None
         self.state.thread_pool = None
 
-    async def __rsgi_init__(self, *args, **kwargs) -> None:
+    async def on_startup(self) -> None:
         # ``asyncio`` primitive example (use from async callables you control).
         self.state.bg_limit = asyncio.Semaphore(8)
         # Thread pool: run blocking work via ``run_in_executor(self.state.thread_pool, ...)``
@@ -47,9 +52,8 @@ class LifespanApp(App):
             thread_name_prefix="rsgi",
         )
         self.state.ready_at = time.time()
-        return None
 
-    async def __rsgi_del__(self, *args, **kwargs) -> None:
+    async def on_shutdown(self) -> None:
         pool = self.state.thread_pool
         if pool is not None:
             pool.shutdown(wait=True)
@@ -57,7 +61,6 @@ class LifespanApp(App):
         self.state.thread_pool = None
         if hasattr(self.state, "bg_limit"):
             del self.state.bg_limit
-        return None
 
 
 app = LifespanApp(title="Lifespan example")

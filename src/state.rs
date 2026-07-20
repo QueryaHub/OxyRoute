@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use matchit::Router;
@@ -38,19 +38,15 @@ pub struct WebsocketRoute {
 
 #[derive(Clone)]
 pub struct RouteEntry {
+    pub path_template: String,
     pub handler: Py<PyAny>,
     pub is_async: bool,
     pub require_jwt: bool,
-    pub jwt_secret: Option<String>,
-    pub algs: Arc<[jsonwebtoken::Algorithm]>,
-    /// `None` in Python → no issuer check; else `set_issuer` in jsonwebtoken.
-    pub jwt_issuer: Option<String>,
-    /// `None` in Python → `validate_aud` disabled for this route.
-    pub jwt_audience: Option<String>,
-    /// Clock skew (seconds); Python `None` uses default 60 (jsonwebtoken default).
-    pub jwt_leeway: u64,
     /// If set, read JWT from the `Cookie` header when `Authorization: Bearer` is missing.
     pub jwt_cookie: Option<String>,
+    /// Prebuilt at registration when `require_jwt` (issue #109); hot path reuses these.
+    pub jwt_decoding_key: Option<Arc<jsonwebtoken::DecodingKey>>,
+    pub jwt_validation: Option<Arc<jsonwebtoken::Validation>>,
     pub read_json_body: bool,
     /// When set, body is parsed as form data (``application/x-www-form-urlencoded`` or ``multipart/form-data``), not JSON.
     pub read_form_body: bool,
@@ -67,6 +63,8 @@ pub struct RouteEntry {
     pub handler_varkw: bool,
     /// Sync ``call0()`` route with no body/JWT/deps/kwargs — eligible for RSGI sync fast path.
     pub trivial_sync: bool,
+    /// Pydantic model for request body validation.
+    pub body_model: Option<Py<PyAny>>,
 }
 
 /// True when the route can be served by [`try_rsgi_sync_short_circuit`](crate::dispatch::try_rsgi_sync_short_circuit)
@@ -74,6 +72,8 @@ pub struct RouteEntry {
 pub fn route_is_trivial_sync(entry: &RouteEntry) -> bool {
     entry.trivial_sync
 }
+
+pub type ExceptionHandlerList = Arc<Vec<(Py<pyo3::types::PyType>, Py<PyAny>, bool)>>;
 
 pub struct AppState {
     /// Wrapped in `Arc<Vec<…>>` so the hot path can clone a cheap pointer **once** per request and
@@ -88,7 +88,7 @@ pub struct AppState {
     pub delete: Mutex<Router<usize>>,
     pub options: Mutex<Router<usize>>,
     pub websocket: Mutex<Router<usize>>,
-    pub openapi: Mutex<serde_json::Value>,
+    pub openapi: Mutex<(serde_json::Value, Option<Arc<String>>)>,
     /// When `Some`, route matching uses these tables without taking per-router mutexes
     /// (populated in [`App::freeze`](crate::App::freeze)).
     pub compiled: Option<Arc<CompiledRouters>>,
@@ -100,6 +100,7 @@ pub struct AppState {
     pub request_middleware: Arc<Vec<Py<PyAny>>>,
     /// Stack of `(scope, response_dict) -> Response | dict` response hooks. Runs before CORS/Security headers.
     pub response_middleware: Arc<Vec<Py<PyAny>>>,
+    pub exception_handlers: ExceptionHandlerList,
     /// Optional Python CORS config (e.g. :class:`oxyroute.cors.CORSConfig`) for response headers.
     pub cors: Option<Py<PyAny>>,
     /// Optional :class:`oxyroute.security_headers.SecurityHeadersConfig` (or compatible
@@ -113,7 +114,7 @@ impl AppState {
     pub fn new() -> Self {
         let openapi = serde_json::json!({
             "openapi": "3.0.0",
-            "info": { "title": "OxyRoute", "version": "0.3.0" },
+            "info": { "title": "OxyRoute", "version": "0.5.0" },
             "paths": {}
         });
         Self {
@@ -126,12 +127,13 @@ impl AppState {
             delete: Mutex::new(Router::new()),
             options: Mutex::new(Router::new()),
             websocket: Mutex::new(Router::new()),
-            openapi: Mutex::new(openapi),
+            openapi: Mutex::new((openapi, None)),
             compiled: None,
             frozen: false,
             include_openapi: true,
             request_middleware: Arc::new(Vec::new()),
             response_middleware: Arc::new(Vec::new()),
+            exception_handlers: Arc::new(Vec::new()),
             cors: None,
             security_headers: None,
             db_pool: None,
@@ -153,6 +155,7 @@ impl AppState {
             security_headers: self.security_headers.clone(),
             request_middleware: Arc::clone(&self.request_middleware),
             response_middleware: Arc::clone(&self.response_middleware),
+            exception_handlers: Arc::clone(&self.exception_handlers),
             include_openapi: self.include_openapi,
             db_pool: self.db_pool.clone(),
         }
@@ -183,6 +186,7 @@ pub struct HotSnapshot {
     pub security_headers: Option<Py<PyAny>>,
     pub request_middleware: Arc<Vec<Py<PyAny>>>,
     pub response_middleware: Arc<Vec<Py<PyAny>>>,
+    pub exception_handlers: ExceptionHandlerList,
     pub include_openapi: bool,
     pub db_pool: Option<sqlx::PgPool>,
 }
@@ -191,11 +195,11 @@ pub struct HotSnapshot {
 pub fn match_ws_route_compiled(
     compiled: &CompiledRouters,
     path: &str,
-) -> Option<(usize, HashMap<String, String>)> {
+) -> Option<(usize, Vec<(String, String)>)> {
     compiled.websocket.at(path).ok().map(|m| {
-        let mut pmap = HashMap::new();
+        let mut pmap = Vec::new();
         for (k, v) in m.params.iter() {
-            pmap.insert(k.to_string(), v.to_string());
+            pmap.push((k.to_string(), v.to_string()));
         }
         (*m.value, pmap)
     })
@@ -204,16 +208,17 @@ pub fn match_ws_route_compiled(
 /// Lookup an HTTP route in a precomputed [`CompiledRouters`] (lock-free).
 ///
 /// Returns ``None`` for unsupported method, ``Some(None)`` for no match, ``Some(Some(...))`` on hit.
+#[allow(clippy::type_complexity)]
 pub fn match_route_compiled(
     compiled: &CompiledRouters,
     method: &str,
     path: &str,
-) -> Option<Option<(usize, HashMap<String, String>)>> {
+) -> Option<Option<(usize, Vec<(String, String)>)>> {
     let g = router_for_compiled(compiled, method)?;
     Some(g.at(path).ok().map(|m| {
-        let mut pmap = HashMap::new();
+        let mut pmap = Vec::new();
         for (k, v) in m.params.iter() {
-            pmap.insert(k.to_string(), v.to_string());
+            pmap.push((k.to_string(), v.to_string()));
         }
         (*m.value, pmap)
     }))
@@ -344,26 +349,27 @@ fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
 /// Returns route index and path params, or `None` if the method is unsupported; `Some(None)` if
 /// no match; `Some(Some)` on success. Uses [`CompiledRouters`] when set (lock-free).
 #[cfg(test)]
+#[allow(clippy::type_complexity)]
 fn match_route(
     state: &AppState,
     method: &str,
     path: &str,
-) -> Option<Option<(usize, HashMap<String, String>)>> {
+) -> Option<Option<(usize, Vec<(String, String)>)>> {
     if let Some(c) = &state.compiled {
         let g = router_for_compiled(c, method)?;
         return Some(g.at(path).ok().map(|m| {
-            let mut pmap = HashMap::new();
+            let mut pmap = Vec::new();
             for (k, v) in m.params.iter() {
-                pmap.insert(k.to_string(), v.to_string());
+                pmap.push((k.to_string(), v.to_string()));
             }
             (*m.value, pmap)
         }));
     }
     let g = map_method_router(state, method)?;
     Some(g.at(path).ok().map(|m| {
-        let mut pmap = HashMap::new();
+        let mut pmap = Vec::new();
         for (k, v) in m.params.iter() {
-            pmap.insert(k.to_string(), v.to_string());
+            pmap.push((k.to_string(), v.to_string()));
         }
         (*m.value, pmap)
     }))
@@ -385,7 +391,14 @@ mod tests {
         assert_eq!(pre, post);
         let inner = pre.expect("match");
         assert_eq!(inner.0, 7);
-        assert_eq!(inner.1.get("id").map(String::as_str), Some("5"));
+        assert_eq!(
+            inner
+                .1
+                .iter()
+                .find(|(k, _)| k == "id")
+                .map(|(_, v)| v.as_str()),
+            Some("5")
+        );
     }
 
     #[test]

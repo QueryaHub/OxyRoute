@@ -417,7 +417,7 @@ wheels = [
 
 [[package]]
 name = "oxyroute"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -425,6 +425,7 @@ bench = [
     { name = "fastapi" },
     { name = "granian" },
     { name = "httpx" },
+    { name = "pyjwt" },
 ]
 dev = [
     { name = "cryptography" },
@@ -449,6 +450,7 @@ requires-dist = [
     { name = "maturin", marker = "extra == 'dev'", specifier = ">=1.4,<2" },
     { name = "oxyjwt", marker = "extra == 'dev'", specifier = ">=0.2" },
     { name = "pydantic", marker = "extra == 'dev'", specifier = ">=2" },
+    { name = "pyjwt", marker = "extra == 'bench'", specifier = ">=2.8" },
     { name = "pyjwt", marker = "extra == 'dev'", specifier = ">=2.8" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },

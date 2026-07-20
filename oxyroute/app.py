@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from typing import Any, TypeVar
 
 from . import _oxyroute
+from .docs_ui import docs_html, normalize_docs_ui
+from .response import Response
 from .router import APIRouter, join_path
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -17,6 +19,38 @@ def _unwrap_dep(f: Dep) -> Any:
     if isinstance(f, _oxyroute.PyDepends):
         return f.dependency()
     return f
+
+
+class _ProtocolWrapper:
+    __slots__ = ("__oxyroute_path_template__", "_inner", "status")
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+        self.status: int = 500
+        self.__oxyroute_path_template__: str = ""
+
+    def __oxyroute_set_path_template__(self, template: str) -> None:
+        self.__oxyroute_path_template__ = template
+
+    def response_empty(self, status: int, headers: list[tuple[str, str]]) -> None:
+        self.status = status
+        self._inner.response_empty(status, headers)
+
+    def response_str(self, status: int, headers: list[tuple[str, str]], body: str) -> None:
+        self.status = status
+        self._inner.response_str(status, headers, body)
+
+    def response_bytes(self, status: int, headers: list[tuple[str, str]], body: bytes) -> None:
+        self.status = status
+        self._inner.response_bytes(status, headers, body)
+
+    def response_file(self, status: int, headers: list[tuple[str, str]], file_path: str) -> None:
+        self.status = status
+        self._inner.response_file(status, headers, file_path)
+
+    def response_stream(self, status: int, headers: list[tuple[str, str]]) -> Any:
+        self.status = status
+        return self._inner.response_stream(status, headers)
 
 
 def _norm_dependencies(
@@ -39,16 +73,41 @@ class App:
     the legacy ASGI bridge was removed in v0.3.0.
 
     ``state`` is an empty ``types.SimpleNamespace`` for per-process data; set fields in
-    ``__rsgi_init__`` or a factory, or on a subclass. In-memory data is not shared across
-    Granian worker processes.
+    ``on_startup`` / ``__rsgi_init__`` or a factory, or on a subclass. In-memory data is
+    not shared across Granian worker processes.
     """
 
-    def __init__(self, title: str = "OxyRoute", *, include_openapi: bool = True) -> None:
+    def __init__(
+        self,
+        title: str = "OxyRoute",
+        *,
+        include_openapi: bool = True,
+        docs_ui: str | None = None,
+        openapi_description: str | None = None,
+        openapi_contact: Mapping[str, Any] | None = None,
+        openapi_servers: list[Mapping[str, Any]] | None = None,
+        access_log_hook: Callable[[Any, int, float, str], None] | None = None,
+    ) -> None:
         self._app = _oxyroute.App(include_openapi=include_openapi)
         self._app.set_openapi_title(title)
         self.title = title
-        # Per-process mutable bag for ``__rsgi_init__`` / factory setup (DB pool, clients, …).
+        self.access_log_hook = access_log_hook
+        # Per-process mutable bag for ``on_startup`` / factory setup (DB pool, clients, …).
         self.state: SimpleNamespace = SimpleNamespace()
+        self._docs_ui: str | None = normalize_docs_ui(docs_ui)
+        self._docs_mounted: bool = False
+        if (
+            openapi_description is not None
+            or openapi_contact is not None
+            or openapi_servers is not None
+        ):
+            self.set_openapi_info(
+                description=openapi_description,
+                contact=openapi_contact,
+                servers=openapi_servers,
+            )
+        if self._docs_ui is not None:
+            self.mount_docs("/docs", ui=self._docs_ui)
 
     def freeze(self) -> None:
         """After ``freeze()``, no more route registration (matches Rust app state)."""
@@ -58,17 +117,61 @@ class App:
         """Enable or disable the built-in ``GET /openapi.json`` route."""
         self._app.set_openapi_served(enabled)
 
+    def set_openapi_info(
+        self,
+        *,
+        description: str | None = None,
+        contact: Mapping[str, Any] | None = None,
+        servers: list[Mapping[str, Any]] | None = None,
+    ) -> None:
+        """
+        Enrich the OpenAPI document ``info`` and optional ``servers`` list.
+
+        ``contact`` is an OpenAPI contact object (e.g. ``{"name": "…", "email": "…"}``).
+        ``servers`` is a list of ``{"url": "…", "description": "…"}`` objects.
+        """
+        contact_json = json.dumps(dict(contact)) if contact is not None else None
+        servers_json = json.dumps([dict(s) for s in servers]) if servers is not None else None
+        self._app.set_openapi_info(description, contact_json, servers_json)
+
+    def mount_docs(
+        self,
+        path: str = "/docs",
+        *,
+        ui: str = "scalar",
+        openapi_url: str = "/openapi.json",
+    ) -> None:
+        """
+        Register ``GET path`` serving Scalar or Swagger UI against ``openapi_url``.
+
+        UI assets load from a public CDN; set CSP ``script-src`` / ``style-src`` accordingly
+        (or disable security-header presets that block CDN scripts on the docs route).
+        """
+        ui_n = normalize_docs_ui(ui)
+        if ui_n is None:
+            raise ValueError("ui is required")
+        path = path.rstrip("/") or "/docs"
+        html = docs_html(ui=ui_n, title=self.title, openapi_url=openapi_url)
+        headers = {"content-type": "text/html; charset=utf-8"}
+
+        def _docs() -> Response:
+            return Response(body=html, status=200, headers=headers)
+
+        self.get(path)(_docs)
+        self._docs_ui = ui_n
+        self._docs_mounted = True
+
     async def setup_database(self, url: str, max_connections: int = 10) -> None:
         """
         Connect to a PostgreSQL database and store the pool in the Rust hot path.
-        Must be awaited (e.g. inside ``__rsgi_init__``).
+        Must be awaited (e.g. inside ``on_startup``).
         """
         await self._app.setup_database(url, max_connections)
 
     async def close_database(self) -> None:
         """
         Close the global PostgreSQL connection pool.
-        Must be awaited (e.g. inside ``__rsgi_del__``).
+        Must be awaited (e.g. inside ``on_shutdown``).
         """
         await self._app.close_database()
 
@@ -98,6 +201,14 @@ class App:
             kw: dict[str, Any] = {k: v for k, v in merged.items() if k in allowed}
             reg(self, full, **kw)(handler)
 
+    def add_exception_handler(
+        self, exc_type: type[BaseException], handler: Callable[..., Any]
+    ) -> None:
+        """
+        Register a global exception handler for a specific exception type.
+        """
+        self._app.add_exception_handler(exc_type, handler)
+
     def set_middleware(self, handler: Callable[..., Any] | None) -> None:
         """
         One optional pre-route callback ``(scope, protocol)`` — return ``None`` to pass through.
@@ -124,6 +235,15 @@ class App:
         """
         self._app.set_security_headers(config)
 
+    def mount(self, path: str, app: Any) -> None:
+        """Mount another application or handler at a specific path prefix."""
+        path = path.rstrip("/")
+        # Mount the exact prefix
+        self.get(path)(app)
+        self.get(path + "/")(app)
+        # Mount all subpaths
+        self.get(path + "/*path")(app)
+
     def get(
         self,
         path: str,
@@ -136,6 +256,7 @@ class App:
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "GET",
@@ -150,6 +271,7 @@ class App:
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
+            tags=tags,
         )
 
     def post(
@@ -168,6 +290,7 @@ class App:
         body_model: Any | None = None,
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "POST",
@@ -184,6 +307,7 @@ class App:
             jwt_cookie=jwt_cookie,
             body_model=body_model,
             body_schema=body_schema,
+            tags=tags,
         )
 
     def put(
@@ -202,6 +326,7 @@ class App:
         body_model: Any | None = None,
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "PUT",
@@ -218,6 +343,7 @@ class App:
             jwt_cookie=jwt_cookie,
             body_model=body_model,
             body_schema=body_schema,
+            tags=tags,
         )
 
     def patch(
@@ -236,6 +362,7 @@ class App:
         body_model: Any | None = None,
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "PATCH",
@@ -252,6 +379,7 @@ class App:
             jwt_cookie=jwt_cookie,
             body_model=body_model,
             body_schema=body_schema,
+            tags=tags,
         )
 
     def delete(
@@ -266,6 +394,7 @@ class App:
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "DELETE",
@@ -280,6 +409,7 @@ class App:
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
+            tags=tags,
         )
 
     def websocket(self, path: str) -> Callable[[F], F]:
@@ -312,6 +442,7 @@ class App:
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "OPTIONS",
@@ -326,6 +457,7 @@ class App:
             jwt_audience=jwt_audience,
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
+            tags=tags,
         )
 
     def _route(
@@ -345,6 +477,7 @@ class App:
         jwt_cookie: str | None = None,
         body_model: Any | None = None,
         body_schema: Mapping[str, Any] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         dlist = _norm_dependencies(dependencies)
 
@@ -374,27 +507,72 @@ class App:
                 jwt_leeway,
                 jwt_cookie,
                 body_schema_json,
+                body_model,
+                tags,
             )
             return handler
 
         return wrap
 
-    async def __rsgi_init__(self, *args: Any, **kwargs: Any) -> None:
+    @staticmethod
+    def _run_lifespan(coro: Any, loop: Any | None) -> Any:
         """
-        RSGI worker startup (no-op in the base class). Subclass to open pools/clients; see
-        ``docs/rsgi.md`` (Lifespan) and ``examples/rsgi_lifespan_app.py``.
+        Granian calls sync ``__rsgi_init__(loop)`` / ``__rsgi_del__(loop)`` with a
+        **non-running** event loop — use ``run_until_complete``. TestClient and
+        ``await app.__rsgi_init__()`` pass no loop and receive the coroutine.
+        """
+        if loop is not None and hasattr(loop, "run_until_complete"):
+            try:
+                running = bool(loop.is_running())
+            except Exception:
+                running = False
+            if not running:
+                return loop.run_until_complete(coro)
+        return coro
+
+    async def on_startup(self) -> None:
+        """
+        Per-worker async startup. Override in a subclass; the base class runs this from
+        sync :meth:`__rsgi_init__` under Granian.
         """
         return None
 
-    async def __rsgi_del__(self, *args: Any, **kwargs: Any) -> None:
-        """RSGI worker teardown. Closes the global connection pool if it exists."""
+    async def on_shutdown(self) -> None:
+        """Per-worker async teardown. Closes the global connection pool if it exists."""
         await self.close_database()
+
+    def __rsgi_init__(self, loop: Any | None = None, *args: Any, **kwargs: Any) -> Any:
+        """
+        RSGI worker startup (Granian-compatible).
+
+        Granian invokes this as a **sync** method with the worker ``loop`` (not running)
+        and expects ``loop.run_until_complete(...)``. Prefer overriding :meth:`on_startup`
+        instead of this method. When called with no ``loop`` (tests), returns the
+        ``on_startup`` coroutine for the caller to await.
+        """
+        return self._run_lifespan(self.on_startup(), loop)
+
+    def __rsgi_del__(self, loop: Any | None = None, *args: Any, **kwargs: Any) -> Any:
+        """RSGI worker teardown; see :meth:`__rsgi_init__` / :meth:`on_shutdown`."""
+        return self._run_lifespan(self.on_shutdown(), loop)
 
     async def __rsgi__(self, scope: Any, protocol: Any) -> Any:
         """
         Granian awaits this coroutine. Native ``handle_rsgi`` may return ``None`` immediately
         (sync short-circuit for openapi / 404 / 405) or an awaitable (full async path).
         """
+        if self.access_log_hook:
+            import time
+
+            start = time.perf_counter_ns()
+            p = _ProtocolWrapper(protocol)
+            r = self._app.handle_rsgi(scope, p)
+            if r is not None and inspect.isawaitable(r):
+                await r
+            dur = (time.perf_counter_ns() - start) / 1000000.0
+            self.access_log_hook(scope, p.status, dur, p.__oxyroute_path_template__)
+            return r
+
         r = self._app.handle_rsgi(scope, protocol)
         if r is None or not inspect.isawaitable(r):
             return r

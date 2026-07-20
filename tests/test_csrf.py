@@ -8,7 +8,7 @@ import json
 import httpx
 from oxyroute import App
 from oxyroute.csrf import CSRFConfig, apply_csrf
-from tests._rsgi_test_transport import asgi_test_app
+from oxyroute.testing import asgi_test_app
 
 _HDR = "X-CSRF-Token"
 CK = "oxyroute_csrf"

@@ -6,7 +6,7 @@ import asyncio
 
 import httpx
 from oxyroute import App
-from tests._rsgi_test_transport import asgi_test_app
+from oxyroute.testing import asgi_test_app
 
 
 def test_dep_second_receives_first_by_name() -> None:
@@ -48,6 +48,30 @@ def test_dep_request_context_headers() -> None:
             r = await c.get("/t", headers={"X-Trace": "z9"})
         assert r.status_code == 200
         assert r.text == "z9"
+
+    asyncio.run(run())
+
+
+def test_dep_request_context_typed() -> None:
+    from oxyroute.request import Request
+
+    def with_req(request: Request) -> str:
+        client = request.client or "unknown"
+        trace = request.headers.get("x-trace", "none")
+        return f"{request.method} {request.path} {client} {trace}"
+
+    app = App()
+
+    @app.get("/t2", dependencies=[("info", with_req)])
+    def route2(info: str) -> str:
+        return info
+
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=asgi_test_app(app), client=("1.2.3.4", 1234))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.get("/t2", headers={"X-Trace": "y8"})
+        assert r.status_code == 200, r.text
+        assert r.text == "GET /t2 1.2.3.4:1234 y8"
 
     asyncio.run(run())
 

@@ -9,7 +9,7 @@ import httpx
 import pytest
 from oxyroute import APIRouter, App
 from oxyroute.router import join_path
-from tests._rsgi_test_transport import asgi_test_app
+from oxyroute.testing import asgi_test_app
 
 
 def test_join_path() -> None:

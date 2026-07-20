@@ -7,7 +7,7 @@ import os
 
 import httpx
 from oxyroute import App
-from tests._rsgi_test_transport import asgi_test_app
+from oxyroute.testing import asgi_test_app
 
 
 def test_urlencoded_form_fields() -> None:
@@ -67,7 +67,7 @@ import os
 
 import httpx
 from oxyroute import App
-from tests._rsgi_test_transport import asgi_test_app
+from oxyroute.testing import asgi_test_app
 
 os.environ["OXYROUTE_MAX_BODY_BYTES"] = "20"
 

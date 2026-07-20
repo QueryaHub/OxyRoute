@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use jsonwebtoken::decode;
 use jsonwebtoken::errors::ErrorKind;
-use jsonwebtoken::{decode, Validation};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
+use pyo3::IntoPyObjectExt;
 use serde_json::Value as JsonValue;
 
 use crate::config;
@@ -18,7 +19,7 @@ use crate::state::{
     match_route_compiled, match_ws_route_compiled, methods_matching_path_compiled,
     route_is_trivial_sync, AppState, CompiledRouters, HotSnapshot, RouteEntry,
 };
-use crate::token::{build_decoding_key, extract_bearer, extract_cookie_value};
+use crate::token::{extract_bearer, extract_cookie_value};
 use crate::websocket::WebSocket;
 
 type HttpExceptionPayload = (u16, Vec<u8>, Vec<(String, String)>);
@@ -164,13 +165,51 @@ fn send_python_error_sync(
     method: &str,
     path: &str,
     err: PyErr,
+    scope: Option<&pyo3::Bound<'_, PyAny>>,
+    state: Option<&std::sync::Arc<parking_lot::RwLock<crate::state::AppState>>>,
 ) -> PyResult<()> {
+    if let (Some(sc), Some(st)) = (scope, state) {
+        let snap = st.read().hot_snapshot();
+        for (exc_type, handler, is_async) in snap.exception_handlers.iter().rev() {
+            if let Ok(exc_obj) = err.clone_ref(py).into_bound_py_any(py) {
+                if exc_obj.is_instance(exc_type.bind(py)).unwrap_or(false) {
+                    if *is_async {
+                        log::error!(
+                            "Async exception handler cannot be called in sync route fallback: {}",
+                            method
+                        );
+                        continue;
+                    }
+                    let exc_obj_any = exc_obj.clone().into_any();
+                    if let Ok(res) = handler.bind(py).call1((sc.clone(), exc_obj_any)) {
+                        match map_handler_return(py, &res.clone().unbind()) {
+                            Ok(mapped) => {
+                                return send_handler_map_inline(
+                                    py,
+                                    protocol,
+                                    method == "HEAD",
+                                    mapped,
+                                )
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "Exception handler returned invalid type or map failed: {:?}",
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     if try_http_exception_sync(py, protocol, &err)? {
         return Ok(());
     }
     send_internal_error_sync(py, protocol, method, path, err)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_trivial_sync_route(
     py: Python<'_>,
     protocol: &Py<PyAny>,
@@ -178,22 +217,29 @@ fn run_trivial_sync_route(
     path: &str,
     is_head: bool,
     entry: &RouteEntry,
+    scope: &pyo3::Bound<'_, PyAny>,
+    state: &std::sync::Arc<parking_lot::RwLock<crate::state::AppState>>,
 ) -> PyResult<()> {
+    let _ = protocol.setattr(
+        py,
+        "__oxyroute_path_template__",
+        entry.path_template.clone(),
+    );
     let handler = entry.handler.bind(py);
     let out = match handler.call0() {
         Ok(x) => x.unbind(),
         Err(e) => {
-            return send_python_error_sync(py, protocol, method, path, e);
+            return send_python_error_sync(py, protocol, method, path, e, Some(scope), Some(state));
         }
     };
     let mapped = match map_handler_return(py, &out) {
         Ok(m) => m,
         Err(e) => {
-            return send_python_error_sync(py, protocol, method, path, e);
+            return send_python_error_sync(py, protocol, method, path, e, Some(scope), Some(state));
         }
     };
     if let Err(e) = send_handler_map_inline(py, protocol, is_head, mapped) {
-        return send_python_error_sync(py, protocol, method, path, e);
+        return send_python_error_sync(py, protocol, method, path, e, Some(scope), Some(state));
     }
     Ok(())
 }
@@ -204,7 +250,59 @@ async fn send_python_error(
     method: &str,
     path: &str,
     err: PyErr,
+    scope: Option<&Py<PyAny>>,
+    state: Option<&std::sync::Arc<parking_lot::RwLock<crate::state::AppState>>>,
 ) -> PyResult<PyObject> {
+    if let (Some(sc), Some(st)) = (scope, state) {
+        let snap = st.read().hot_snapshot();
+        let coro_or_res = Python::with_gil(|py| -> PyResult<Option<(Py<PyAny>, bool)>> {
+            for (exc_type, handler, is_async) in snap.exception_handlers.iter().rev() {
+                if let Ok(exc_obj) = err.clone_ref(py).into_bound_py_any(py) {
+                    if exc_obj.is_instance(exc_type.bind(py)).unwrap_or(false) {
+                        let exc_obj_any = exc_obj.clone().into_any();
+                        if let Ok(res) = handler.bind(py).call1((sc.bind(py).clone(), exc_obj_any))
+                        {
+                            return Ok(Some((res.unbind(), *is_async)));
+                        }
+                    }
+                }
+            }
+            Ok(None)
+        });
+
+        if let Ok(Some((res_py, is_async))) = coro_or_res {
+            let final_res = if is_async {
+                let fut = Python::with_gil(|py| {
+                    pyo3_async_runtimes::tokio::into_future(res_py.bind(py).clone())
+                });
+                if let Ok(f) = fut {
+                    match f.await {
+                        Ok(x) => x,
+                        Err(e) => return send_internal_error(protocol, method, path, e).await,
+                    }
+                } else {
+                    res_py
+                }
+            } else {
+                res_py
+            };
+
+            let mapped_res = Python::with_gil(|py| map_handler_return(py, &final_res));
+            if let Ok(mapped) = mapped_res {
+                let res = Python::with_gil(|py| {
+                    send_handler_map_inline(py, protocol, method == "HEAD", mapped)
+                });
+                if res.is_ok() {
+                    return Ok(Python::with_gil(|py| py.None()));
+                }
+            } else {
+                log::error!(
+                    "Async exception handler returned invalid type or map failed: {:?}",
+                    mapped_res.err()
+                );
+            }
+        }
+    }
     if let Some(res) = try_http_exception(protocol, &err).await? {
         return Ok(res);
     }
@@ -255,7 +353,15 @@ pub fn try_rsgi_sync_short_circuit(
     }
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
     {
-        let doc = state.read().openapi.lock().to_string();
+        let _ = protocol_py.setattr(py, "__oxyroute_path_template__", "/openapi.json");
+        let doc: Arc<String> = {
+            let state_guard = state.read();
+            let mut oa = state_guard.openapi.lock();
+            if oa.1.is_none() {
+                oa.1 = Some(Arc::new(oa.0.to_string()));
+            }
+            Arc::clone(oa.1.as_ref().unwrap())
+        };
         if is_head {
             response::send_head_simple_sync(
                 py,
@@ -298,7 +404,16 @@ pub fn try_rsgi_sync_short_circuit(
                 return Err(pyo3::exceptions::PyRuntimeError::new_err("route index"));
             };
             if route_is_trivial_sync(entry) {
-                run_trivial_sync_route(py, &protocol_py, &method, &path, is_head, entry)?;
+                run_trivial_sync_route(
+                    py,
+                    &protocol_py,
+                    &method,
+                    &path,
+                    is_head,
+                    entry,
+                    scope,
+                    state,
+                )?;
                 return Ok(Some(py.None()));
             }
             Ok(None)
@@ -373,7 +488,17 @@ pub async fn run_rsgi(
     });
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
     {
-        let doc = state.read().openapi.lock().to_string();
+        let _ = Python::with_gil(|py| {
+            protocol.setattr(py, "__oxyroute_path_template__", "/openapi.json")
+        });
+        let doc: Arc<String> = {
+            let state_guard = state.read();
+            let mut oa = state_guard.openapi.lock();
+            if oa.1.is_none() {
+                oa.1 = Some(Arc::new(oa.0.to_string()));
+            }
+            Arc::clone(oa.1.as_ref().unwrap())
+        };
         if is_head {
             return response::send_head_simple(
                 &protocol,
@@ -387,6 +512,8 @@ pub async fn run_rsgi(
     }
     // Prototype: Issue 55 (sqlx integration benchmark path)
     if method == "GET" && path == "/test_db" {
+        let _ =
+            Python::with_gil(|py| protocol.setattr(py, "__oxyroute_path_template__", "/test_db"));
         if let Some(pool) = snapshot.db_pool.as_ref() {
             use sqlx::Row;
             match sqlx::query("SELECT 1 as num").fetch_one(pool).await {
@@ -420,7 +547,8 @@ pub async fn run_rsgi(
         }) {
             Ok(x) => x,
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    .await;
             }
         };
         let skip = Python::with_gil(|py| out.bind(py).is_none());
@@ -493,7 +621,10 @@ pub async fn run_rsgi(
                 send_handler_map_inline(py, &protocol, is_head, mapped)
             }) {
                 Ok(()) => Ok(Python::with_gil(|py| py.None())),
-                Err(e) => send_python_error(&protocol, &method, &path, e).await,
+                Err(e) => {
+                    send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                        .await
+                }
             };
         }
     }
@@ -529,12 +660,9 @@ pub async fn run_rsgi(
         handler,
         is_async,
         require_jwt,
-        jwt_secret,
-        algs,
-        jwt_issuer,
-        jwt_audience,
-        jwt_leeway,
         jwt_cookie,
+        jwt_decoding_key,
+        jwt_validation,
         read_json_body,
         read_form_body,
         dep_names,
@@ -543,6 +671,7 @@ pub async fn run_rsgi(
         dep_wants_request,
         handler_param_names,
         handler_varkw,
+        body_model,
     ) = Python::with_gil(|_py| -> PyResult<_> {
         let e = routes_arc
             .get(route_idx)
@@ -551,12 +680,9 @@ pub async fn run_rsgi(
             e.handler.clone(),
             e.is_async,
             e.require_jwt,
-            e.jwt_secret.clone(),
-            Arc::clone(&e.algs),
-            e.jwt_issuer.clone(),
-            e.jwt_audience.clone(),
-            e.jwt_leeway,
             e.jwt_cookie.clone(),
+            e.jwt_decoding_key.clone(),
+            e.jwt_validation.clone(),
             e.read_json_body,
             e.read_form_body,
             Arc::clone(&e.dep_names),
@@ -565,10 +691,18 @@ pub async fn run_rsgi(
             Arc::clone(&e.dep_wants_request),
             Arc::clone(&e.handler_param_names),
             e.handler_varkw,
+            e.body_model.clone(),
         ))
     })?;
     let may_need_raw_body = handler_varkw || handler_param_names.contains("body");
     let should_read_body = read_json_body || read_form_body || may_need_raw_body;
+    let _ = Python::with_gil(|py| {
+        protocol.setattr(
+            py,
+            "__oxyroute_path_template__",
+            routes_arc[route_idx].path_template.clone(),
+        )
+    });
     let mut body_bytes: Vec<u8> = if should_read_body {
         let read_fut = Python::with_gil(|py| {
             let p = protocol.bind(py);
@@ -614,8 +748,9 @@ pub async fn run_rsgi(
     };
     let mut claims_val: Option<JsonValue> = None;
     if require_jwt {
-        let key = match jwt_secret {
-            None => {
+        let (dk, val) = match (jwt_decoding_key.as_ref(), jwt_validation.as_ref()) {
+            (Some(dk), Some(val)) => (dk, val),
+            _ => {
                 return response::send_text(
                     &protocol,
                     401,
@@ -624,7 +759,6 @@ pub async fn run_rsgi(
                 )
                 .await
             }
-            Some(s) => s,
         };
         let token: String = match extract_bearer(auth.as_deref()).filter(|s| !s.is_empty()) {
             Some(t) => t,
@@ -652,43 +786,7 @@ pub async fn run_rsgi(
                 }
             },
         };
-        let mut val = if let Some(f) = algs.first() {
-            Validation::new(*f)
-        } else {
-            return response::send_text(
-                &protocol,
-                401,
-                "Unauthorized",
-                "text/plain; charset=utf-8",
-            )
-            .await;
-        };
-        val.algorithms = algs.to_vec();
-        val.validate_nbf = true;
-        val.leeway = jwt_leeway;
-        if let Some(ref iss) = jwt_issuer {
-            val.set_issuer(&[iss]);
-        }
-        if let Some(ref aud) = jwt_audience {
-            val.set_audience(&[aud]);
-        } else {
-            // jsonwebtoken 9: with validate_aud + aud=None, a token that includes `aud` fails
-            // (InvalidAudience). Disable unless the route opts in to an expected audience.
-            val.validate_aud = false;
-        }
-        let dk = match build_decoding_key(&key, &algs) {
-            Ok(d) => d,
-            Err(_) => {
-                return response::send_text(
-                    &protocol,
-                    401,
-                    "Unauthorized",
-                    "text/plain; charset=utf-8",
-                )
-                .await;
-            }
-        };
-        match decode::<JsonValue>(&token, &dk, &val) {
+        match decode::<JsonValue>(&token, dk.as_ref(), val.as_ref()) {
             Ok(data) => {
                 claims_val = Some(data.claims);
             }
@@ -755,7 +853,15 @@ pub async fn run_rsgi(
             let ct = match ct {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e).await;
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        e,
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             };
             if ct.as_deref().map(str::is_empty) != Some(false) {
@@ -816,11 +922,12 @@ pub async fn run_rsgi(
         match Python::with_gil(|py| -> PyResult<Py<PyAny>> {
             let s = scope.bind(py);
             let d = build_request_context(py, s, &method, &path, &query_string)?;
-            Ok(d.unbind().into())
+            Ok(d.unbind())
         }) {
             Ok(o) => Some(o),
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    .await;
             }
         }
     } else {
@@ -848,7 +955,15 @@ pub async fn run_rsgi(
             }) {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e).await;
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        e,
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             };
             let fut = match Python::with_gil(|py| {
@@ -857,13 +972,29 @@ pub async fn run_rsgi(
             }) {
                 Ok(f) => f,
                 Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e).await;
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        e,
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             };
             match fut.await {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e).await;
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        e,
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             }
         } else {
@@ -886,7 +1017,15 @@ pub async fn run_rsgi(
             }) {
                 Ok(x) => x,
                 Err(e) => {
-                    return send_python_error(&protocol, &method, &path, e).await;
+                    return send_python_error(
+                        &protocol,
+                        &method,
+                        &path,
+                        e,
+                        Some(&scope),
+                        Some(&state),
+                    )
+                    .await;
                 }
             }
         };
@@ -905,7 +1044,17 @@ pub async fn run_rsgi(
                 if let Some(pool) = snapshot.db_pool.as_ref() {
                     match crate::db::execute_query(pool, &db_query).await {
                         Ok(res) => res,
-                        Err(e) => return send_python_error(&protocol, &method, &path, e).await,
+                        Err(e) => {
+                            return send_python_error(
+                                &protocol,
+                                &method,
+                                &path,
+                                e,
+                                Some(&scope),
+                                Some(&state),
+                            )
+                            .await
+                        }
                     }
                 } else {
                     return send_python_error(
@@ -915,12 +1064,17 @@ pub async fn run_rsgi(
                         pyo3::exceptions::PyRuntimeError::new_err(
                             "DBQuery returned by dependency but no database pool configured",
                         ),
+                        Some(&scope),
+                        Some(&state),
                     )
                     .await;
                 }
             }
             Ok(None) => o,
-            Err(e) => return send_python_error(&protocol, &method, &path, e).await,
+            Err(e) => {
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    .await
+            }
         };
 
         dep_out.push(resolved);
@@ -943,10 +1097,15 @@ pub async fn run_rsgi(
         || should_pass_files
         || should_pass_body
         || should_pass_protocol;
-    let (res, run_async) = match Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
+    enum RunHandlerResult {
+        Ok((PyObject, bool)),
+        ValidationError(String),
+    }
+
+    let (res, run_async) = match Python::with_gil(|py| -> PyResult<RunHandlerResult> {
         if !should_use_kwargs {
             let res = handler.bind(py).call0()?.unbind();
-            return Ok((res, is_async));
+            return Ok(RunHandlerResult::Ok((res, is_async)));
         }
         let kwargs = PyDict::new(py);
         for (k, v) in param_map {
@@ -973,7 +1132,31 @@ pub async fn run_rsgi(
         }
         if let Some(ref j) = body_json {
             let pyv = json_to_py(py, j)?;
-            kwargs.set_item("json", pyv)?;
+            if let Some(ref bm) = body_model {
+                match bm.bind(py).call_method1("model_validate", (&pyv,)) {
+                    Ok(validated) => {
+                        kwargs.set_item("json", validated)?;
+                    }
+                    Err(e) => {
+                        let err_str: String =
+                            if let Ok(exc_obj) = e.clone_ref(py).into_bound_py_any(py) {
+                                if let Ok(j_method) = exc_obj.call_method0("json") {
+                                    j_method
+                                        .extract::<String>()
+                                        .unwrap_or_else(|_| "[]".to_string())
+                                } else {
+                                    "[]".to_string()
+                                }
+                            } else {
+                                "[]".to_string()
+                            };
+                        let err_json = format!(r#"{{"detail":{err_str}}}"#);
+                        return Ok(RunHandlerResult::ValidationError(err_json));
+                    }
+                }
+            } else {
+                kwargs.set_item("json", pyv)?;
+            }
         }
         if read_form_body {
             if should_pass_form {
@@ -1005,11 +1188,21 @@ pub async fn run_rsgi(
             kwargs.set_item("protocol", protocol.bind(py))?;
         }
         let res = handler.bind(py).call((), Some(&kwargs))?.unbind();
-        Ok((res, is_async))
+        Ok(RunHandlerResult::Ok((res, is_async)))
     }) {
-        Ok(x) => x,
+        Ok(RunHandlerResult::Ok((res, is_async))) => (res, is_async),
+        Ok(RunHandlerResult::ValidationError(err_json)) => {
+            return response::send_text(
+                &protocol,
+                422,
+                &err_json,
+                "application/json; charset=utf-8",
+            )
+            .await;
+        }
         Err(e) => {
-            return send_python_error(&protocol, &method, &path, e).await;
+            return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                .await;
         }
     };
     let handler_out: PyObject = if run_async {
@@ -1019,13 +1212,15 @@ pub async fn run_rsgi(
         }) {
             Ok(f) => f,
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    .await;
             }
         };
         match fut.await {
             Ok(x) => x,
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e).await;
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    .await;
             }
         }
     } else {
@@ -1100,7 +1295,7 @@ pub async fn run_rsgi(
         send_handler_map_inline(py, &protocol, is_head, mapped)
     }) {
         Ok(()) => Ok(Python::with_gil(|py| py.None())),
-        Err(e) => send_python_error(&protocol, &method, &path, e).await,
+        Err(e) => send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await,
     }
 }
 
@@ -1192,6 +1387,18 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
         body: SimpleBody::Owned(s.into_bytes()),
         content_type: "application/json; charset=utf-8".to_string(),
     })
+}
+
+/// Criterion helper (issue #110): run [`map_handler_return`] and return the mapped status.
+#[doc(hidden)]
+pub(crate) fn microbench_map_handler_return(
+    py: Python<'_>,
+    out: &Bound<'_, PyAny>,
+) -> PyResult<u16> {
+    match map_handler_return(py, &out.clone().unbind())? {
+        HandlerMap::AlreadySent => Ok(0),
+        HandlerMap::WithHeaders { status, .. } | HandlerMap::Simple { status, .. } => Ok(status),
+    }
 }
 
 fn send_simple_body_sync(
@@ -1307,6 +1514,9 @@ fn send_handler_map_inline(
 
 /// `if_absent`: only add a header if no same-name (case-insensitive) header is already present
 /// (``security`` preset). `false` replaces/merges like CORS (``replace`` / duplicate header names).
+///
+/// For CORS (`if_absent == false`), skip the Python `response_header_pairs` call when the
+/// request has no ``Origin`` header (issue #108) — same outcome as an empty pair list.
 fn merge_config_response_headers(
     py: Python<'_>,
     config: &Option<Py<PyAny>>,
@@ -1317,6 +1527,12 @@ fn merge_config_response_headers(
     let Some(c) = config else {
         return Ok(mapped);
     };
+    if !if_absent {
+        let headers = scope.getattr("headers")?;
+        if header_get_lax(&headers, "origin").is_none() {
+            return Ok(mapped);
+        }
+    }
     let pairs: Vec<(String, String)> = c
         .call_method1(py, "response_header_pairs", (&scope,))?
         .extract(py)?;
