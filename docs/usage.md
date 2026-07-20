@@ -79,7 +79,7 @@ See [installation.md](installation.md) for troubleshooting native builds.
 ```python
 from oxyroute import App
 
-app = App(title="My API", include_openapi=True)
+app = App(title="My API", include_openapi=True, docs_ui="scalar")
 ```
 
 Constructor options:
@@ -88,6 +88,8 @@ Constructor options:
 |---|---:|---|
 | `title` | `"OxyRoute"` | Stored in the generated OpenAPI document. |
 | `include_openapi` | `True` | Serve built-in `GET` / `HEAD /openapi.json`. |
+| `docs_ui` | `None` | `"scalar"` or `"swagger"` → mount interactive `GET /docs`. |
+| `openapi_description` / `openapi_contact` / `openapi_servers` | `None` | Enrich OpenAPI `info` / `servers`. |
 
 Runtime methods:
 
@@ -96,6 +98,8 @@ Runtime methods:
 | `app.freeze()` | Reject new route registrations and build a read-only routing snapshot. The app also auto-builds this snapshot on first request if you do not call `freeze()`. |
 | `app.set_openapi_served(False)` | Stop serving built-in `/openapi.json`; the in-memory document still exists. |
 | `app.openapi_json()` | Return the current OpenAPI JSON string even when serving is disabled. |
+| `app.set_openapi_info(...)` | Set `info.description` / `contact` / `servers`. |
+| `app.mount_docs(path, ui=...)` | Mount Scalar or Swagger UI at a custom path. |
 | `app.set_middleware(fn_or_none)` | Enable or disable one optional pre-route callback. |
 | `app.set_cors(config_or_none)` | Enable or disable CORS header merging. |
 | `app.set_security_headers(config_or_none)` | Enable or disable browser security header merging. |
@@ -488,17 +492,18 @@ or `body_schema=` on `post`, `put`, and `patch` routes.
 
 ## Lifespan and per-worker state
 
-Subclass `App` when you need per-worker setup/teardown:
+Subclass `App` and override **`on_startup` / `on_shutdown`** (Granian calls sync
+`__rsgi_init__(loop)` with a non-running loop — do not use `async def __rsgi_init__`):
 
 ```python
 from oxyroute import App
 
 
 class MyApp(App):
-    async def __rsgi_init__(self, *args, **kwargs) -> None:
+    async def on_startup(self) -> None:
         self.state.ready = True
 
-    async def __rsgi_del__(self, *args, **kwargs) -> None:
+    async def on_shutdown(self) -> None:
         self.state.ready = False
 
 
@@ -506,7 +511,7 @@ app = MyApp()
 ```
 
 `app.state` is a `types.SimpleNamespace`. It is per process, not shared between
-Granian workers.
+Granian workers. See [rsgi.md](rsgi.md).
 
 ## Recommended production shape
 
