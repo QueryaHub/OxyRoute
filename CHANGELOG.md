@@ -27,6 +27,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `:param` strings in `openapi_json()`).
 - JWT hot path reuses prebuilt `DecodingKey` and `Validation` per route (no per-request
   rebuild) ([#109](https://github.com/QueryaHub/OxyRoute/issues/109)).
+- CORS response merge skips the Python `response_header_pairs` call when the request has
+  no `Origin` header ([#108](https://github.com/QueryaHub/OxyRoute/issues/108)).
 
 ## [0.3.0] - 2026-04-27
 
