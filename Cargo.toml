@@ -8,10 +8,11 @@ repository = "https://github.com/QueryaHub/OxyRoute"
 
 [lib]
 name = "_oxyroute"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.25", features = ["abi3-py310", "extension-module", "auto-initialize", "py-clone"] }
+# `extension-module` is a Cargo feature (enabled by maturin) so `cargo bench` can link libpython.
+pyo3 = { version = "0.25", features = ["abi3-py310", "auto-initialize", "py-clone"] }
 pyo3-async-runtimes = { version = "0.25", features = ["tokio-runtime"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync"] }
 matchit = "0.7"
@@ -30,8 +31,17 @@ log = "0.4"
 parking_lot = "0.12"
 sqlx = { version = "0.9.0", features = ["postgres", "runtime-tokio", "sqlite", "tls-rustls"] }
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "hot_path"
+harness = false
+
 [features]
 default = []
+# Enabled by maturin when building the wheel; omit for `cargo bench` / `cargo test` so libpython links.
+extension-module = ["pyo3/extension-module"]
 
 [profile.release]
 lto = true

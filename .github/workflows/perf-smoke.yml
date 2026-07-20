@@ -1,0 +1,52 @@
+name: perf-smoke
+
+# Opt-in smoke for Criterion + short wrk (issue #110). Not part of default PR CI.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+
+jobs:
+  criterion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Sync + Criterion smoke
+        run: |
+          uv sync --frozen --extra dev
+          # Quiet, short Criterion run (still builds the bench binary).
+          cargo bench --bench hot_path -- --sample-size 10 --warm-up-time 1 --measurement-time 2
+
+  wrk-scenarios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - name: Install wrk
+        run: sudo apt-get update && sudo apt-get install -y wrk
+      - name: Build oxyroute and run short scenarios
+        run: |
+          set -euo pipefail
+          uv sync --frozen --extra dev --extra bench
+          rm -f target/wheels/oxyroute-*.whl
+          uv run maturin build --release
+          shopt -s nullglob
+          wheels=(target/wheels/oxyroute-*.whl)
+          shopt -u nullglob
+          uv pip install --force-reinstall "${wheels[0]}"
+          chmod +x perf-test/bench_scenarios.sh
+          OXYROUTE_BENCH_DURATION=1s OXYROUTE_BENCH_CONNECTIONS=8 OXYROUTE_BENCH_THREADS=1 \
+            ./perf-test/bench_scenarios.sh

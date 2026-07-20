@@ -48,10 +48,12 @@ bench = [
     "fastapi>=0.100",
     "granian>=1.0",
     "httpx>=0.27",
+    "pyjwt>=2.8",
 ]
 
 [tool.maturin]
 module-name = "oxyroute._oxyroute"
+features = ["extension-module"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

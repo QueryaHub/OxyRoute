@@ -20,6 +20,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Granian-compatible lifespan: sync `__rsgi_init__(loop)` / `__rsgi_del__(loop)` run
   `on_startup` / `on_shutdown` via `loop.run_until_complete`. Prefer overriding
   `on_startup` / `on_shutdown` instead of async `__rsgi_init__`.
+- Criterion microbenchmarks (`cargo bench --bench hot_path`) and expanded wrk scenarios
+  (`perf-test/bench_scenarios.sh`); optional `perf-smoke` workflow
+  ([#110](https://github.com/QueryaHub/OxyRoute/issues/110)).
 
 ### Changed
 
