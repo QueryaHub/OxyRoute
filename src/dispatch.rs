@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use jsonwebtoken::decode;
 use jsonwebtoken::errors::ErrorKind;
-use jsonwebtoken::{decode, Validation};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use pyo3::IntoPyObjectExt;
@@ -19,7 +19,7 @@ use crate::state::{
     match_route_compiled, match_ws_route_compiled, methods_matching_path_compiled,
     route_is_trivial_sync, AppState, CompiledRouters, HotSnapshot, RouteEntry,
 };
-use crate::token::{build_decoding_key, extract_bearer, extract_cookie_value};
+use crate::token::{extract_bearer, extract_cookie_value};
 use crate::websocket::WebSocket;
 
 type HttpExceptionPayload = (u16, Vec<u8>, Vec<(String, String)>);
@@ -660,12 +660,9 @@ pub async fn run_rsgi(
         handler,
         is_async,
         require_jwt,
-        jwt_secret,
-        algs,
-        jwt_issuer,
-        jwt_audience,
-        jwt_leeway,
         jwt_cookie,
+        jwt_decoding_key,
+        jwt_validation,
         read_json_body,
         read_form_body,
         dep_names,
@@ -683,12 +680,9 @@ pub async fn run_rsgi(
             e.handler.clone(),
             e.is_async,
             e.require_jwt,
-            e.jwt_secret.clone(),
-            Arc::clone(&e.algs),
-            e.jwt_issuer.clone(),
-            e.jwt_audience.clone(),
-            e.jwt_leeway,
             e.jwt_cookie.clone(),
+            e.jwt_decoding_key.clone(),
+            e.jwt_validation.clone(),
             e.read_json_body,
             e.read_form_body,
             Arc::clone(&e.dep_names),
@@ -754,8 +748,9 @@ pub async fn run_rsgi(
     };
     let mut claims_val: Option<JsonValue> = None;
     if require_jwt {
-        let key = match jwt_secret {
-            None => {
+        let (dk, val) = match (jwt_decoding_key.as_ref(), jwt_validation.as_ref()) {
+            (Some(dk), Some(val)) => (dk, val),
+            _ => {
                 return response::send_text(
                     &protocol,
                     401,
@@ -764,7 +759,6 @@ pub async fn run_rsgi(
                 )
                 .await
             }
-            Some(s) => s,
         };
         let token: String = match extract_bearer(auth.as_deref()).filter(|s| !s.is_empty()) {
             Some(t) => t,
@@ -792,43 +786,7 @@ pub async fn run_rsgi(
                 }
             },
         };
-        let mut val = if let Some(f) = algs.first() {
-            Validation::new(*f)
-        } else {
-            return response::send_text(
-                &protocol,
-                401,
-                "Unauthorized",
-                "text/plain; charset=utf-8",
-            )
-            .await;
-        };
-        val.algorithms = algs.to_vec();
-        val.validate_nbf = true;
-        val.leeway = jwt_leeway;
-        if let Some(ref iss) = jwt_issuer {
-            val.set_issuer(&[iss]);
-        }
-        if let Some(ref aud) = jwt_audience {
-            val.set_audience(&[aud]);
-        } else {
-            // jsonwebtoken 9: with validate_aud + aud=None, a token that includes `aud` fails
-            // (InvalidAudience). Disable unless the route opts in to an expected audience.
-            val.validate_aud = false;
-        }
-        let dk = match build_decoding_key(&key, &algs) {
-            Ok(d) => d,
-            Err(_) => {
-                return response::send_text(
-                    &protocol,
-                    401,
-                    "Unauthorized",
-                    "text/plain; charset=utf-8",
-                )
-                .await;
-            }
-        };
-        match decode::<JsonValue>(&token, &dk, &val) {
+        match decode::<JsonValue>(&token, dk.as_ref(), val.as_ref()) {
             Ok(data) => {
                 claims_val = Some(data.claims);
             }
