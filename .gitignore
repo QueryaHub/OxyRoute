@@ -45,6 +45,7 @@ env/
 
 # --- IDE / editor ---
 .idea/
+.cursor/
 *.swp
 *~
 
