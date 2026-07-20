@@ -50,7 +50,9 @@ class APIRouter:
 
     def _reg(self, method: str, path: str, **opts: Any) -> Callable[[F], F]:
         def dec(handler: F) -> F:
-            self._routes.append((method, path, handler, dict(opts)))
+            # Drop ``None`` so ``include_router(..., tags=[...])`` defaults are not wiped.
+            cleaned = {k: v for k, v in opts.items() if v is not None}
+            self._routes.append((method, path, handler, cleaned))
             return handler
 
         return dec
@@ -88,6 +90,7 @@ class APIRouter:
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "GET",
@@ -100,6 +103,7 @@ class APIRouter:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             dependencies=dependencies,
+            tags=tags,
         )
 
     def post(
@@ -118,6 +122,7 @@ class APIRouter:
         body_model: Any | None = None,
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "POST",
@@ -134,6 +139,7 @@ class APIRouter:
             body_model=body_model,
             body_schema=body_schema,
             dependencies=dependencies,
+            tags=tags,
         )
 
     def put(
@@ -152,6 +158,7 @@ class APIRouter:
         body_model: Any | None = None,
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "PUT",
@@ -168,6 +175,7 @@ class APIRouter:
             body_model=body_model,
             body_schema=body_schema,
             dependencies=dependencies,
+            tags=tags,
         )
 
     def patch(
@@ -186,6 +194,7 @@ class APIRouter:
         body_model: Any | None = None,
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "PATCH",
@@ -202,6 +211,7 @@ class APIRouter:
             body_model=body_model,
             body_schema=body_schema,
             dependencies=dependencies,
+            tags=tags,
         )
 
     def delete(
@@ -216,6 +226,7 @@ class APIRouter:
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "DELETE",
@@ -228,6 +239,7 @@ class APIRouter:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             dependencies=dependencies,
+            tags=tags,
         )
 
     def options(
@@ -242,6 +254,7 @@ class APIRouter:
         jwt_leeway: int | None = None,
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
+        tags: list[str] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "OPTIONS",
@@ -254,4 +267,5 @@ class APIRouter:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             dependencies=dependencies,
+            tags=tags,
         )
