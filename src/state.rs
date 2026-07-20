@@ -42,16 +42,11 @@ pub struct RouteEntry {
     pub handler: Py<PyAny>,
     pub is_async: bool,
     pub require_jwt: bool,
-    pub jwt_secret: Option<String>,
-    pub algs: Arc<[jsonwebtoken::Algorithm]>,
-    /// `None` in Python → no issuer check; else `set_issuer` in jsonwebtoken.
-    pub jwt_issuer: Option<String>,
-    /// `None` in Python → `validate_aud` disabled for this route.
-    pub jwt_audience: Option<String>,
-    /// Clock skew (seconds); Python `None` uses default 60 (jsonwebtoken default).
-    pub jwt_leeway: u64,
     /// If set, read JWT from the `Cookie` header when `Authorization: Bearer` is missing.
     pub jwt_cookie: Option<String>,
+    /// Prebuilt at registration when `require_jwt` (issue #109); hot path reuses these.
+    pub jwt_decoding_key: Option<Arc<jsonwebtoken::DecodingKey>>,
+    pub jwt_validation: Option<Arc<jsonwebtoken::Validation>>,
     pub read_json_body: bool,
     /// When set, body is parsed as form data (``application/x-www-form-urlencoded`` or ``multipart/form-data``), not JSON.
     pub read_form_body: bool,
