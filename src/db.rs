@@ -120,6 +120,26 @@ pub async fn execute_query(pool: &sqlx::PgPool, db_query: &DBQuery) -> PyResult<
                         let py_v = crate::schema::json_to_py(py, &v)?;
                         d.set_item(name, py_v)?;
                     }
+                    "UUID" => {
+                        let v: uuid::Uuid =
+                            sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                        d.set_item(name, v.to_string())?;
+                    }
+                    "DATE" => {
+                        let v: chrono::NaiveDate =
+                            sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                        d.set_item(name, v.to_string())?;
+                    }
+                    "TIMESTAMP" => {
+                        let v: chrono::NaiveDateTime =
+                            sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                        d.set_item(name, v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())?;
+                    }
+                    "TIMESTAMPTZ" => {
+                        let v: chrono::DateTime<chrono::Utc> =
+                            sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                        d.set_item(name, v.to_rfc3339())?;
+                    }
                     _ => {
                         // Fallback: try as string
                         if let Ok(v) = sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref) {
