@@ -12,6 +12,7 @@ from oxyroute import App, stream_text
 
 app = App()
 
+
 @app.get("/logs")
 async def logs(protocol):
     async def tail_logs():

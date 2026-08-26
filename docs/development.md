@@ -29,9 +29,11 @@ from oxyroute.testing import TestClient
 
 app = App()
 
+
 @app.get("/")
 def home():
     return {"status": "ok"}
+
 
 def test_home():
     with TestClient(app) as client:
