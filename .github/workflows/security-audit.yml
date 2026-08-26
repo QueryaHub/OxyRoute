@@ -1,0 +1,22 @@
+name: security-audit
+
+on:
+  push:
+    branches: [main, master, dev]
+  pull_request:
+    branches: [main, master, dev]
+  schedule:
+    - cron: "0 0 * * 0" # Weekly on Sundays
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install and run cargo-audit
+        run: |
+          cargo install cargo-audit
+          cargo audit || true
