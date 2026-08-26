@@ -36,12 +36,12 @@ class StaticFiles:
         try:
             target_path = (self.directory / rel_path).resolve()
         except Exception:
-            raise HTTPException(status_code=404, detail="Not Found")
+            raise HTTPException(status_code=404, detail="Not Found") from None
 
         try:
             target_path.relative_to(self.directory)
         except ValueError:
-            raise HTTPException(status_code=403, detail="Forbidden")
+            raise HTTPException(status_code=403, detail="Forbidden") from None
 
         if not target_path.exists() or not target_path.is_file():
             if self.html and (target_path / "index.html").is_file():
