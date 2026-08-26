@@ -482,14 +482,65 @@ class App:
         dlist = _norm_dependencies(dependencies)
 
         def wrap(handler: F) -> F:
+            nonlocal body_model
             if body_model is not None and body_schema is not None:
                 raise TypeError("use only one of body_model and body_schema")
+
+            target_body_model = body_model
+            body_param_name = "json"
+
+            if inspect.isroutine(handler) or hasattr(handler, "__call__"):
+                try:
+                    sig = inspect.signature(handler)
+                    reserved_names = {
+                        "request",
+                        "claims",
+                        "query",
+                        "form",
+                        "files",
+                        "protocol",
+                        "scope",
+                    }
+                    if dlist:
+                        for dep_tuple in dlist:
+                            if isinstance(dep_tuple, tuple) and len(dep_tuple) >= 1:
+                                reserved_names.add(dep_tuple[0])
+
+                    if target_body_model is None and body_schema is None:
+                        for p_name, param in sig.parameters.items():
+                            if p_name in reserved_names:
+                                continue
+                            ann = param.annotation
+                            if (
+                                ann is not inspect.Parameter.empty
+                                and isinstance(ann, type)
+                                and hasattr(ann, "model_validate")
+                                and hasattr(ann, "model_json_schema")
+                            ):
+                                target_body_model = ann
+                                body_param_name = p_name
+                                break
+                    elif target_body_model is not None:
+                        for p_name, param in sig.parameters.items():
+                            if p_name in reserved_names:
+                                continue
+                            if param.annotation is target_body_model or p_name == "json":
+                                body_param_name = p_name
+                                break
+                        else:
+                            for p_name in sig.parameters:
+                                if p_name not in reserved_names and not p_name.startswith("*"):
+                                    body_param_name = p_name
+                                    break
+                except Exception:
+                    pass
+
             rj = read_json_body
             if read_form_body:
                 rj = False
             body_schema_json: str | None = None
-            if body_model is not None:
-                body_schema_json = json.dumps(body_model.model_json_schema())
+            if target_body_model is not None:
+                body_schema_json = json.dumps(target_body_model.model_json_schema())
             elif body_schema is not None:
                 body_schema_json = json.dumps(body_schema)
             self._app.add_route(
@@ -507,8 +558,9 @@ class App:
                 jwt_leeway,
                 jwt_cookie,
                 body_schema_json,
-                body_model,
+                target_body_model,
                 tags,
+                body_param_name,
             )
             return handler
 

@@ -268,7 +268,7 @@ impl App {
 
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
-        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None)
+        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None, body_param_name=None)
     )]
     #[allow(clippy::too_many_arguments)]
     fn add_route(
@@ -290,6 +290,7 @@ impl App {
         body_schema_json: Option<String>,
         body_model: Option<Py<PyAny>>,
         tags: Option<Bound<'_, PyList>>,
+        body_param_name: Option<String>,
     ) -> PyResult<()> {
         {
             let st = self.state.read();
@@ -388,6 +389,7 @@ impl App {
             handler_varkw,
             trivial_sync,
             body_model,
+            body_param_name: body_param_name.unwrap_or_else(|| "json".to_string()),
         });
         let request_schema: Option<serde_json::Value> = match body_schema_json
             .as_deref()

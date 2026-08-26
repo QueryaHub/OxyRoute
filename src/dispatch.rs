@@ -672,6 +672,7 @@ pub async fn run_rsgi(
         handler_param_names,
         handler_varkw,
         body_model,
+        body_param_name,
     ) = Python::with_gil(|_py| -> PyResult<_> {
         let e = routes_arc
             .get(route_idx)
@@ -692,6 +693,7 @@ pub async fn run_rsgi(
             Arc::clone(&e.handler_param_names),
             e.handler_varkw,
             e.body_model.clone(),
+            e.body_param_name.clone(),
         ))
     })?;
     let may_need_raw_body = handler_varkw || handler_param_names.contains("body");
@@ -1135,7 +1137,15 @@ pub async fn run_rsgi(
             if let Some(ref bm) = body_model {
                 match bm.bind(py).call_method1("model_validate", (&pyv,)) {
                     Ok(validated) => {
-                        kwargs.set_item("json", validated)?;
+                        let target_name = if body_param_name.is_empty() {
+                            "json"
+                        } else {
+                            body_param_name.as_str()
+                        };
+                        kwargs.set_item(target_name, &validated)?;
+                        if target_name != "json" && handler_varkw {
+                            kwargs.set_item("json", &validated)?;
+                        }
                     }
                     Err(e) => {
                         let err_str: String =
