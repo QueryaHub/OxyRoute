@@ -21,6 +21,7 @@ Pass a list of two-tuples `(name, factory)` to a route decorator, for example:
 def get_db() -> str:
     return "db-conn"
 
+
 @app.get("/items", dependencies=[("db", get_db)])
 def list_items(db: str) -> str:
     return f"ok {db}"
@@ -37,8 +38,10 @@ def list_items(db: str) -> str:
 ```python
 from oxyroute import App, Depends
 
+
 def get_settings():
     return {"env": "dev"}
+
 
 @app.get("/x", dependencies=[("settings", Depends(get_settings))])
 def x(**kwargs) -> str:

@@ -98,6 +98,7 @@ hardening after the v0.3.0 ASGI removal. See `git log v0.3.0..v0.4.0` for the fu
 
   ```python
   from tests._rsgi_test_transport import asgi_test_app
+
   transport = httpx.ASGITransport(app=asgi_test_app(app))
   ```
 

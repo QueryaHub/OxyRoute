@@ -7,11 +7,14 @@ import asyncpg
 
 DB_URI = "postgresql://postgres:postgres@127.0.0.1:5433/postgres"
 
+
 class AppState:
     def __init__(self):
         self.pool = None
 
+
 state = AppState()
+
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -19,7 +22,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
     await state.pool.close()
 
+
 app = FastAPI(title="Perf Test FastAPI DB", lifespan=lifespan)
+
 
 @app.get("/test_db")
 async def hello():

@@ -104,4 +104,3 @@ def test_static_files_sibling_prefix_traversal():
         with TestClient(app) as client:
             resp = client.get("/static/../static_private/passwords.txt")
             assert resp.status_code in (403, 404)
-
