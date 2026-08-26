@@ -935,25 +935,73 @@ pub async fn run_rsgi(
     } else {
         None
     };
+/// Invoke a Python callable with keyword arguments using PEP 590 Vectorcall protocol.
+/// Avoids allocating and deallocating PyDict hash tables on every request dispatch.
+pub unsafe fn call_vectorcall_kw<'py>(
+    py: Python<'py>,
+    callable: &Bound<'py, PyAny>,
+    kw_pairs: &[(&str, &Bound<'py, PyAny>)],
+) -> PyResult<Bound<'py, PyAny>> {
+    if kw_pairs.is_empty() {
+        let res = pyo3::ffi::PyObject_Vectorcall(
+            callable.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+        );
+        if res.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+        return Ok(Bound::from_owned_ptr(py, res));
+    }
+
+    let n_kw = kw_pairs.len();
+    let mut args_ptrs: Vec<*mut pyo3::ffi::PyObject> = Vec::with_capacity(n_kw);
+    let kwnames_tuple = pyo3::ffi::PyTuple_New(n_kw as isize);
+    if kwnames_tuple.is_null() {
+        return Err(PyErr::fetch(py));
+    }
+
+    for (i, &(name, val)) in kw_pairs.iter().enumerate() {
+        let name_py =
+            pyo3::ffi::PyUnicode_FromStringAndSize(name.as_ptr() as *const _, name.len() as isize);
+        if name_py.is_null() {
+            pyo3::ffi::Py_DECREF(kwnames_tuple);
+            return Err(PyErr::fetch(py));
+        }
+        pyo3::ffi::PyTuple_SetItem(kwnames_tuple, i as isize, name_py);
+        args_ptrs.push(val.as_ptr());
+    }
+
+    let res = pyo3::ffi::PyObject_Vectorcall(
+        callable.as_ptr(),
+        args_ptrs.as_ptr(),
+        0,
+        kwnames_tuple,
+    );
+    pyo3::ffi::Py_DECREF(kwnames_tuple);
+
+    if res.is_null() {
+        return Err(PyErr::fetch(py));
+    }
+    Ok(Bound::from_owned_ptr(py, res))
+}
+
     let mut dep_out: Vec<PyObject> = Vec::with_capacity(dep_factories.len());
     for (i, fact) in dep_factories.iter().enumerate() {
         let o = if dep_is_async.get(i) == Some(&true) {
             let r = match Python::with_gil(|py| -> PyResult<PyObject> {
-                let kw = PyDict::new(py);
+                let mut kw_pairs: Vec<(&str, &Bound<'_, PyAny>)> = Vec::with_capacity(i + 1);
                 if dep_wants_request.get(i) == Some(&true) {
                     if let Some(ref rc) = request_ctx {
-                        kw.set_item("request", rc.bind(py))?;
+                        kw_pairs.push(("request", rc.bind(py)));
                     }
                 }
                 for j in 0..i {
-                    kw.set_item(dep_names[j].as_str(), dep_out[j].bind(py))?;
+                    kw_pairs.push((dep_names[j].as_str(), dep_out[j].bind(py)));
                 }
                 let f = fact.bind(py);
-                if kw.is_empty() {
-                    Ok(f.call((), None)?.unbind())
-                } else {
-                    Ok(f.call((), Some(&kw))?.unbind())
-                }
+                unsafe { call_vectorcall_kw(py, f, &kw_pairs).map(|b| b.unbind()) }
             }) {
                 Ok(x) => x,
                 Err(e) => {
@@ -1001,21 +1049,17 @@ pub async fn run_rsgi(
             }
         } else {
             match Python::with_gil(|py| -> PyResult<PyObject> {
-                let kw = PyDict::new(py);
+                let mut kw_pairs: Vec<(&str, &Bound<'_, PyAny>)> = Vec::with_capacity(i + 1);
                 if dep_wants_request.get(i) == Some(&true) {
                     if let Some(ref rc) = request_ctx {
-                        kw.set_item("request", rc.bind(py))?;
+                        kw_pairs.push(("request", rc.bind(py)));
                     }
                 }
                 for j in 0..i {
-                    kw.set_item(dep_names[j].as_str(), dep_out[j].bind(py))?;
+                    kw_pairs.push((dep_names[j].as_str(), dep_out[j].bind(py)));
                 }
                 let f = fact.bind(py);
-                if kw.is_empty() {
-                    Ok(f.call((), None)?.unbind())
-                } else {
-                    Ok(f.call((), Some(&kw))?.unbind())
-                }
+                unsafe { call_vectorcall_kw(py, f, &kw_pairs).map(|b| b.unbind()) }
             }) {
                 Ok(x) => x,
                 Err(e) => {
@@ -1106,45 +1150,50 @@ pub async fn run_rsgi(
 
     let (res, run_async) = match Python::with_gil(|py| -> PyResult<RunHandlerResult> {
         if !should_use_kwargs {
-            let res = handler.bind(py).call0()?.unbind();
+            let res = unsafe { call_vectorcall_kw(py, handler.bind(py), &[])?.unbind() };
             return Ok(RunHandlerResult::Ok((res, is_async)));
         }
-        let kwargs = PyDict::new(py);
-        for (k, v) in param_map {
-            let vpy = value_for_path_param(py, &v);
-            kwargs.set_item(k, vpy)?;
+        let mut kw_pairs: Vec<(&str, Bound<'_, PyAny>)> = Vec::with_capacity(8);
+        for (k, v) in &param_map {
+            let vpy = value_for_path_param(py, v).into_bound(py);
+            kw_pairs.push((k.as_str(), vpy));
         }
+        let qd_holder;
         if !query_map.is_empty() {
             let qd = PyDict::new(py);
             for (k, v) in &query_map {
                 qd.set_item(k, v.as_str())?;
             }
-            kwargs.set_item("query", qd)?;
+            qd_holder = qd.into_any();
+            kw_pairs.push(("query", qd_holder));
         }
         for (i, name) in dep_names.iter().enumerate() {
             if let Some(oo) = dep_out.get(i) {
                 if handler_varkw || handler_param_names.contains(name) {
-                    kwargs.set_item(name, oo.bind(py))?;
+                    kw_pairs.push((name.as_str(), oo.bind(py).clone()));
                 }
             }
         }
+        let claims_holder;
         if let Some(ref c) = claims_val {
-            let pyv = json_to_py(py, c)?;
-            kwargs.set_item("claims", pyv)?;
+            claims_holder = json_to_py(py, c)?.into_bound(py);
+            kw_pairs.push(("claims", claims_holder));
         }
+        let body_json_holder;
         if let Some(ref j) = body_json {
             let pyv = json_to_py(py, j)?;
             if let Some(ref bm) = body_model {
                 match bm.bind(py).call_method1("model_validate", (&pyv,)) {
                     Ok(validated) => {
+                        body_json_holder = validated;
                         let target_name = if body_param_name.is_empty() {
                             "json"
                         } else {
                             body_param_name.as_str()
                         };
-                        kwargs.set_item(target_name, &validated)?;
+                        kw_pairs.push((target_name, body_json_holder.clone()));
                         if target_name != "json" && handler_varkw {
-                            kwargs.set_item("json", &validated)?;
+                            kw_pairs.push(("json", body_json_holder.clone()));
                         }
                     }
                     Err(e) => {
@@ -1165,16 +1214,21 @@ pub async fn run_rsgi(
                     }
                 }
             } else {
-                kwargs.set_item("json", pyv)?;
+                body_json_holder = pyv.into_bound(py);
+                kw_pairs.push(("json", body_json_holder));
             }
         }
+        let form_holder;
+        let files_holder;
+        let body_bytes_holder;
         if read_form_body {
             if should_pass_form {
                 let fd = PyDict::new(py);
                 for (k, v) in &form_map {
                     fd.set_item(k, v.as_str())?;
                 }
-                kwargs.set_item("form", fd)?;
+                form_holder = fd.into_any();
+                kw_pairs.push(("form", form_holder));
             }
             if should_pass_files {
                 let fl = PyList::empty(py);
@@ -1189,15 +1243,21 @@ pub async fn run_rsgi(
                     d.set_item("data", PyBytes::new(py, &f.data))?;
                     fl.append(d)?;
                 }
-                kwargs.set_item("files", fl)?;
+                files_holder = fl.into_any();
+                kw_pairs.push(("files", files_holder));
             }
         } else if should_pass_body {
-            kwargs.set_item("body", PyBytes::new(py, &body_bytes))?;
+            body_bytes_holder = PyBytes::new(py, &body_bytes).into_any();
+            kw_pairs.push(("body", body_bytes_holder));
         }
+        let protocol_holder;
         if should_pass_protocol {
-            kwargs.set_item("protocol", protocol.bind(py))?;
+            protocol_holder = protocol.bind(py).clone();
+            kw_pairs.push(("protocol", protocol_holder));
         }
-        let res = handler.bind(py).call((), Some(&kwargs))?.unbind();
+        let kw_ref: Vec<(&str, &Bound<'_, PyAny>)> =
+            kw_pairs.iter().map(|(k, v)| (*k, v)).collect();
+        let res = unsafe { call_vectorcall_kw(py, handler.bind(py), &kw_ref)?.unbind() };
         Ok(RunHandlerResult::Ok((res, is_async)))
     }) {
         Ok(RunHandlerResult::Ok((res, is_async))) => (res, is_async),
