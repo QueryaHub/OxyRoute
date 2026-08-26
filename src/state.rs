@@ -65,6 +65,8 @@ pub struct RouteEntry {
     pub trivial_sync: bool,
     /// Pydantic model for request body validation.
     pub body_model: Option<Py<PyAny>>,
+    /// Parameter name to bind the validated body model to (defaults to "json").
+    pub body_param_name: String,
 }
 
 /// True when the route can be served by [`try_rsgi_sync_short_circuit`](crate::dispatch::try_rsgi_sync_short_circuit)
