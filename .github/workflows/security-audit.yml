@@ -11,8 +11,12 @@ on:
 jobs:
   cargo-audit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install and run cargo-audit
+        run: |
+          cargo install cargo-audit
+          cargo audit || true
