@@ -46,3 +46,5 @@ extension-module = ["pyo3/extension-module"]
 [profile.release]
 lto = true
 codegen-units = 1
+panic = "abort"
+
