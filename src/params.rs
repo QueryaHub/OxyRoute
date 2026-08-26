@@ -65,11 +65,7 @@ pub fn is_valid_float_literal(s: &str) -> bool {
     if bytes.is_empty() {
         return false;
     }
-    let digits = if bytes[0] == b'-' {
-        &bytes[1..]
-    } else {
-        bytes
-    };
+    let digits = if bytes[0] == b'-' { &bytes[1..] } else { bytes };
     let parts: Vec<&[u8]> = digits.split(|&b| b == b'.').collect();
     if parts.len() != 2 {
         return false;
