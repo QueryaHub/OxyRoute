@@ -1,5 +1,6 @@
 import mimetypes
 import os
+from pathlib import Path
 from typing import Any
 
 from oxyroute.exceptions import HTTPException
@@ -17,12 +18,12 @@ class StaticFiles:
 
     def __init__(
         self,
-        directory: str,
+        directory: str | os.PathLike[str],
         html: bool = False,
         max_age: int | None = None,
     ) -> None:
-        self.directory = os.path.abspath(directory)
-        if not os.path.isdir(self.directory):
+        self.directory = Path(directory).resolve()
+        if not self.directory.is_dir():
             raise RuntimeError(f"Directory {directory} does not exist")
         self.html = html
         self.max_age = max_age
@@ -31,17 +32,24 @@ class StaticFiles:
         if ".." in path.split("/"):
             raise HTTPException(status_code=403, detail="Forbidden")
 
-        file_path = os.path.abspath(os.path.join(self.directory, path.lstrip("/")))
+        rel_path = path.lstrip("/")
+        try:
+            target_path = (self.directory / rel_path).resolve()
+        except Exception:
+            raise HTTPException(status_code=404, detail="Not Found")
 
-        if not file_path.startswith(self.directory):
+        try:
+            target_path.relative_to(self.directory)
+        except ValueError:
             raise HTTPException(status_code=403, detail="Forbidden")
 
-        if not os.path.exists(file_path) or not os.path.isfile(file_path):
-            if self.html and os.path.isfile(os.path.join(file_path, "index.html")):
-                file_path = os.path.join(file_path, "index.html")
+        if not target_path.exists() or not target_path.is_file():
+            if self.html and (target_path / "index.html").is_file():
+                target_path = target_path / "index.html"
             else:
                 raise HTTPException(status_code=404, detail="Not Found")
 
+        file_path = str(target_path)
         content_type, _ = mimetypes.guess_type(file_path)
         if content_type is None:
             content_type = "application/octet-stream"
