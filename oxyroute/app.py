@@ -489,7 +489,7 @@ class App:
             target_body_model = body_model
             body_param_name = "json"
 
-            if inspect.isroutine(handler) or hasattr(handler, "__call__"):
+            if callable(handler):
                 try:
                     sig = inspect.signature(handler)
                     reserved_names = {

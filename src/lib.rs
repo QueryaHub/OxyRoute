@@ -371,25 +371,28 @@ impl App {
         let mut st = self.state.write();
         let routes = Arc::make_mut(&mut st.routes);
         let idx = routes.len();
-        routes.push(state::RouteEntry {
+        let extra = Arc::new(state::RouteExtra {
             path_template: path.to_string(),
-            handler,
-            is_async,
-            require_jwt,
             jwt_cookie,
             jwt_decoding_key,
             jwt_validation,
-            read_json_body,
-            read_form_body,
             dep_names: Arc::<[String]>::from(dep_names),
             dep_factories: Arc::<[Py<PyAny>]>::from(dep_factories),
             dep_is_async: Arc::<[bool]>::from(dep_is_async),
             dep_wants_request: Arc::<[bool]>::from(dep_wants_request),
             handler_param_names: Arc::new(handler_param_names),
+            body_param_name: body_param_name.unwrap_or_else(|| "json".to_string()),
+        });
+        routes.push(state::RouteEntry {
+            handler,
+            body_model,
+            extra,
+            is_async,
+            require_jwt,
+            read_json_body,
+            read_form_body,
             handler_varkw,
             trivial_sync,
-            body_model,
-            body_param_name: body_param_name.unwrap_or_else(|| "json".to_string()),
         });
         let request_schema: Option<serde_json::Value> = match body_schema_json
             .as_deref()

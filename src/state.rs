@@ -36,38 +36,37 @@ pub struct WebsocketRoute {
     pub is_async: bool,
 }
 
+/// Auxiliary / cold metadata for a route.
 #[derive(Clone)]
-pub struct RouteEntry {
+pub struct RouteExtra {
     pub path_template: String,
-    pub handler: Py<PyAny>,
-    pub is_async: bool,
-    pub require_jwt: bool,
-    /// If set, read JWT from the `Cookie` header when `Authorization: Bearer` is missing.
     pub jwt_cookie: Option<String>,
-    /// Prebuilt at registration when `require_jwt` (issue #109); hot path reuses these.
     pub jwt_decoding_key: Option<Arc<jsonwebtoken::DecodingKey>>,
     pub jwt_validation: Option<Arc<jsonwebtoken::Validation>>,
-    pub read_json_body: bool,
-    /// When set, body is parsed as form data (``application/x-www-form-urlencoded`` or ``multipart/form-data``), not JSON.
-    pub read_form_body: bool,
-    /// Dependency `name` -> factory callable (linear order; resolved in order, then user handler).
     pub dep_names: Arc<[String]>,
     pub dep_factories: Arc<[Py<PyAny>]>,
     pub dep_is_async: Arc<[bool]>,
-    /// Per factory: pass a `request` context dict (see `build_request_context` in dispatch).
     pub dep_wants_request: Arc<[bool]>,
-    /// From `inspect.signature(handler)`: which parameter names the handler accepts (excluding
-    /// `*args` / only `*`-only); used to forward only matching dependency results.
     pub handler_param_names: Arc<HashSet<String>>,
-    /// Handler has `**kwargs` (pass all dependency kwargs).
-    pub handler_varkw: bool,
-    /// Sync ``call0()`` route with no body/JWT/deps/kwargs — eligible for RSGI sync fast path.
-    pub trivial_sync: bool,
-    /// Pydantic model for request body validation.
-    pub body_model: Option<Py<PyAny>>,
-    /// Parameter name to bind the validated body model to (defaults to "json").
     pub body_param_name: String,
 }
+
+/// Compact 32-byte route entry fitting comfortably inside a single 64-byte L1D cache line.
+#[derive(Clone)]
+#[repr(C)]
+pub struct RouteEntry {
+    pub handler: Py<PyAny>,
+    pub body_model: Option<Py<PyAny>>,
+    pub extra: Arc<RouteExtra>,
+    pub is_async: bool,
+    pub require_jwt: bool,
+    pub read_json_body: bool,
+    pub read_form_body: bool,
+    pub handler_varkw: bool,
+    pub trivial_sync: bool,
+}
+
+const _: () = assert!(std::mem::size_of::<RouteEntry>() <= 64);
 
 /// True when the route can be served by [`try_rsgi_sync_short_circuit`](crate::dispatch::try_rsgi_sync_short_circuit)
 /// without body read, JWT, or dependency resolution.
@@ -410,5 +409,14 @@ mod tests {
         s.compiled = Some(Arc::new(s.snapshot_routers()));
         let m = methods_matching_path(&s, "/x");
         assert_eq!(m, vec!["POST".to_string()]);
+    }
+
+    #[test]
+    fn test_route_entry_cacheline_packing() {
+        let size = std::mem::size_of::<RouteEntry>();
+        assert!(
+            size <= 64,
+            "RouteEntry size must be <= 64 bytes for L1D cacheline packing, got {size}"
+        );
     }
 }
