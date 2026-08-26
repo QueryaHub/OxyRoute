@@ -223,7 +223,7 @@ fn run_trivial_sync_route(
     let _ = protocol.setattr(
         py,
         "__oxyroute_path_template__",
-        entry.path_template.clone(),
+        entry.extra.path_template.clone(),
     );
     let handler = entry.handler.bind(py);
     let out = match handler.call0() {
@@ -681,19 +681,19 @@ pub async fn run_rsgi(
             e.handler.clone(),
             e.is_async,
             e.require_jwt,
-            e.jwt_cookie.clone(),
-            e.jwt_decoding_key.clone(),
-            e.jwt_validation.clone(),
+            e.extra.jwt_cookie.clone(),
+            e.extra.jwt_decoding_key.clone(),
+            e.extra.jwt_validation.clone(),
             e.read_json_body,
             e.read_form_body,
-            Arc::clone(&e.dep_names),
-            Arc::clone(&e.dep_factories),
-            Arc::clone(&e.dep_is_async),
-            Arc::clone(&e.dep_wants_request),
-            Arc::clone(&e.handler_param_names),
+            Arc::clone(&e.extra.dep_names),
+            Arc::clone(&e.extra.dep_factories),
+            Arc::clone(&e.extra.dep_is_async),
+            Arc::clone(&e.extra.dep_wants_request),
+            Arc::clone(&e.extra.handler_param_names),
             e.handler_varkw,
             e.body_model.clone(),
-            e.body_param_name.clone(),
+            e.extra.body_param_name.clone(),
         ))
     })?;
     let may_need_raw_body = handler_varkw || handler_param_names.contains("body");
@@ -702,7 +702,7 @@ pub async fn run_rsgi(
         protocol.setattr(
             py,
             "__oxyroute_path_template__",
-            routes_arc[route_idx].path_template.clone(),
+            routes_arc[route_idx].extra.path_template.clone(),
         )
     });
     let mut body_bytes: Vec<u8> = if should_read_body {
