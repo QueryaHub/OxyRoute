@@ -107,4 +107,3 @@ def test_auto_inferred_body_model_and_custom_param_name() -> None:
     up = seen["updated"]
     assert isinstance(up, UserBody)
     assert up.name == "David"
-

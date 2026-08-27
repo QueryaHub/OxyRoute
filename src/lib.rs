@@ -53,7 +53,14 @@ pub mod microbench {
     }
 }
 
-type ParsedDependencies = (Vec<String>, Vec<Py<PyAny>>, Vec<bool>, Vec<bool>);
+type ParsedDependencies = (
+    Vec<String>,
+    Vec<Py<PyAny>>,
+    Vec<bool>,
+    Vec<bool>,
+    Vec<HashSet<String>>,
+    Vec<bool>,
+);
 
 /// Parameter names the route handler accepts, plus whether it has `**kwargs`.
 fn handler_signature_kinds(
@@ -95,6 +102,8 @@ fn parse_dependencies(py: Python<'_>, dep_list: &Bound<PyList>) -> PyResult<Pars
     let mut facts = Vec::with_capacity(n);
     let mut asy = Vec::with_capacity(n);
     let mut want_req = Vec::with_capacity(n);
+    let mut factory_params = Vec::with_capacity(n);
+    let mut factory_varkw = Vec::with_capacity(n);
     for i in 0..n {
         let it = dep_list.get_item(i)?;
         let tup = it.downcast::<PyTuple>()?;
@@ -113,12 +122,15 @@ fn parse_dependencies(py: Python<'_>, dep_list: &Bound<PyList>) -> PyResult<Pars
         let is_a: bool = iscoro.call1((f.clone_ref(py),))?.extract()?;
         let f_b = f.bind(py);
         let has_req: bool = dependency_wants_request(py, f_b)?;
+        let (params, varkw) = handler_signature_kinds(py, f_b)?;
         names.push(name);
         facts.push(f);
         asy.push(is_a);
         want_req.push(has_req);
+        factory_params.push(params);
+        factory_varkw.push(varkw);
     }
-    Ok((names, facts, asy, want_req))
+    Ok((names, facts, asy, want_req, factory_params, factory_varkw))
 }
 
 /// True if the factory declares a `request` parameter (for the request context dict).
@@ -350,12 +362,18 @@ impl App {
         } else {
             (None, None)
         };
-        let (dep_names, dep_factories, dep_is_async, dep_wants_request) =
-            if let Some(d) = dependencies {
-                parse_dependencies(py, &d)?
-            } else {
-                (vec![], vec![], vec![], vec![])
-            };
+        let (
+            dep_names,
+            dep_factories,
+            dep_is_async,
+            dep_wants_request,
+            dep_factory_params,
+            dep_factory_varkw,
+        ) = if let Some(d) = dependencies {
+            parse_dependencies(py, &d)?
+        } else {
+            (vec![], vec![], vec![], vec![], vec![], vec![])
+        };
         let op_id: String = handler
             .bind(py)
             .getattr(pyo3::intern!(py, "__name__"))?
@@ -380,6 +398,8 @@ impl App {
             dep_factories: Arc::<[Py<PyAny>]>::from(dep_factories),
             dep_is_async: Arc::<[bool]>::from(dep_is_async),
             dep_wants_request: Arc::<[bool]>::from(dep_wants_request),
+            dep_factory_params: Arc::<[HashSet<String>]>::from(dep_factory_params),
+            dep_factory_varkw: Arc::<[bool]>::from(dep_factory_varkw),
             handler_param_names: Arc::new(handler_param_names),
             body_param_name: body_param_name.unwrap_or_else(|| "json".to_string()),
         });

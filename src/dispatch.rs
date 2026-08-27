@@ -690,6 +690,8 @@ pub async fn run_rsgi(
             Arc::clone(&e.extra.dep_factories),
             Arc::clone(&e.extra.dep_is_async),
             Arc::clone(&e.extra.dep_wants_request),
+            Arc::clone(&e.extra.dep_factory_params),
+            Arc::clone(&e.extra.dep_factory_varkw),
             Arc::clone(&e.extra.handler_param_names),
             e.handler_varkw,
             e.body_model.clone(),
@@ -736,59 +738,46 @@ pub async fn run_rsgi(
     } else {
         Vec::new()
     };
-    let (auth, cookie_raw): (Option<String>, Option<String>) = if require_jwt {
-        Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
-            let s = scope.bind(py);
-            let headers = s.getattr("headers")?;
-            Ok((
-                header_get_lax(&headers, "authorization"),
-                header_get_lax(&headers, "cookie"),
-            ))
-        })?
-    } else {
-        (None, None)
-    };
     let mut claims_val: Option<JsonValue> = None;
     if require_jwt {
-        let (dk, val) = match (jwt_decoding_key.as_ref(), jwt_validation.as_ref()) {
-            (Some(dk), Some(val)) => (dk, val),
+        let (key_arc, val_arc) = match (&jwt_decoding_key, &jwt_validation) {
+            (Some(k), Some(v)) => (Arc::clone(k), Arc::clone(v)),
             _ => {
-                return response::send_text(
+                return send_python_error(
                     &protocol,
-                    401,
-                    "Unauthorized",
-                    "text/plain; charset=utf-8",
+                    &method,
+                    &path,
+                    pyo3::exceptions::PyRuntimeError::new_err(
+                        "require_jwt is true but JWT decoding state is missing",
+                    ),
+                    Some(&scope),
+                    Some(&state),
                 )
-                .await
+                .await;
             }
         };
-        let token: String = match extract_bearer(auth.as_deref()).filter(|s| !s.is_empty()) {
-            Some(t) => t,
-            None => match (jwt_cookie.as_deref(), cookie_raw.as_deref()) {
-                (Some(cname), Some(raw)) => match extract_cookie_value(raw, cname) {
-                    Some(t) if !t.is_empty() => t,
-                    _ => {
-                        return response::send_text(
-                            &protocol,
-                            401,
-                            "Unauthorized",
-                            "text/plain; charset=utf-8",
-                        )
-                        .await;
-                    }
-                },
-                _ => {
-                    return response::send_text(
-                        &protocol,
-                        401,
-                        "Unauthorized",
-                        "text/plain; charset=utf-8",
-                    )
+        let token_opt = match extract_token_from_request(
+            &scope,
+            &jwt_cookie,
+            &param_map,
+            &query_string,
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
                     .await;
-                }
-            },
+            }
         };
-        match decode::<JsonValue>(&token, dk.as_ref(), val.as_ref()) {
+        let Some(raw_token) = token_opt else {
+            return response::send_text(
+                &protocol,
+                401,
+                "Unauthorized",
+                "text/plain; charset=utf-8",
+            )
+            .await;
+        };
+        match decode::<JsonValue>(&raw_token, &key_arc, &val_arc) {
             Ok(data) => {
                 claims_val = Some(data.claims);
             }
@@ -866,51 +855,25 @@ pub async fn run_rsgi(
                     .await;
                 }
             };
-            if ct.as_deref().map(str::is_empty) != Some(false) {
-                return response::send_text(
-                    &protocol,
-                    400,
-                    r#"{"error":"missing content-type"}"#,
-                    "application/json; charset=utf-8",
-                )
-                .await;
-            }
-            let cts = ct.unwrap();
-            let lower = cts.to_ascii_lowercase();
-            if lower.starts_with("application/x-www-form-urlencoded") {
-                (form::parse_urlencoded_form(&body_bytes), vec![])
-            } else if lower.starts_with("multipart/form-data") {
-                let boundary = match multer::parse_boundary(&cts) {
-                    Ok(b) => b,
-                    Err(_) => {
-                        return response::send_text(
-                            &protocol,
-                            400,
-                            r#"{"error":"invalid multipart boundary"}"#,
-                            "application/json; charset=utf-8",
-                        )
-                        .await
-                    }
-                };
-                let multipart_body = std::mem::take(&mut body_bytes);
-                let parsed = match form::parse_multipart(multipart_body, &boundary).await {
+            if let Some(ref content_type) = ct {
+                let parsed = match form::parse_form_or_multipart(content_type, &body_bytes) {
                     Ok(p) => p,
                     Err(e) => {
                         return response::send_text(
                             &protocol,
                             400,
-                            &format!(r#"{{"error":"multipart: {e}"}}"#),
+                            &format!(r#"{{"error":"{e}"}}"#),
                             "application/json; charset=utf-8",
                         )
-                        .await
+                        .await;
                     }
                 };
                 (parsed.form, parsed.files)
             } else {
                 return response::send_text(
                     &protocol,
-                    415,
-                    r#"{"error":"expected application/x-www-form-urlencoded or multipart/form-data"}"#,
+                    400,
+                    r#"{"error":"missing content-type"}"#,
                     "application/json; charset=utf-8",
                 )
                 .await;
@@ -937,16 +900,22 @@ pub async fn run_rsgi(
     };
     let mut dep_out: Vec<PyObject> = Vec::with_capacity(dep_factories.len());
     for (i, fact) in dep_factories.iter().enumerate() {
+        let wants_request = dep_wants_request.get(i) == Some(&true);
+        let factory_params = dep_factory_params.get(i);
+        let factory_varkw = dep_factory_varkw.get(i).copied().unwrap_or(false);
         let o = if dep_is_async.get(i) == Some(&true) {
             let r = match Python::with_gil(|py| -> PyResult<PyObject> {
                 let kw = PyDict::new(py);
-                if dep_wants_request.get(i) == Some(&true) {
+                if wants_request {
                     if let Some(ref rc) = request_ctx {
                         kw.set_item("request", rc.bind(py))?;
                     }
                 }
                 for j in 0..i {
-                    kw.set_item(dep_names[j].as_str(), dep_out[j].bind(py))?;
+                    let name = &dep_names[j];
+                    if factory_varkw || factory_params.map_or(true, |p| p.contains(name)) {
+                        kw.set_item(name.as_str(), dep_out[j].bind(py))?;
+                    }
                 }
                 let f = fact.bind(py);
                 if kw.is_empty() {
@@ -1002,13 +971,16 @@ pub async fn run_rsgi(
         } else {
             match Python::with_gil(|py| -> PyResult<PyObject> {
                 let kw = PyDict::new(py);
-                if dep_wants_request.get(i) == Some(&true) {
+                if wants_request {
                     if let Some(ref rc) = request_ctx {
                         kw.set_item("request", rc.bind(py))?;
                     }
                 }
                 for j in 0..i {
-                    kw.set_item(dep_names[j].as_str(), dep_out[j].bind(py))?;
+                    let name = &dep_names[j];
+                    if factory_varkw || factory_params.map_or(true, |p| p.contains(name)) {
+                        kw.set_item(name.as_str(), dep_out[j].bind(py))?;
+                    }
                 }
                 let f = fact.bind(py);
                 if kw.is_empty() {
