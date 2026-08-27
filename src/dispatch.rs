@@ -954,7 +954,7 @@ pub async fn run_rsgi(
                 }
                 for j in 0..i {
                     let name = &dep_names[j];
-                    if factory_varkw || factory_params.map_or(true, |p| p.contains(name)) {
+                    if factory_varkw || factory_params.is_none_or(|p| p.contains(name)) {
                         kw.set_item(name.as_str(), dep_out[j].bind(py))?;
                     }
                 }
@@ -1019,7 +1019,7 @@ pub async fn run_rsgi(
                 }
                 for j in 0..i {
                     let name = &dep_names[j];
-                    if factory_varkw || factory_params.map_or(true, |p| p.contains(name)) {
+                    if factory_varkw || factory_params.is_none_or(|p| p.contains(name)) {
                         kw.set_item(name.as_str(), dep_out[j].bind(py))?;
                     }
                 }
