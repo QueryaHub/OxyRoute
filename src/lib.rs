@@ -433,6 +433,10 @@ impl App {
             m.insert(&path, idx)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))?;
         }
+        {
+            let mut masks = st.path_method_masks.lock();
+            masks.entry(path).or_default().insert_method(&method);
+        }
         // Keep auto-compiled routing snapshots fresh when routes are added before explicit freeze().
         st.compiled = None;
         Ok(())

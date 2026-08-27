@@ -5,6 +5,55 @@ use matchit::Router;
 use parking_lot::Mutex;
 use pyo3::prelude::*;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MethodMask(pub u8);
+
+impl MethodMask {
+    pub const GET: u8 = 1 << 0;
+    pub const HEAD: u8 = 1 << 1;
+    pub const POST: u8 = 1 << 2;
+    pub const PUT: u8 = 1 << 3;
+    pub const PATCH: u8 = 1 << 4;
+    pub const DELETE: u8 = 1 << 5;
+    pub const OPTIONS: u8 = 1 << 6;
+
+    pub fn from_method(method: &str) -> Self {
+        match method {
+            "GET" => Self(Self::GET | Self::HEAD),
+            "HEAD" => Self(Self::HEAD),
+            "POST" => Self(Self::POST),
+            "PUT" => Self(Self::PUT),
+            "PATCH" => Self(Self::PATCH),
+            "DELETE" => Self(Self::DELETE),
+            "OPTIONS" => Self(Self::OPTIONS),
+            _ => Self(0),
+        }
+    }
+
+    pub fn insert_method(&mut self, method: &str) {
+        self.0 |= Self::from_method(method).0;
+    }
+
+    pub fn to_vec(self) -> Vec<String> {
+        const ORDER: [(&str, u8); 7] = [
+            ("GET", MethodMask::GET),
+            ("HEAD", MethodMask::HEAD),
+            ("POST", MethodMask::POST),
+            ("PUT", MethodMask::PUT),
+            ("PATCH", MethodMask::PATCH),
+            ("DELETE", MethodMask::DELETE),
+            ("OPTIONS", MethodMask::OPTIONS),
+        ];
+        let mut out = Vec::with_capacity(7);
+        for (name, flag) in ORDER {
+            if (self.0 & flag) != 0 {
+                out.push(name.to_string());
+            }
+        }
+        out
+    }
+}
+
 /// Immutable route tables built at [`AppState::freeze`](AppState) time so the request
 /// path can be matched without per-method `Mutex` locks (issue #4).
 pub struct CompiledRouters {
@@ -15,6 +64,7 @@ pub struct CompiledRouters {
     pub delete: Router<usize>,
     pub options: Router<usize>,
     pub websocket: Router<usize>,
+    pub all_paths: Router<MethodMask>,
 }
 
 fn router_for_compiled<'a>(c: &'a CompiledRouters, method: &str) -> Option<&'a Router<usize>> {
@@ -117,6 +167,8 @@ pub struct AppState {
     pub security_headers: Option<Py<PyAny>>,
     /// Global connection pool for the Postgres database.
     pub db_pool: Option<sqlx::PgPool>,
+    /// Bitmask of allowed HTTP methods per registered path template.
+    pub path_method_masks: Mutex<std::collections::HashMap<String, MethodMask>>,
 }
 
 impl AppState {
@@ -146,6 +198,7 @@ impl AppState {
             cors: None,
             security_headers: None,
             db_pool: None,
+            path_method_masks: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -172,6 +225,10 @@ impl AppState {
 
     /// Clone current mutex-protected [`Router`]s into a snapshot (used at freeze / tests).
     pub fn snapshot_routers(&self) -> CompiledRouters {
+        let mut all_paths = Router::new();
+        for (path, mask) in self.path_method_masks.lock().iter() {
+            let _ = all_paths.insert(path, *mask);
+        }
         CompiledRouters {
             get: self.get.lock().clone(),
             post: self.post.lock().clone(),
@@ -180,6 +237,7 @@ impl AppState {
             delete: self.delete.lock().clone(),
             options: self.options.lock().clone(),
             websocket: self.websocket.lock().clone(),
+            all_paths,
         }
     }
 }
@@ -235,33 +293,11 @@ pub fn match_route_compiled(
 
 /// All HTTP methods that match `path` in a precomputed [`CompiledRouters`] (lock-free 405 list).
 pub fn methods_matching_path_compiled(compiled: &CompiledRouters, path: &str) -> Vec<String> {
-    const ORDER: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
-    let mut have = [false; 7];
-    if compiled.get.at(path).is_ok() {
-        have[0] = true;
-        have[1] = true;
+    if let Ok(m) = compiled.all_paths.at(path) {
+        m.value.to_vec()
+    } else {
+        Vec::new()
     }
-    if compiled.post.at(path).is_ok() {
-        have[2] = true;
-    }
-    if compiled.put.at(path).is_ok() {
-        have[3] = true;
-    }
-    if compiled.patch.at(path).is_ok() {
-        have[4] = true;
-    }
-    if compiled.delete.at(path).is_ok() {
-        have[5] = true;
-    }
-    if compiled.options.at(path).is_ok() {
-        have[6] = true;
-    }
-    ORDER
-        .iter()
-        .zip(have)
-        .filter(|(_, ok)| *ok)
-        .map(|(m, _)| (*m).to_string())
-        .collect()
 }
 
 pub fn map_method_router<'a>(
@@ -286,73 +322,12 @@ pub fn map_method_router<'a>(
 /// [1]: https://www.rfc-editor.org/rfc/rfc9110#name-405-method-not-allowed
 #[cfg(test)]
 fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
-    const ORDER: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
-    let mut have = [false; 7];
     if let Some(c) = &state.compiled {
-        if c.get.at(path).is_ok() {
-            have[0] = true;
-            have[1] = true;
-        }
-        if c.post.at(path).is_ok() {
-            have[2] = true;
-        }
-        if c.put.at(path).is_ok() {
-            have[3] = true;
-        }
-        if c.patch.at(path).is_ok() {
-            have[4] = true;
-        }
-        if c.delete.at(path).is_ok() {
-            have[5] = true;
-        }
-        if c.options.at(path).is_ok() {
-            have[6] = true;
-        }
+        methods_matching_path_compiled(c, path)
     } else {
-        {
-            let g = state.get.lock();
-            if g.at(path).is_ok() {
-                have[0] = true;
-                have[1] = true;
-            }
-        }
-        {
-            let r = state.post.lock();
-            if r.at(path).is_ok() {
-                have[2] = true;
-            }
-        }
-        {
-            let r = state.put.lock();
-            if r.at(path).is_ok() {
-                have[3] = true;
-            }
-        }
-        {
-            let r = state.patch.lock();
-            if r.at(path).is_ok() {
-                have[4] = true;
-            }
-        }
-        {
-            let r = state.delete.lock();
-            if r.at(path).is_ok() {
-                have[5] = true;
-            }
-        }
-        {
-            let r = state.options.lock();
-            if r.at(path).is_ok() {
-                have[6] = true;
-            }
-        }
+        let compiled = state.snapshot_routers();
+        methods_matching_path_compiled(&compiled, path)
     }
-    ORDER
-        .iter()
-        .zip(have)
-        .filter(|(_, ok)| *ok)
-        .map(|(m, _)| (*m).to_string())
-        .collect()
 }
 
 /// Returns route index and path params, or `None` if the method is unsupported; `Some(None)` if
