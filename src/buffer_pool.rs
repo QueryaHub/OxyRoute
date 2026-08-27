@@ -52,7 +52,9 @@ impl DerefMut for PooledBuffer {
 
 impl Drop for PooledBuffer {
     fn drop(&mut self) {
-        if self.0.capacity() >= INITIAL_BUFFER_CAPACITY && self.0.capacity() <= POOL_CAPACITY_LIMIT {
+        if self.0.capacity() >= INITIAL_BUFFER_CAPACITY
+            && self.0.capacity() <= POOL_CAPACITY_LIMIT
+        {
             self.0.clear();
             let buf = std::mem::take(&mut self.0);
             BODY_POOL.with(|pool| {
