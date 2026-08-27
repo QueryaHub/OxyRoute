@@ -36,6 +36,17 @@ pub struct WebsocketRoute {
     pub is_async: bool,
 }
 
+/// A single route dependency definition.
+#[derive(Clone)]
+pub struct DependencyEntry {
+    pub name: String,
+    pub factory: Py<PyAny>,
+    pub is_async: bool,
+    pub wants_request: bool,
+    pub factory_params: HashSet<String>,
+    pub factory_varkw: bool,
+}
+
 /// Auxiliary / cold metadata for a route.
 #[derive(Clone)]
 pub struct RouteExtra {
@@ -43,12 +54,7 @@ pub struct RouteExtra {
     pub jwt_cookie: Option<String>,
     pub jwt_decoding_key: Option<Arc<jsonwebtoken::DecodingKey>>,
     pub jwt_validation: Option<Arc<jsonwebtoken::Validation>>,
-    pub dep_names: Arc<[String]>,
-    pub dep_factories: Arc<[Py<PyAny>]>,
-    pub dep_is_async: Arc<[bool]>,
-    pub dep_wants_request: Arc<[bool]>,
-    pub dep_factory_params: Arc<[HashSet<String>]>,
-    pub dep_factory_varkw: Arc<[bool]>,
+    pub dependencies: Arc<[DependencyEntry]>,
     pub handler_param_names: Arc<HashSet<String>>,
     pub body_param_name: String,
 }

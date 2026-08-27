@@ -53,15 +53,6 @@ pub mod microbench {
     }
 }
 
-type ParsedDependencies = (
-    Vec<String>,
-    Vec<Py<PyAny>>,
-    Vec<bool>,
-    Vec<bool>,
-    Vec<HashSet<String>>,
-    Vec<bool>,
-);
-
 /// Parameter names the route handler accepts, plus whether it has `**kwargs`.
 fn handler_signature_kinds(
     py: Python<'_>,
@@ -94,16 +85,15 @@ fn parse_algorithm(s: &str) -> PyResult<jsonwebtoken::Algorithm> {
     })
 }
 
-fn parse_dependencies(py: Python<'_>, dep_list: &Bound<PyList>) -> PyResult<ParsedDependencies> {
+fn parse_dependencies(
+    py: Python<'_>,
+    dep_list: &Bound<PyList>,
+) -> PyResult<Vec<state::DependencyEntry>> {
     let inspect = py.import("inspect")?;
     let iscoro = inspect.getattr("iscoroutinefunction")?;
     let n = dep_list.len();
-    let mut names = Vec::with_capacity(n);
-    let mut facts = Vec::with_capacity(n);
-    let mut asy = Vec::with_capacity(n);
-    let mut want_req = Vec::with_capacity(n);
-    let mut factory_params = Vec::with_capacity(n);
-    let mut factory_varkw = Vec::with_capacity(n);
+    let mut names = HashSet::with_capacity(n);
+    let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let it = dep_list.get_item(i)?;
         let tup = it.downcast::<PyTuple>()?;
@@ -113,24 +103,26 @@ fn parse_dependencies(py: Python<'_>, dep_list: &Bound<PyList>) -> PyResult<Pars
             ));
         }
         let name: String = tup.get_item(0)?.extract()?;
-        if names.contains(&name) {
+        if !names.insert(name.clone()) {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "duplicate dependency name",
             ));
         }
         let f: Py<PyAny> = tup.get_item(1)?.unbind();
-        let is_a: bool = iscoro.call1((f.clone_ref(py),))?.extract()?;
+        let is_async: bool = iscoro.call1((f.clone_ref(py),))?.extract()?;
         let f_b = f.bind(py);
-        let has_req: bool = dependency_wants_request(py, f_b)?;
-        let (params, varkw) = handler_signature_kinds(py, f_b)?;
-        names.push(name);
-        facts.push(f);
-        asy.push(is_a);
-        want_req.push(has_req);
-        factory_params.push(params);
-        factory_varkw.push(varkw);
+        let wants_request: bool = dependency_wants_request(py, f_b)?;
+        let (factory_params, factory_varkw) = handler_signature_kinds(py, f_b)?;
+        out.push(state::DependencyEntry {
+            name,
+            factory: f,
+            is_async,
+            wants_request,
+            factory_params,
+            factory_varkw,
+        });
     }
-    Ok((names, facts, asy, want_req, factory_params, factory_varkw))
+    Ok(out)
 }
 
 /// True if the factory declares a `request` parameter (for the request context dict).
@@ -362,17 +354,10 @@ impl App {
         } else {
             (None, None)
         };
-        let (
-            dep_names,
-            dep_factories,
-            dep_is_async,
-            dep_wants_request,
-            dep_factory_params,
-            dep_factory_varkw,
-        ) = if let Some(d) = dependencies {
+        let dependencies = if let Some(d) = dependencies {
             parse_dependencies(py, &d)?
         } else {
-            (vec![], vec![], vec![], vec![], vec![], vec![])
+            vec![]
         };
         let op_id: String = handler
             .bind(py)
@@ -383,7 +368,7 @@ impl App {
             && !require_jwt
             && !read_json_body
             && !read_form_body
-            && dep_factories.is_empty()
+            && dependencies.is_empty()
             && !handler_varkw
             && handler_param_names.is_empty();
         let mut st = self.state.write();
@@ -394,12 +379,7 @@ impl App {
             jwt_cookie,
             jwt_decoding_key,
             jwt_validation,
-            dep_names: Arc::<[String]>::from(dep_names),
-            dep_factories: Arc::<[Py<PyAny>]>::from(dep_factories),
-            dep_is_async: Arc::<[bool]>::from(dep_is_async),
-            dep_wants_request: Arc::<[bool]>::from(dep_wants_request),
-            dep_factory_params: Arc::<[HashSet<String>]>::from(dep_factory_params),
-            dep_factory_varkw: Arc::<[bool]>::from(dep_factory_varkw),
+            dependencies: Arc::<[state::DependencyEntry]>::from(dependencies),
             handler_param_names: Arc::new(handler_param_names),
             body_param_name: body_param_name.unwrap_or_else(|| "json".to_string()),
         });
