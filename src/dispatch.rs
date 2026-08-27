@@ -669,6 +669,8 @@ pub async fn run_rsgi(
         dep_factories,
         dep_is_async,
         dep_wants_request,
+        dep_factory_params,
+        dep_factory_varkw,
         handler_param_names,
         handler_varkw,
         body_model,
@@ -738,46 +740,59 @@ pub async fn run_rsgi(
     } else {
         Vec::new()
     };
+    let (auth, cookie_raw): (Option<String>, Option<String>) = if require_jwt {
+        Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
+            let s = scope.bind(py);
+            let headers = s.getattr("headers")?;
+            Ok((
+                header_get_lax(&headers, "authorization"),
+                header_get_lax(&headers, "cookie"),
+            ))
+        })?
+    } else {
+        (None, None)
+    };
     let mut claims_val: Option<JsonValue> = None;
     if require_jwt {
-        let (key_arc, val_arc) = match (&jwt_decoding_key, &jwt_validation) {
-            (Some(k), Some(v)) => (Arc::clone(k), Arc::clone(v)),
+        let (dk, val) = match (jwt_decoding_key.as_ref(), jwt_validation.as_ref()) {
+            (Some(dk), Some(val)) => (dk, val),
             _ => {
-                return send_python_error(
+                return response::send_text(
                     &protocol,
-                    &method,
-                    &path,
-                    pyo3::exceptions::PyRuntimeError::new_err(
-                        "require_jwt is true but JWT decoding state is missing",
-                    ),
-                    Some(&scope),
-                    Some(&state),
+                    401,
+                    "Unauthorized",
+                    "text/plain; charset=utf-8",
                 )
-                .await;
+                .await
             }
         };
-        let token_opt = match extract_token_from_request(
-            &scope,
-            &jwt_cookie,
-            &param_map,
-            &query_string,
-        ) {
-            Ok(t) => t,
-            Err(e) => {
-                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+        let token: String = match extract_bearer(auth.as_deref()).filter(|s| !s.is_empty()) {
+            Some(t) => t,
+            None => match (jwt_cookie.as_deref(), cookie_raw.as_deref()) {
+                (Some(cname), Some(raw)) => match extract_cookie_value(raw, cname) {
+                    Some(t) if !t.is_empty() => t,
+                    _ => {
+                        return response::send_text(
+                            &protocol,
+                            401,
+                            "Unauthorized",
+                            "text/plain; charset=utf-8",
+                        )
+                        .await;
+                    }
+                },
+                _ => {
+                    return response::send_text(
+                        &protocol,
+                        401,
+                        "Unauthorized",
+                        "text/plain; charset=utf-8",
+                    )
                     .await;
-            }
+                }
+            },
         };
-        let Some(raw_token) = token_opt else {
-            return response::send_text(
-                &protocol,
-                401,
-                "Unauthorized",
-                "text/plain; charset=utf-8",
-            )
-            .await;
-        };
-        match decode::<JsonValue>(&raw_token, &key_arc, &val_arc) {
+        match decode::<JsonValue>(&token, dk.as_ref(), val.as_ref()) {
             Ok(data) => {
                 claims_val = Some(data.claims);
             }
@@ -855,25 +870,51 @@ pub async fn run_rsgi(
                     .await;
                 }
             };
-            if let Some(ref content_type) = ct {
-                let parsed = match form::parse_form_or_multipart(content_type, &body_bytes) {
+            if ct.as_deref().map(str::is_empty) != Some(false) {
+                return response::send_text(
+                    &protocol,
+                    400,
+                    r#"{"error":"missing content-type"}"#,
+                    "application/json; charset=utf-8",
+                )
+                .await;
+            }
+            let cts = ct.unwrap();
+            let lower = cts.to_ascii_lowercase();
+            if lower.starts_with("application/x-www-form-urlencoded") {
+                (form::parse_urlencoded_form(&body_bytes), vec![])
+            } else if lower.starts_with("multipart/form-data") {
+                let boundary = match multer::parse_boundary(&cts) {
+                    Ok(b) => b,
+                    Err(_) => {
+                        return response::send_text(
+                            &protocol,
+                            400,
+                            r#"{"error":"invalid multipart boundary"}"#,
+                            "application/json; charset=utf-8",
+                        )
+                        .await
+                    }
+                };
+                let multipart_body = std::mem::take(&mut body_bytes);
+                let parsed = match form::parse_multipart(multipart_body, &boundary).await {
                     Ok(p) => p,
                     Err(e) => {
                         return response::send_text(
                             &protocol,
                             400,
-                            &format!(r#"{{"error":"{e}"}}"#),
+                            &format!(r#"{{"error":"multipart: {e}"}}"#),
                             "application/json; charset=utf-8",
                         )
-                        .await;
+                        .await
                     }
                 };
                 (parsed.form, parsed.files)
             } else {
                 return response::send_text(
                     &protocol,
-                    400,
-                    r#"{"error":"missing content-type"}"#,
+                    415,
+                    r#"{"error":"expected application/x-www-form-urlencoded or multipart/form-data"}"#,
                     "application/json; charset=utf-8",
                 )
                 .await;
