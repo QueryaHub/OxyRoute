@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use serde_json::json;
 
+mod buffer_pool;
 mod config;
 mod db;
 mod dispatch;
