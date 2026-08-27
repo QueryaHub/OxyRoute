@@ -34,7 +34,7 @@ def test_vectorcall_sync_and_async_handlers() -> None:
         return {"dep_a": dep_a, "dep_b": dep_b}
 
     @app.post("/pydantic", body_model=Item)
-    def handle_pydantic(json: Item) -> dict[str, object]:
+    def handle_pydantic(json: Item) -> dict[str, Any]:
         return {"name": json.name, "price": json.price}
 
     async def _run() -> None:

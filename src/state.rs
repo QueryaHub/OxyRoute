@@ -47,6 +47,8 @@ pub struct RouteExtra {
     pub dep_factories: Arc<[Py<PyAny>]>,
     pub dep_is_async: Arc<[bool]>,
     pub dep_wants_request: Arc<[bool]>,
+    pub dep_factory_params: Arc<[HashSet<String>]>,
+    pub dep_factory_varkw: Arc<[bool]>,
     pub handler_param_names: Arc<HashSet<String>>,
     pub body_param_name: String,
 }
