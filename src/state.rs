@@ -169,6 +169,7 @@ pub struct AppState {
     pub db_pool: Option<sqlx::PgPool>,
     /// Bitmask of allowed HTTP methods per registered path template.
     pub path_method_masks: Mutex<std::collections::HashMap<String, MethodMask>>,
+    pub snapshot: Arc<FrozenState>,
 }
 
 impl AppState {
@@ -178,9 +179,26 @@ impl AppState {
             "info": { "title": "OxyRoute", "version": "0.5.0" },
             "paths": {}
         });
+        let routes = Arc::new(Vec::new());
+        let websocket_routes = Arc::new(Vec::new());
+        let request_middleware = Arc::new(Vec::new());
+        let response_middleware = Arc::new(Vec::new());
+        let exception_handlers = Arc::new(Vec::new());
+        let snapshot = Arc::new(FrozenState {
+            routes: Arc::clone(&routes),
+            websocket_routes: Arc::clone(&websocket_routes),
+            compiled: None,
+            cors: None,
+            security_headers: None,
+            request_middleware: Arc::clone(&request_middleware),
+            response_middleware: Arc::clone(&response_middleware),
+            exception_handlers: Arc::clone(&exception_handlers),
+            include_openapi: true,
+            db_pool: None,
+        });
         Self {
-            routes: Arc::new(Vec::new()),
-            websocket_routes: Arc::new(Vec::new()),
+            routes,
+            websocket_routes,
             get: Mutex::new(Router::new()),
             post: Mutex::new(Router::new()),
             put: Mutex::new(Router::new()),
@@ -192,24 +210,19 @@ impl AppState {
             compiled: None,
             frozen: false,
             include_openapi: true,
-            request_middleware: Arc::new(Vec::new()),
-            response_middleware: Arc::new(Vec::new()),
-            exception_handlers: Arc::new(Vec::new()),
+            request_middleware,
+            response_middleware,
+            exception_handlers,
             cors: None,
             security_headers: None,
             db_pool: None,
             path_method_masks: Mutex::new(std::collections::HashMap::new()),
+            snapshot,
         }
     }
 
-    /// Cheap read-side snapshot of the fields the request hot path touches: the
-    /// returned [`HotSnapshot`] is built **inside one** `state.read()` so the request
-    /// dispatch can release the `RwLock` immediately and avoid further reads.
-    ///
-    /// Cheap because every cloned field is `Arc::clone` / `Option<Py<PyAny>>::clone`
-    /// (both refcount bumps), not deep clones.
-    pub fn hot_snapshot(&self) -> HotSnapshot {
-        HotSnapshot {
+    pub fn rebuild_snapshot(&mut self) {
+        self.snapshot = Arc::new(FrozenState {
             routes: Arc::clone(&self.routes),
             websocket_routes: Arc::clone(&self.websocket_routes),
             compiled: self.compiled.as_ref().map(Arc::clone),
@@ -220,7 +233,13 @@ impl AppState {
             exception_handlers: Arc::clone(&self.exception_handlers),
             include_openapi: self.include_openapi,
             db_pool: self.db_pool.clone(),
-        }
+        });
+    }
+
+    /// Read-side snapshot of the fields the request hot path touches: only 1 atomic
+    /// pointer clone (`Arc::clone(&self.snapshot)`).
+    pub fn hot_snapshot(&self) -> Arc<FrozenState> {
+        Arc::clone(&self.snapshot)
     }
 
     /// Clone current mutex-protected [`Router`]s into a snapshot (used at freeze / tests).
@@ -242,10 +261,9 @@ impl AppState {
     }
 }
 
-/// One-shot read-side view of [`AppState`] for [`run_rsgi`]. All fields are cheap to clone
-/// (`Arc`/`Option<Py<PyAny>>` refcount bumps) so the hot path can drop the `RwLock` after a
-/// single `read()`. See [`AppState::hot_snapshot`].
-pub struct HotSnapshot {
+/// Consolidated immutable read-side view of [`AppState`] for request dispatching.
+/// Only 1 atomic refcount increment is needed per request.
+pub struct FrozenState {
     pub routes: Arc<Vec<RouteEntry>>,
     pub websocket_routes: Arc<Vec<WebsocketRoute>>,
     pub compiled: Option<Arc<CompiledRouters>>,
@@ -257,6 +275,8 @@ pub struct HotSnapshot {
     pub include_openapi: bool,
     pub db_pool: Option<sqlx::PgPool>,
 }
+
+pub type HotSnapshot = Arc<FrozenState>;
 
 /// Lookup a WebSocket route in a precomputed [`CompiledRouters`] (lock-free).
 pub fn match_ws_route_compiled<'a, 'b>(

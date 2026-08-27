@@ -316,6 +316,7 @@ fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) -> Arc<CompiledRouter
     let mut st = state.write();
     if st.compiled.is_none() {
         st.compiled = Some(Arc::new(st.snapshot_routers()));
+        st.rebuild_snapshot();
     }
     Arc::clone(st.compiled.as_ref().expect("just populated"))
 }
@@ -472,20 +473,6 @@ pub async fn run_rsgi(
     let Some((method, path, query_string, is_head, snapshot)) = prelim else {
         return Ok(Python::with_gil(|py| py.None()));
     };
-    type CfgClones = (
-        Option<Py<PyAny>>,
-        Option<Py<PyAny>>,
-        Arc<Vec<Py<PyAny>>>,
-        Arc<Vec<Py<PyAny>>>,
-    );
-    let (cors_cfg, security_cfg, req_mw, res_mw): CfgClones = Python::with_gil(|_py| {
-        (
-            snapshot.cors.clone(),
-            snapshot.security_headers.clone(),
-            snapshot.request_middleware.clone(),
-            snapshot.response_middleware.clone(),
-        )
-    });
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
     {
         let _ = Python::with_gil(|py| {
@@ -539,7 +526,7 @@ pub async fn run_rsgi(
             }
         }
     }
-    for mw in req_mw.iter() {
+    for mw in snapshot.request_middleware.iter() {
         let out: Py<PyAny> = match Python::with_gil(|py| {
             let f = mw.bind(py);
             f.call1((scope.bind(py), protocol.bind(py)))
@@ -556,10 +543,12 @@ pub async fn run_rsgi(
             return match Python::with_gil(|py| -> PyResult<()> {
                 let mut mapped = map_handler_return(py, &out)?;
 
-                if !res_mw.is_empty() && !matches!(mapped, HandlerMap::AlreadySent) {
+                if !snapshot.response_middleware.is_empty()
+                    && !matches!(mapped, HandlerMap::AlreadySent)
+                {
                     let response_module = py.import("oxyroute.response")?;
                     let response_class = response_module.getattr("Response")?;
-                    for res_m in res_mw.iter() {
+                    for res_m in snapshot.response_middleware.iter() {
                         let kwargs = pyo3::types::PyDict::new(py);
                         match &mapped {
                             HandlerMap::Simple {
@@ -605,16 +594,16 @@ pub async fn run_rsgi(
                     }
                 }
 
-                let mapped = if security_cfg.is_some() || cors_cfg.is_some() {
+                let mapped = if snapshot.security_headers.is_some() || snapshot.cors.is_some() {
                     let scope_bound = scope.bind(py).clone();
                     let mapped = merge_config_response_headers(
                         py,
-                        &security_cfg,
+                        &snapshot.security_headers,
                         scope_bound.clone(),
                         mapped,
                         true,
                     )?;
-                    merge_config_response_headers(py, &cors_cfg, scope_bound, mapped, false)?
+                    merge_config_response_headers(py, &snapshot.cors, scope_bound, mapped, false)?
                 } else {
                     mapped
                 };
@@ -1240,10 +1229,10 @@ pub async fn run_rsgi(
     match Python::with_gil(|py| -> PyResult<()> {
         let mut mapped = map_handler_return(py, &handler_out)?;
 
-        if !res_mw.is_empty() && !matches!(mapped, HandlerMap::AlreadySent) {
+        if !snapshot.response_middleware.is_empty() && !matches!(mapped, HandlerMap::AlreadySent) {
             let response_module = py.import("oxyroute.response")?;
             let response_class = response_module.getattr("Response")?;
-            for res_m in res_mw.iter() {
+            for res_m in snapshot.response_middleware.iter() {
                 let kwargs = pyo3::types::PyDict::new(py);
                 match &mapped {
                     HandlerMap::Simple {
@@ -1287,16 +1276,16 @@ pub async fn run_rsgi(
             }
         }
 
-        let mapped = if security_cfg.is_some() || cors_cfg.is_some() {
+        let mapped = if snapshot.security_headers.is_some() || snapshot.cors.is_some() {
             let scope_bound = scope.bind(py).clone();
             let mapped = merge_config_response_headers(
                 py,
-                &security_cfg,
+                &snapshot.security_headers,
                 scope_bound.clone(),
                 mapped,
                 true,
             )?;
-            merge_config_response_headers(py, &cors_cfg, scope_bound, mapped, false)?
+            merge_config_response_headers(py, &snapshot.cors, scope_bound, mapped, false)?
         } else {
             mapped
         };
@@ -1769,7 +1758,6 @@ async fn run_rsgi_websocket(
         Some(c) => c,
         None => ensure_compiled_snapshot(&state),
     };
-    let ws_routes = Arc::clone(&snapshot.websocket_routes);
     let route_match = match_ws_route_compiled(&compiled, &path);
     let Some((route_idx, params)) = route_match else {
         // No route → polite close. ``close`` is sync on RSGIWebsocketProtocol.
@@ -1781,7 +1769,8 @@ async fn run_rsgi_websocket(
         return Ok(Python::with_gil(|py| py.None()));
     };
     let (handler, is_async) = Python::with_gil(|_py| -> PyResult<(Py<PyAny>, bool)> {
-        let e = ws_routes
+        let e = snapshot
+            .websocket_routes
             .get(route_idx)
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("ws route index"))?;
         Ok((e.handler.clone(), e.is_async))
