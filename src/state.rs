@@ -259,36 +259,23 @@ pub struct HotSnapshot {
 }
 
 /// Lookup a WebSocket route in a precomputed [`CompiledRouters`] (lock-free).
-pub fn match_ws_route_compiled(
-    compiled: &CompiledRouters,
-    path: &str,
-) -> Option<(usize, Vec<(String, String)>)> {
-    compiled.websocket.at(path).ok().map(|m| {
-        let mut pmap = Vec::new();
-        for (k, v) in m.params.iter() {
-            pmap.push((k.to_string(), v.to_string()));
-        }
-        (*m.value, pmap)
-    })
+pub fn match_ws_route_compiled<'a, 'b>(
+    compiled: &'a CompiledRouters,
+    path: &'b str,
+) -> Option<(usize, matchit::Params<'a, 'b>)> {
+    compiled.websocket.at(path).ok().map(|m| (*m.value, m.params))
 }
 
 /// Lookup an HTTP route in a precomputed [`CompiledRouters`] (lock-free).
 ///
 /// Returns ``None`` for unsupported method, ``Some(None)`` for no match, ``Some(Some(...))`` on hit.
-#[allow(clippy::type_complexity)]
-pub fn match_route_compiled(
-    compiled: &CompiledRouters,
+pub fn match_route_compiled<'a, 'b>(
+    compiled: &'a CompiledRouters,
     method: &str,
-    path: &str,
-) -> Option<Option<(usize, Vec<(String, String)>)>> {
+    path: &'b str,
+) -> Option<Option<(usize, matchit::Params<'a, 'b>)>> {
     let g = router_for_compiled(compiled, method)?;
-    Some(g.at(path).ok().map(|m| {
-        let mut pmap = Vec::new();
-        for (k, v) in m.params.iter() {
-            pmap.push((k.to_string(), v.to_string()));
-        }
-        (*m.value, pmap)
-    }))
+    Some(g.at(path).ok().map(|m| (*m.value, m.params)))
 }
 
 /// All HTTP methods that match `path` in a precomputed [`CompiledRouters`] (lock-free 405 list).
@@ -368,7 +355,14 @@ fn match_route(
     path: &str,
 ) -> Option<Option<(usize, Vec<(String, String)>)>> {
     if let Some(c) = &state.compiled {
-        return match_route_compiled(c, method, path);
+        let res = match_route_compiled(c, method, path)?;
+        return Some(res.map(|(idx, params)| {
+            let mut pmap = Vec::new();
+            for (k, v) in params.iter() {
+                pmap.push((k.to_string(), v.to_string()));
+            }
+            (idx, pmap)
+        }));
     }
     let g = map_method_router(state, method)?;
     Some(g.at(path).ok().map(|m| {
