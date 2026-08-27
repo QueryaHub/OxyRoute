@@ -222,17 +222,19 @@ impl AppState {
     }
 
     pub fn rebuild_snapshot(&mut self) {
-        self.snapshot = Arc::new(FrozenState {
-            routes: Arc::clone(&self.routes),
-            websocket_routes: Arc::clone(&self.websocket_routes),
-            compiled: self.compiled.as_ref().map(Arc::clone),
-            cors: self.cors.clone(),
-            security_headers: self.security_headers.clone(),
-            request_middleware: Arc::clone(&self.request_middleware),
-            response_middleware: Arc::clone(&self.response_middleware),
-            exception_handlers: Arc::clone(&self.exception_handlers),
-            include_openapi: self.include_openapi,
-            db_pool: self.db_pool.clone(),
+        pyo3::Python::with_gil(|_py| {
+            self.snapshot = Arc::new(FrozenState {
+                routes: Arc::clone(&self.routes),
+                websocket_routes: Arc::clone(&self.websocket_routes),
+                compiled: self.compiled.as_ref().map(Arc::clone),
+                cors: self.cors.clone(),
+                security_headers: self.security_headers.clone(),
+                request_middleware: Arc::clone(&self.request_middleware),
+                response_middleware: Arc::clone(&self.response_middleware),
+                exception_handlers: Arc::clone(&self.exception_handlers),
+                include_openapi: self.include_openapi,
+                db_pool: self.db_pool.clone(),
+            });
         });
     }
 
