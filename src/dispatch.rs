@@ -665,12 +665,7 @@ pub async fn run_rsgi(
         jwt_validation,
         read_json_body,
         read_form_body,
-        dep_names,
-        dep_factories,
-        dep_is_async,
-        dep_wants_request,
-        dep_factory_params,
-        dep_factory_varkw,
+        dependencies,
         handler_param_names,
         handler_varkw,
         body_model,
@@ -688,12 +683,7 @@ pub async fn run_rsgi(
             e.extra.jwt_validation.clone(),
             e.read_json_body,
             e.read_form_body,
-            Arc::clone(&e.extra.dep_names),
-            Arc::clone(&e.extra.dep_factories),
-            Arc::clone(&e.extra.dep_is_async),
-            Arc::clone(&e.extra.dep_wants_request),
-            Arc::clone(&e.extra.dep_factory_params),
-            Arc::clone(&e.extra.dep_factory_varkw),
+            Arc::clone(&e.extra.dependencies),
             Arc::clone(&e.extra.handler_param_names),
             e.handler_varkw,
             e.body_model.clone(),
@@ -923,7 +913,7 @@ pub async fn run_rsgi(
     } else {
         (HashMap::new(), vec![])
     };
-    let need_req_ctx = dep_wants_request.iter().any(|&x| x);
+    let need_req_ctx = dependencies.iter().any(|d| d.wants_request);
     let request_ctx: Option<Py<PyAny>> = if need_req_ctx {
         match Python::with_gil(|py| -> PyResult<Py<PyAny>> {
             let s = scope.bind(py);
@@ -939,26 +929,23 @@ pub async fn run_rsgi(
     } else {
         None
     };
-    let mut dep_out: Vec<PyObject> = Vec::with_capacity(dep_factories.len());
-    for (i, fact) in dep_factories.iter().enumerate() {
-        let wants_request = dep_wants_request.get(i) == Some(&true);
-        let factory_params = dep_factory_params.get(i);
-        let factory_varkw = dep_factory_varkw.get(i).copied().unwrap_or(false);
-        let o = if dep_is_async.get(i) == Some(&true) {
+    let mut dep_out: Vec<PyObject> = Vec::with_capacity(dependencies.len());
+    for (i, dep) in dependencies.iter().enumerate() {
+        let o = if dep.is_async {
             let r = match Python::with_gil(|py| -> PyResult<PyObject> {
                 let kw = PyDict::new(py);
-                if wants_request {
+                if dep.wants_request {
                     if let Some(ref rc) = request_ctx {
                         kw.set_item("request", rc.bind(py))?;
                     }
                 }
-                for j in 0..i {
-                    let name = &dep_names[j];
-                    if factory_varkw || factory_params.is_none_or(|p| p.contains(name)) {
+                for (j, prev_dep) in dependencies[..i].iter().enumerate() {
+                    let name = &prev_dep.name;
+                    if dep.factory_varkw || dep.factory_params.contains(name) {
                         kw.set_item(name.as_str(), dep_out[j].bind(py))?;
                     }
                 }
-                let f = fact.bind(py);
+                let f = dep.factory.bind(py);
                 if kw.is_empty() {
                     Ok(f.call0()?.unbind())
                 } else {
@@ -1012,18 +999,18 @@ pub async fn run_rsgi(
         } else {
             match Python::with_gil(|py| -> PyResult<PyObject> {
                 let kw = PyDict::new(py);
-                if wants_request {
+                if dep.wants_request {
                     if let Some(ref rc) = request_ctx {
                         kw.set_item("request", rc.bind(py))?;
                     }
                 }
-                for j in 0..i {
-                    let name = &dep_names[j];
-                    if factory_varkw || factory_params.is_none_or(|p| p.contains(name)) {
+                for (j, prev_dep) in dependencies[..i].iter().enumerate() {
+                    let name = &prev_dep.name;
+                    if dep.factory_varkw || dep.factory_params.contains(name) {
                         kw.set_item(name.as_str(), dep_out[j].bind(py))?;
                     }
                 }
-                let f = fact.bind(py);
+                let f = dep.factory.bind(py);
                 if kw.is_empty() {
                     Ok(f.call0()?.unbind())
                 } else {
@@ -1098,8 +1085,8 @@ pub async fn run_rsgi(
         read_form_body && (handler_varkw || handler_param_names.contains("files"));
     let should_pass_protocol = handler_varkw || handler_param_names.contains("protocol");
     let should_pass_body = !read_form_body && !body_bytes.is_empty() && body_json.is_none();
-    let has_dep_kwargs = dep_names.iter().enumerate().any(|(i, name)| {
-        dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(name))
+    let has_dep_kwargs = dependencies.iter().enumerate().any(|(i, dep)| {
+        dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(&dep.name))
     });
     let should_use_kwargs = !param_map.is_empty()
         || !query_map.is_empty()
@@ -1132,10 +1119,10 @@ pub async fn run_rsgi(
             }
             kwargs.set_item("query", qd)?;
         }
-        for (i, name) in dep_names.iter().enumerate() {
+        for (i, dep) in dependencies.iter().enumerate() {
             if let Some(oo) = dep_out.get(i) {
-                if handler_varkw || handler_param_names.contains(name) {
-                    kwargs.set_item(name, oo.bind(py))?;
+                if handler_varkw || handler_param_names.contains(&dep.name) {
+                    kwargs.set_item(&dep.name, oo.bind(py))?;
                 }
             }
         }
