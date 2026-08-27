@@ -41,10 +41,7 @@ pub mod microbench {
             .insert("/hello", crate::state::MethodMask::from_method("GET"))
             .expect("static all_paths");
         all_paths
-            .insert(
-                "/items/:id",
-                crate::state::MethodMask::from_method("GET"),
-            )
+            .insert("/items/:id", crate::state::MethodMask::from_method("GET"))
             .expect("param all_paths");
         CompiledRouters {
             get,
