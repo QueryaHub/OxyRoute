@@ -45,9 +45,9 @@ _jwt_token() {
   "${PYTHON}" - <<'PY'
 import time
 try:
-    import jwt
+    import oxyjwt as jwt
 except ImportError as e:
-    raise SystemExit("PyJWT required for JWT scenario: uv sync --extra bench") from e
+    raise SystemExit("oxyjwt required for JWT scenario: uv sync --extra bench") from e
 print(jwt.encode(
     {"sub": "bench", "exp": int(time.time()) + 3600},
     "bench-secret-key-do-not-use-in-prod",

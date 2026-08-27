@@ -37,10 +37,8 @@ dev = [
     "granian>=1.0",
     "pytest>=8",
     "httpx>=0.27",
-    "oxyjwt>=0.2",
+    "oxyjwt>=0.7.0",
     "pydantic>=2",
-    "pyjwt>=2.8",
-    "cryptography>=42",
     "ruff>=0.8",
 ]
 # Hello-world RPS compare vs FastAPI (see perf-test/bench_hello.sh); not required for library use.
@@ -48,7 +46,7 @@ bench = [
     "fastapi>=0.100",
     "granian>=1.0",
     "httpx>=0.27",
-    "pyjwt>=2.8",
+    "oxyjwt>=0.7.0",
 ]
 
 [tool.maturin]
