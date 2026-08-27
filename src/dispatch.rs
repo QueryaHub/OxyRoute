@@ -10,6 +10,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use pyo3::IntoPyObjectExt;
 use serde_json::Value as JsonValue;
 
+use crate::buffer_pool::PooledBuffer;
 use crate::config;
 use crate::form::{self, ParsedFile};
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
@@ -699,22 +700,26 @@ pub async fn run_rsgi(
             routes_arc[route_idx].extra.path_template.clone(),
         )
     });
-    let mut body_bytes: Vec<u8> = if should_read_body {
+    let mut body_bytes: PooledBuffer = if should_read_body {
         let read_fut = Python::with_gil(|py| {
             let p = protocol.bind(py);
             let aw: Bound<PyAny> = p.call0()?;
             pyo3_async_runtimes::tokio::into_future(aw)
         })?;
         let body_obj: PyObject = read_fut.await?;
-        let body = Python::with_gil(|py| -> PyResult<Vec<u8>> {
+        let mut body = PooledBuffer::new();
+        Python::with_gil(|py| -> PyResult<()> {
             let b = body_obj.bind(py);
-            if let Ok(x) = b.extract::<Vec<u8>>() {
-                return Ok(x);
+            if let Ok(py_bytes) = b.downcast::<pyo3::types::PyBytes>() {
+                body.extend_from_slice(py_bytes.as_bytes());
+            } else if let Ok(py_str) = b.downcast::<pyo3::types::PyString>() {
+                if let Ok(s) = py_str.to_str() {
+                    body.extend_from_slice(s.as_bytes());
+                }
+            } else if let Ok(bytes_vec) = b.extract::<Vec<u8>>() {
+                body.extend_from_slice(&bytes_vec);
             }
-            if let Ok(s) = b.str() {
-                return Ok(s.to_string().into_bytes());
-            }
-            Ok(Vec::new())
+            Ok(())
         })?;
         let max = form::max_body_bytes();
         if (body.len() as u64) > max {
@@ -728,7 +733,7 @@ pub async fn run_rsgi(
         }
         body
     } else {
-        Vec::new()
+        PooledBuffer::new()
     };
     let (auth, cookie_raw): (Option<String>, Option<String>) = if require_jwt {
         Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
@@ -886,7 +891,7 @@ pub async fn run_rsgi(
                         .await
                     }
                 };
-                let multipart_body = std::mem::take(&mut body_bytes);
+                let multipart_body = body_bytes.take();
                 let parsed = match form::parse_multipart(multipart_body, &boundary).await {
                     Ok(p) => p,
                     Err(e) => {
