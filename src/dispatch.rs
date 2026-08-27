@@ -1085,8 +1085,8 @@ pub async fn run_rsgi(
         read_form_body && (handler_varkw || handler_param_names.contains("files"));
     let should_pass_protocol = handler_varkw || handler_param_names.contains("protocol");
     let should_pass_body = !read_form_body && !body_bytes.is_empty() && body_json.is_none();
-    let has_dep_kwargs = dep_names.iter().enumerate().any(|(i, name)| {
-        dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(name))
+    let has_dep_kwargs = dependencies.iter().enumerate().any(|(i, dep)| {
+        dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(&dep.name))
     });
     let should_use_kwargs = !param_map.is_empty()
         || !query_map.is_empty()
