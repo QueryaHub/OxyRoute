@@ -294,10 +294,38 @@ pub fn match_route_compiled(
 /// All HTTP methods that match `path` in a precomputed [`CompiledRouters`] (lock-free 405 list).
 pub fn methods_matching_path_compiled(compiled: &CompiledRouters, path: &str) -> Vec<String> {
     if let Ok(m) = compiled.all_paths.at(path) {
-        m.value.to_vec()
-    } else {
-        Vec::new()
+        let v = m.value.to_vec();
+        if !v.is_empty() {
+            return v;
+        }
     }
+    const ORDER: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+    let mut have = [false; 7];
+    if compiled.get.at(path).is_ok() {
+        have[0] = true;
+        have[1] = true;
+    }
+    if compiled.post.at(path).is_ok() {
+        have[2] = true;
+    }
+    if compiled.put.at(path).is_ok() {
+        have[3] = true;
+    }
+    if compiled.patch.at(path).is_ok() {
+        have[4] = true;
+    }
+    if compiled.delete.at(path).is_ok() {
+        have[5] = true;
+    }
+    if compiled.options.at(path).is_ok() {
+        have[6] = true;
+    }
+    ORDER
+        .iter()
+        .zip(have)
+        .filter(|(_, ok)| *ok)
+        .map(|(m, _)| (*m).to_string())
+        .collect()
 }
 
 pub fn map_method_router<'a>(
@@ -331,23 +359,15 @@ fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
 }
 
 /// Returns route index and path params, or `None` if the method is unsupported; `Some(None)` if
-/// no match; `Some(Some)` on success. Uses [`CompiledRouters`] when set (lock-free).
+/// method is valid but path did not match.
 #[cfg(test)]
-#[allow(clippy::type_complexity)]
 fn match_route(
     state: &AppState,
     method: &str,
     path: &str,
 ) -> Option<Option<(usize, Vec<(String, String)>)>> {
     if let Some(c) = &state.compiled {
-        let g = router_for_compiled(c, method)?;
-        return Some(g.at(path).ok().map(|m| {
-            let mut pmap = Vec::new();
-            for (k, v) in m.params.iter() {
-                pmap.push((k.to_string(), v.to_string()));
-            }
-            (*m.value, pmap)
-        }));
+        return match_route_compiled(c, method, path);
     }
     let g = map_method_router(state, method)?;
     Some(g.at(path).ok().map(|m| {
@@ -389,6 +409,11 @@ mod tests {
     fn methods_matching_path_uses_compiled() {
         let mut s = AppState::new();
         s.post.lock().insert("/x", 0usize).unwrap();
+        s.path_method_masks
+            .lock()
+            .entry("/x".to_string())
+            .or_default()
+            .insert_method("POST");
         s.compiled = Some(Arc::new(s.snapshot_routers()));
         let m = methods_matching_path(&s, "/x");
         assert_eq!(m, vec!["POST".to_string()]);
