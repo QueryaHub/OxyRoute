@@ -1043,12 +1043,9 @@ pub async fn run_rsgi(
         })?;
 
         let resolved = if let Some(query) = db_query_opt {
-            let db_pool = match state {
-                Some(st) => st.read().db_pool.clone(),
-                None => None,
-            };
+            let db_pool = state.read().db_pool.clone();
             match db_pool {
-                Some(pool) => match crate::db::execute_db_query(&pool, query).await {
+                Some(pool) => match crate::db::execute_query(&pool, &query).await {
                     Ok(py_rows) => py_rows,
                     Err(e) => {
                         return send_python_error(
