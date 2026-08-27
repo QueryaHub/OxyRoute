@@ -263,7 +263,11 @@ pub fn match_ws_route_compiled<'a, 'b>(
     compiled: &'a CompiledRouters,
     path: &'b str,
 ) -> Option<(usize, matchit::Params<'a, 'b>)> {
-    compiled.websocket.at(path).ok().map(|m| (*m.value, m.params))
+    compiled
+        .websocket
+        .at(path)
+        .ok()
+        .map(|m| (*m.value, m.params))
 }
 
 /// Lookup an HTTP route in a precomputed [`CompiledRouters`] (lock-free).

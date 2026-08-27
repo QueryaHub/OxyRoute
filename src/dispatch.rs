@@ -1786,8 +1786,10 @@ async fn run_rsgi_websocket(
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("ws route index"))?;
         Ok((e.handler.clone(), e.is_async))
     })?;
-    let path_params: Vec<(String, String)> =
-        params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let path_params: Vec<(String, String)> = params
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     let call_result = Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
         let ws = WebSocket::new(protocol.clone_ref(py), scope.clone_ref(py), path_params);
         let py_ws = Py::new(py, ws)?;
