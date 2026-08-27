@@ -638,7 +638,7 @@ pub async fn run_rsgi(
         None => Err(pyo3::exceptions::PyValueError::new_err("method")),
         Some(m) => Ok(m),
     }?;
-    let (route_idx, param_map) = match route_out {
+    let (route_idx, params) = match route_out {
         Some(x) => x,
         None => {
             let m = methods_matching_path_compiled(&compiled, &path);
@@ -1088,7 +1088,7 @@ pub async fn run_rsgi(
     let has_dep_kwargs = dependencies.iter().enumerate().any(|(i, dep)| {
         dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(&dep.name))
     });
-    let should_use_kwargs = !param_map.is_empty()
+    let should_use_kwargs = !params.is_empty()
         || !query_map.is_empty()
         || has_dep_kwargs
         || claims_val.is_some()
@@ -1108,8 +1108,8 @@ pub async fn run_rsgi(
             return Ok(RunHandlerResult::Ok((res, is_async)));
         }
         let kwargs = PyDict::new(py);
-        for (k, v) in param_map {
-            let vpy = value_for_path_param(py, &v);
+        for (k, v) in params.iter() {
+            let vpy = value_for_path_param(py, v);
             kwargs.set_item(k, vpy)?;
         }
         if !query_map.is_empty() {
@@ -1771,7 +1771,7 @@ async fn run_rsgi_websocket(
     };
     let ws_routes = Arc::clone(&snapshot.websocket_routes);
     let route_match = match_ws_route_compiled(&compiled, &path);
-    let Some((route_idx, param_map)) = route_match else {
+    let Some((route_idx, params)) = route_match else {
         // No route → polite close. ``close`` is sync on RSGIWebsocketProtocol.
         let _ = Python::with_gil(|py| -> PyResult<()> {
             let p = protocol.bind(py);
@@ -1786,8 +1786,12 @@ async fn run_rsgi_websocket(
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("ws route index"))?;
         Ok((e.handler.clone(), e.is_async))
     })?;
+    let path_params: Vec<(String, String)> = params
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     let call_result = Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
-        let ws = WebSocket::new(protocol.clone_ref(py), scope.clone_ref(py), param_map);
+        let ws = WebSocket::new(protocol.clone_ref(py), scope.clone_ref(py), path_params);
         let py_ws = Py::new(py, ws)?;
         let res = handler.bind(py).call1((py_ws,))?.unbind();
         Ok((res, is_async))

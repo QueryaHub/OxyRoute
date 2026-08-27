@@ -102,7 +102,7 @@ pub fn value_for_path_param(py: Python<'_>, s: &str) -> Py<PyAny> {
             return f.into_py_any(py).expect("f64 to Python");
         }
     }
-    s.to_string().into_py_any(py).expect("str to Python")
+    pyo3::types::PyString::new(py, s).into_any().unbind()
 }
 
 pub fn header_get_lax(headers: &Bound<'_, PyAny>, name: &str) -> Option<String> {
