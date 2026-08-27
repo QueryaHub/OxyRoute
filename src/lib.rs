@@ -36,6 +36,16 @@ pub mod microbench {
         let mut get = Router::new();
         get.insert("/hello", 0usize).expect("static route");
         get.insert("/items/:id", 1usize).expect("param route");
+        let mut all_paths = Router::new();
+        all_paths
+            .insert("/hello", crate::state::MethodMask::from_method("GET"))
+            .expect("static all_paths");
+        all_paths
+            .insert(
+                "/items/:id",
+                crate::state::MethodMask::from_method("GET"),
+            )
+            .expect("param all_paths");
         CompiledRouters {
             get,
             post: Router::new(),
@@ -44,6 +54,7 @@ pub mod microbench {
             delete: Router::new(),
             options: Router::new(),
             websocket: Router::new(),
+            all_paths,
         }
     }
 
