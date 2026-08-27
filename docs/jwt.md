@@ -38,9 +38,9 @@ The handler is **not** executed when:
 
 ## `decode_jwt_hs` (Python, for tests and HS parity)
 
-The native module exports **`decode_jwt_hs(token, key, algorithm_list)`**, re-exported from the top-level `oxyroute` package. It decodes a token and returns claims, **HMAC (HS\*) only**, for golden tests against the [`oxyjwt`](https://pypi.org/project/oxyjwt) package. For **RSA/EC/Ed** verification in Python tests, use your usual stack (e.g. **PyJWT** + `cryptography` with the same PEM keys).
+The native module exports **`decode_jwt_hs(token, key, algorithm_list)`**, re-exported from the top-level `oxyroute` package. It decodes a token and returns claims, **HMAC (HS\*) only**, for golden tests against the [`oxyjwt`](https://pypi.org/project/oxyjwt) package. For **RSA/EC/Ed** verification and token generation in Python tests, use [`oxyjwt`](https://pypi.org/project/oxyjwt) (`EncodingKey.from_*_pem` / `DecodingKey.from_*_pem`).
 
-**Optional dev dependencies:** `oxyjwt`, `pyjwt`, and `cryptography` are in `oxyroute[dev]` for tests; production only needs the native extension and your `jwt_secret` / `algorithms` configuration.
+**Optional dev dependencies:** `oxyjwt` is in `oxyroute[dev]` for tests; production only needs the native extension and your `jwt_secret` / `algorithms` configuration.
 
 ## See also
 
