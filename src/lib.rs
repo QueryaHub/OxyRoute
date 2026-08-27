@@ -448,6 +448,7 @@ impl App {
         }
         // Keep auto-compiled routing snapshots fresh when routes are added before explicit freeze().
         st.compiled = None;
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -481,6 +482,7 @@ impl App {
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))?;
         }
         st.compiled = None;
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -491,12 +493,14 @@ impl App {
         if st.compiled.is_none() {
             st.compiled = Some(Arc::new(st.snapshot_routers()));
         }
+        st.rebuild_snapshot();
         Ok(())
     }
 
     fn set_openapi_served(&self, enabled: bool) -> PyResult<()> {
         let mut st = self.state.write();
         st.include_openapi = enabled;
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -569,6 +573,7 @@ impl App {
         })
         .unwrap_or(false);
         Arc::make_mut(&mut st.exception_handlers).push((exc_type.unbind(), handler, is_async));
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -579,6 +584,7 @@ impl App {
         } else {
             st.request_middleware = Arc::new(Vec::new());
         }
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -597,6 +603,7 @@ impl App {
                 "phase must be 'request', 'response', or 'both'",
             ));
         }
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -604,6 +611,7 @@ impl App {
     fn set_cors(&self, config: Option<Py<PyAny>>) -> PyResult<()> {
         let mut st = self.state.write();
         st.cors = config;
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -612,6 +620,7 @@ impl App {
     fn set_security_headers(&self, config: Option<Py<PyAny>>) -> PyResult<()> {
         let mut st = self.state.write();
         st.security_headers = config;
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -634,6 +643,7 @@ impl App {
                 })?;
             let mut st = state.write();
             st.db_pool = Some(pool);
+            st.rebuild_snapshot();
             Ok(())
         })
     }
@@ -644,7 +654,9 @@ impl App {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let pool = {
                 let mut st = state.write();
-                st.db_pool.take()
+                let p = st.db_pool.take();
+                st.rebuild_snapshot();
+                p
             };
             if let Some(p) = pool {
                 p.close().await;
