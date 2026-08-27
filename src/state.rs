@@ -361,6 +361,7 @@ fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
 /// Returns route index and path params, or `None` if the method is unsupported; `Some(None)` if
 /// method is valid but path did not match.
 #[cfg(test)]
+#[allow(clippy::type_complexity)]
 fn match_route(
     state: &AppState,
     method: &str,
