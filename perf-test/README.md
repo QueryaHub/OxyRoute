@@ -98,6 +98,41 @@ Skipped unless `OXYROUTE_BENCH=1` (not for default CI).
 
 Older multi-rep harness — see script header. Default profile uses higher connection counts than the hello script.
 
+## DI/DX overhead comparison (`bench_di_compare.sh`)
+
+Measures the per-request cost of dependency injection at various depths.
+All routes are served from `app_di_compare.py` via a single Granian RSGI worker.
+
+| Scenario   | Route        | Description                              |
+|------------|--------------|------------------------------------------|
+| `nodep`    | `GET /nodep`    | No deps — pure baseline                 |
+| `dep1`     | `GET /dep1`     | One sync `Depends` factory              |
+| `dep3`     | `GET /dep3`     | Three independent sync `Depends`        |
+| `depchain` | `GET /depchain` | Chain of 3 sync `Depends` (a→b→c)      |
+| `depasync` | `GET /depasync` | One async `Depends` factory             |
+| `dep1json` | `POST /dep1json`| One sync `Depends` + JSON body read     |
+
+```bash
+./perf-test/bench_di_compare.sh
+```
+
+Output includes `req/s`, ratio vs `nodep` baseline, and overhead percentage.
+Same `OXYROUTE_BENCH_*` env knobs as the other bench scripts.
+
+**Usage for perf PRs** (before/after DI/DX changes):
+
+```bash
+# On dev branch
+git checkout dev
+./perf-test/bench_di_compare.sh | tee /tmp/before.txt
+
+# On your branch
+git checkout my-di-branch
+./perf-test/bench_di_compare.sh | tee /tmp/after.txt
+
+diff /tmp/before.txt /tmp/after.txt
+```
+
 ## Baseline checklist (perf PRs)
 
 1. `git checkout dev && cargo bench --bench hot_path` (save summary)

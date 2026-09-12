@@ -2,7 +2,9 @@
 
 [← Documentation index](index.md)
 
-OxyRoute supports a **linear** list of **named** dependency factories. At request time, each factory is called in order; its return value is injected into the route handler as a **keyword argument** with the given name. Factories that appear **later** in the list are called with **keyword arguments** for every **earlier** name and value (so a factory can depend on a previous one by using the same parameter name, e.g. `def b(a: int): …` when the first tuple is `("a", make_a)`).
+OxyRoute resolves route dependencies as a **directed acyclic graph (DAG)**. At route registration time, OxyRoute builds a dependency graph from the factories' parameter names and performs **topological sorting** (Kahn's algorithm). This guarantees that prerequisites are always evaluated before dependents, regardless of the declaration order in the `dependencies` list. Any **circular dependencies** are detected and rejected at registration time with a descriptive `ValueError`.
+
+At request time, each factory is called in topological order; its return value is injected into dependent factories and the route handler as a **keyword argument**. Factories only receive their declared keyword arguments, avoiding unnecessary parameter passing overhead.
 
 ### Request context (optional)
 
