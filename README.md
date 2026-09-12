@@ -1,114 +1,202 @@
 # OxyRoute
 
-High-performance web framework for **Granian RSGI**, tuned for high **single-worker** throughput: routing, JSON/form parsing, JWT checks, response mapping, and native WebSockets run on a **Rust** hot path ([PyO3](https://pyo3.rs/) + [Maturin](https://www.maturin.rs/)), while business logic stays in plain **Python** handlers.
+<p align="center">
+  <strong>High-performance, production-grade RSGI web framework for Python powered by a native Rust hot path.</strong>
+</p>
 
-[![CI](https://github.com/QueryaHub/OxyRoute/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/QueryaHub/OxyRoute/actions)
+<p align="center">
+  <a href="https://github.com/QueryaHub/OxyRoute/actions"><img src="https://github.com/QueryaHub/OxyRoute/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI Status"></a>
+  <a href="https://pypi.org/project/oxyroute/"><img src="https://img.shields.io/pypi/v/oxyroute.svg" alt="PyPI version"></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-3776AB.svg?logo=python&logoColor=white" alt="Python 3.10+"></a>
+  <a href="https://pyo3.rs/"><img src="https://img.shields.io/badge/rust-PyO3%200.25-DEA584.svg?logo=rust&logoColor=white" alt="Rust PyO3"></a>
+  <a href="https://github.com/emmett-framework/granian"><img src="https://img.shields.io/badge/server-Granian%20RSGI-5822B4.svg" alt="Granian RSGI"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+</p>
 
-## Features
+---
 
-- **RSGI** entrypoint (`async def __rsgi__(scope, protocol)`) compatible with Granian’s RSGI implementation
-- **Routing** via [matchit](https://crates.io/crates/matchit) (path parameters like `/users/:id`) with packed 64B cacheline entries and zero-allocation path param slicing
-- **Native Rate Limiting**: token bucket rate limiter in Rust on route decorators (`rate_limit="100/minute"`, `rate_limit_key="header:X-API-Key"`)
-- **JSON, form, and multipart bodies** parsed on the native path with thread-local buffer pooling; auto-inferred Pydantic `body_model` support
-- **PEP 590 Vectorcall**: direct Python handler invocation eliminating dictionary allocation on the hot path
-- **JWT** verification on the Rust path before your handler runs (`require_jwt`, HS*, RSA, EC, EdDSA public-key verification via `oxyjwt`)
-- **OpenAPI 3.1.0** `GET /openapi.json` with automatic 401/422 docs and optional Scalar/Swagger UI at `/docs`
-- **Dependencies**: DAG dependency resolution with cycle detection at registration (`Depends`, sync or async) passed as kwargs
-- **Resilience**: adaptive concurrency limiting and load shedding (`AdaptiveConcurrencyLimiter`)
-- **Optional middleware layers** for pre-route decisions, CORS, CSRF, and browser security headers
-- **Native RSGI WebSockets** via `@app.websocket(path)` and `oxyroute.WebSocket` with frame serialization and graceful shutdown notification
-- **Typed & Tested**: PEP 561 `py.typed` marker, complete `.pyi` stubs, and native extension wheel (abi3) for **Python ≥ 3.10**
+## Overview
 
-Start with the full **[Usage guide](docs/usage.md)**, or use **[docs/index.md](docs/index.md)** for topic-specific pages.
+**OxyRoute** combines the expressiveness and developer experience of Python with the raw speed, safety, and memory efficiency of Rust. Designed from the ground up for **[Granian RSGI](https://github.com/emmett-framework/granian)**, OxyRoute executes request routing, body parsing, token-bucket rate limiting, JWT authentication, and response encoding directly in compiled **Rust ([PyO3](https://pyo3.rs/))**, executing Python code only for your business logic handlers.
 
-## Requirements
+```
+Incoming Request
+      │
+      ▼
+┌──────────────────────────────────────────────────────────┐
+│  Granian (RSGI Protocol)                                 │
+└───────────────┬──────────────────────────────────────────┘
+                │ Zero-copy scope & protocol pass
+                ▼
+┌──────────────────────────────────────────────────────────┐
+│  OxyRoute Rust Core (_oxyroute)                          │
+│  ├─ Radix Routing (matchit, zero-alloc path slices)      │
+│  ├─ Sharded Token-Bucket Rate Limiter (HTTP 429)         │
+│  ├─ JWT Verification (RS256/ES256/EdDSA/HS* via oxyjwt)  │
+│  ├─ Request Body & Multipart (Thread-local buffer pool)  │
+│  └─ PEP 590 Vectorcall Direct Dispatch                   │
+└───────────────┬──────────────────────────────────────────┘
+                │ Extracted kwargs & dependencies
+                ▼
+┌──────────────────────────────────────────────────────────┐
+│  Python Handlers & Dependencies                          │
+│  def get_user(user_id: int, auth: Token, db = Depends()) │
+└──────────────────────────────────────────────────────────┘
+```
 
-- **Python** 3.10 or newer
-- For **running** a pre-built wheel: only `pip` (and a server such as Granian)
-- For **building from source**: Rust toolchain + [maturin](https://www.maturin.rs/) (and `patchelf` on some Linux setups is recommended for best wheel layout; see [docs/installation.md](docs/installation.md))
+---
 
-## Install
+## Key Features
 
-From PyPI (when published):
+### ⚡ Rust-Powered Performance
+- **PEP 590 Vectorcall**: Invokes Python handler functions directly via Vectorcall protocol, eliminating `PyDict` allocations for kwargs on the hot path.
+- **64-Byte Cacheline Layout**: Internal `RouteEntry` metadata is packed into a single 64-byte struct for optimal CPU L1 cache locality.
+- **Zero-Allocation Path Slicing**: URL path parameters are sliced directly from the request URI buffer without heap allocations.
+- **Single-Pass Router**: Unified bitmask radix matching for instant HTTP `405 Method Not Allowed` resolution.
+- **Thread-Local Buffer Pooling**: Request body readers reuse pooled memory buffers, minimizing GC pressure.
+- **Pre-Baked Static Response Headers**: Eliminates dynamic string formatting for standard response headers.
+
+### 🛡️ Built-in Security & Resilience
+- **Native Rate Limiting**: In-memory sharded Token Bucket rate limiter with configurable keys (`ip` with proxy support, `header:<name>`, `global`) and automatic RFC-compliant `Retry-After` / `X-RateLimit-*` headers.
+- **Adaptive Concurrency Limiting**: Automatic load shedding (`AdaptiveConcurrencyLimiter`) to prevent memory exhaustion (OOM) and tail latency spikes under traffic bursts.
+- **JWT Authentication**: Native Rust verification (`require_jwt=True`) supporting HS256/384/510, RSA, EC, and EdDSA via [`oxyjwt`](https://github.com/QueryaHub/oxyjwt).
+- **Security Middlewares**: High-performance CORS, CSRF (double-submit cookie), and browser Security Headers (HSTS, CSP, X-Frame-Options).
+
+### 🛠️ Modern Developer Experience
+- **DAG Dependency Injection**: Graph-based dependency resolution (`Depends`) with topological sorting and cycle detection at route registration time.
+- **OpenAPI 3.1.0 & Interactive Docs**: Native `GET /openapi.json` with Scalar and Swagger UI mounted at `/docs`, automatic 401/422 documentation, and Pydantic v2 JSON Schema compatibility.
+- **Auto Pydantic Model Inference**: Automatically infers and validates request bodies from type annotations without boilerplate.
+- **Native RSGI WebSockets**: Full-duplex WebSocket support (`@app.websocket`) with concurrent send frame serialization and 1001 Going Away graceful shutdown broadcast.
+- **Typed & Tested**: PEP 561 `py.typed` marker package with complete `_oxyroute.pyi` type stubs.
+
+---
+
+## Installation
 
 ```bash
 pip install oxyroute
 ```
 
-Development / optional test dependencies:
-
+With development dependencies:
 ```bash
 pip install "oxyroute[dev]"
 ```
 
-From a git checkout (builds the native module):
+> **Requirements**: Python ≥ 3.10 and [Granian](https://github.com/emmett-framework/granian) (`pip install granian`). Pre-built wheels are available for Linux (x86_64, aarch64), macOS (Apple Silicon & Intel), and Windows (x64).
 
-```bash
-pip install maturin
-maturin develop
-# or: pip install .
-```
+---
 
-## Quick start (RSGI + Granian)
+## Quick Start
 
-`examples/rsgi_app.py`:
+Create `main.py`:
 
 ```python
-from oxyroute import App
+from pydantic import BaseModel
+from oxyroute import App, Depends, HTTPException, Request
 
-app = App(title="Hello OxyRoute")
+app = App(title="OxyRoute Production API", docs_ui="scalar")
+
+
+class Item(BaseModel):
+    name: str
+    price: float
+
+
+def get_db():
+    return {"status": "connected"}
 
 
 @app.get("/")
-def root() -> str:
-    return "OxyRoute RSGI OK"
+def read_root() -> dict[str, str]:
+    return {"status": "healthy", "engine": "OxyRoute Rust RSGI"}
 
 
-@app.get("/hello/:name")
-def hello_name(name: str) -> dict:
-    return {"message": f"Hello, {name}"}
+# Rate limited to 60 requests per minute by client IP
+@app.get("/items/:item_id", rate_limit="60/minute")
+def read_item(item_id: int, db=Depends(get_db)) -> dict:
+    return {"item_id": item_id, "db_status": db["status"]}
+
+
+# Automatically validates JSON request body via Pydantic
+@app.post("/items", status_code=201)
+def create_item(item: Item) -> dict:
+    return {"created": item.name, "price": item.price}
+
+
+# Native WebSocket endpoint
+@app.websocket("/ws/echo")
+async def echo_socket(ws) -> None:
+    await ws.accept()
+    while True:
+        msg = await ws.receive_text()
+        await ws.send_text(f"Echo: {msg}")
 ```
 
-Run (from the repo, after `maturin develop` or an editable install):
+Run with Granian RSGI:
 
 ```bash
-granian --interface rsgi examples.rsgi_app:app
+granian --interface rsgi --workers 4 --threads 2 main:app
 ```
 
-Per-worker setup (`on_startup` / Granian-compatible `__rsgi_init__`) is shown in [examples/rsgi_lifespan_app.py](examples/rsgi_lifespan_app.py) and [docs/rsgi.md](docs/rsgi.md#lifespan-optional).
+Interactive documentation is automatically available at **`http://localhost:8000/docs`**.
 
-OxyRoute supports **only** Granian RSGI; the legacy ASGI bridge (`uvicorn` / `granian --interface asgi`) was removed in v0.3.0.
+---
 
-## Usage docs
+## Examples & Patterns
 
-- [Usage guide](docs/usage.md) — install, run, routing, bodies, responses, middleware, CORS, CSRF, JWT, WebSockets, deployment notes, limitations
-- [RSGI and Granian](docs/rsgi.md) — app entrypoint, lifespan hooks, worker process model
-- [Handlers](docs/handlers.md) — injected parameters and response mapping details
-- [Routing](docs/routing.md) — methods, path syntax, `APIRouter`, `freeze()`
-- [Rate Limiting](docs/rate-limiting.md) — native Token Bucket rate limiting on route decorators
-- [JWT](docs/jwt.md), [CORS](docs/cors.md), [CSRF](docs/csrf.md), [Security headers](docs/security-headers.md)
-- [WebSockets](docs/websocket.md) and [SSE](docs/sse.md)
+### 1. Token Bucket Rate Limiting
+```python
+# Rate limit by custom API Key header
+@app.get("/api/v1/data", rate_limit="1000/hour", rate_limit_key="header:X-API-Key")
+def secure_data() -> dict:
+    return {"data": "sensitive"}
+```
 
-## Production notes
+### 2. DAG Dependency Injection
+```python
+from oxyroute import Depends
 
-OxyRoute is designed for Granian RSGI deployments. For public traffic, place it behind a normal production boundary (TLS, request-size limits, timeouts, logging, process supervision) and keep `OXYROUTE_DEBUG` disabled. Request bodies and multipart files are currently buffered in memory before parsing, so enforce limits both at the edge and with `OXYROUTE_MAX_BODY_BYTES`.
+def config():
+    return {"env": "prod"}
 
-## Project layout
+def auth_service(cfg = Depends(config)):
+    return {"auth_mode": cfg["env"]}
 
-- `oxyroute/` — Python package (`App`, `Depends`)
-- `src/` — Rust extension (`_oxyroute`, routing, dispatch, JWT helpers)
-- `docs/` — detailed English documentation
-- `tests/` — pytest suite (run from a temp directory or an installed wheel so the source tree does not shadow the package; see [docs/development.md](docs/development.md))
+@app.get("/profile")
+def user_profile(auth = Depends(auth_service)):
+    return {"auth": auth}
+```
+
+### 3. JWT Route Protection
+```python
+@app.get("/admin", require_jwt=True)
+def admin_panel(request: Request) -> dict:
+    claims = request.state.jwt_claims
+    return {"admin_id": claims.get("sub")}
+```
+
+---
+
+## Documentation
+
+- **[Usage Guide](docs/usage.md)** — Complete configuration and operational reference.
+- **[Rate Limiting](docs/rate-limiting.md)** — Token bucket algorithm, header formats, key strategies.
+- **[RSGI & Granian](docs/rsgi.md)** — Architecture, worker lifecycle, and deployment.
+- **[Dependencies & DAG](docs/dependencies.md)** — Dependency injection, topological ordering, lifecycle.
+- **[OpenAPI & Docs](docs/openapi.md)** — OpenAPI 3.1.0 specifications, Scalar, and Swagger UI.
+- **[WebSockets](docs/websocket.md)** — Full-duplex messaging, frame ordering, graceful shutdown.
+- **[Database & SQLx](docs/database.md)** — Native database streaming and query helpers.
+- **[Resilience](docs/resilience.md)** — Concurrency limiting and load shedding.
+- **[Security](docs/jwt.md)** — JWT, CORS, CSRF, and Security Headers.
+
+---
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) (build, tests, issue backlog, batch `gh` script).
+Contributions are warmly welcomed! Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [Development Workflow](docs/development-workflow.md) before opening a pull request.
+
+---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
-
-## Links
-
-- [Granian RSGI specification](https://github.com/emmett-framework/granian/blob/master/docs/spec/RSGI.md)
-- [Documentation index](docs/index.md)
+OxyRoute is open-source software licensed under the **[MIT License](LICENSE)**.
