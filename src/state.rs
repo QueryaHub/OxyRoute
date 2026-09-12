@@ -185,7 +185,7 @@ impl AppState {
     pub fn new() -> Self {
         let openapi = serde_json::json!({
             "openapi": "3.1.0",
-            "info": { "title": "OxyRoute", "version": "0.5.0" },
+            "info": { "title": "OxyRoute", "version": "0.6.0" },
             "paths": {}
         });
         let routes = Arc::new(Vec::new());
