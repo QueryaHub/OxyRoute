@@ -206,6 +206,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn openapi_add_path(
         oa: &mut serde_json::Value,
         method: &str,
@@ -214,8 +215,12 @@ impl App {
         request_schema: Option<serde_json::Value>,
         require_jwt: bool,
         tags: Option<Vec<String>>,
+        extra_parameters: Option<Vec<serde_json::Value>>,
     ) {
-        let (oa_path, path_params) = Self::openapi_path_and_params(path);
+        let (oa_path, mut path_params) = Self::openapi_path_and_params(path);
+        if let Some(extra) = extra_parameters {
+            path_params.extend(extra);
+        }
         if require_jwt {
             Self::openapi_ensure_bearer_auth(oa);
         }
@@ -293,7 +298,7 @@ impl App {
 
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
-        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None, body_param_name=None)
+        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None, body_param_name=None, extra_params_json=None)
     )]
     #[allow(clippy::too_many_arguments)]
     fn add_route(
@@ -316,6 +321,7 @@ impl App {
         body_model: Option<Py<PyAny>>,
         tags: Option<Bound<'_, PyList>>,
         body_param_name: Option<String>,
+        extra_params_json: Option<String>,
     ) -> PyResult<()> {
         {
             let st = self.state.read();
@@ -434,6 +440,15 @@ impl App {
         } else {
             None
         };
+        let extra_params: Option<Vec<serde_json::Value>> = match extra_params_json
+            .as_deref()
+            .map(str::trim)
+        {
+            None | Some("") => None,
+            Some(s) => Some(serde_json::from_str(s).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid extra_params JSON: {e}"))
+            })?),
+        };
         {
             let mut oa = st.openapi.lock();
             App::openapi_add_path(
@@ -444,6 +459,7 @@ impl App {
                 request_schema,
                 require_jwt,
                 tag_list,
+                extra_params,
             );
             oa.1 = None;
         }

@@ -325,3 +325,71 @@ def test_openapi_auto_document_401_and_422_responses() -> None:
     assert "200" in prot_user_resp
     assert prot_user_resp["401"]["description"] == "Unauthorized"
     assert prot_user_resp["422"]["description"] == "Validation Error"
+
+
+def test_openapi_query_and_header_parameters() -> None:
+    app = App()
+
+    @app.get(
+        "/search",
+        query_params=["q", {"name": "limit", "schema": {"type": "integer"}}],
+        header_params={"X-Client-Version": str, "X-Request-ID": str},
+        parameters=[
+            {"name": "X-Custom", "in": "header", "required": True, "schema": {"type": "string"}}
+        ],
+    )
+    def search() -> str:
+        return "search"
+
+    doc = json.loads(app.openapi_json())
+    params = doc["paths"]["/search"]["get"]["parameters"]
+
+    params_by_name = {p["name"]: p for p in params}
+    assert "q" in params_by_name
+    assert params_by_name["q"]["in"] == "query"
+    assert params_by_name["q"]["schema"]["type"] == "string"
+
+    assert "limit" in params_by_name
+    assert params_by_name["limit"]["in"] == "query"
+    assert params_by_name["limit"]["schema"]["type"] == "integer"
+
+    assert "X-Client-Version" in params_by_name
+    assert params_by_name["X-Client-Version"]["in"] == "header"
+    assert params_by_name["X-Client-Version"]["schema"]["type"] == "string"
+
+    assert "X-Custom" in params_by_name
+    assert params_by_name["X-Custom"]["in"] == "header"
+    assert params_by_name["X-Custom"]["required"] is True
+
+
+def test_openapi_query_and_header_parameters_via_router() -> None:
+    router = APIRouter()
+
+    @router.get(
+        "/items/:id",
+        query_params={"include_details": bool},
+        header_params=["Authorization-Extra"],
+    )
+    def get_item(id: str) -> str:
+        return "item"
+
+    app = App()
+    app.include_router(router, prefix="/api")
+
+    doc = json.loads(app.openapi_json())
+    params = doc["paths"]["/api/items/{id}"]["get"]["parameters"]
+
+    params_by_name = {p["name"]: p for p in params}
+    # Path parameter
+    assert "id" in params_by_name
+    assert params_by_name["id"]["in"] == "path"
+    assert params_by_name["id"]["required"] is True
+
+    # Query parameter
+    assert "include_details" in params_by_name
+    assert params_by_name["include_details"]["in"] == "query"
+    assert params_by_name["include_details"]["schema"]["type"] == "boolean"
+
+    # Header parameter
+    assert "Authorization-Extra" in params_by_name
+    assert params_by_name["Authorization-Extra"]["in"] == "header"
