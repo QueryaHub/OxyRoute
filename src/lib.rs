@@ -227,6 +227,18 @@ impl App {
             let method_lc = method.to_lowercase();
             let path_entry = paths.entry(oa_path).or_insert_with(|| json!({}));
             if let Some(obj) = path_entry.as_object_mut() {
+                let mut responses = serde_json::Map::new();
+                responses.insert("200".to_string(), json!({ "description": "OK" }));
+                if require_jwt {
+                    responses.insert("401".to_string(), json!({ "description": "Unauthorized" }));
+                }
+                if request_schema.is_some() {
+                    responses.insert(
+                        "422".to_string(),
+                        json!({ "description": "Validation Error" }),
+                    );
+                }
+
                 let mut op = if let Some(schema) = request_schema {
                     json!({
                         "summary": op_id,
@@ -239,13 +251,13 @@ impl App {
                                 }
                             }
                         },
-                        "responses": { "200": { "description": "OK" } }
+                        "responses": responses
                     })
                 } else {
                     json!({
                         "summary": op_id,
                         "operationId": op_id,
-                        "responses": { "200": { "description": "OK" } }
+                        "responses": responses
                     })
                 };
                 if let Some(op_obj) = op.as_object_mut() {
