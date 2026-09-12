@@ -102,15 +102,46 @@ fn build_header_list_from_pairs<'py>(
 ) -> PyResult<Bound<'py, PyList>> {
     let out = PyList::empty(py);
     for (k, v) in pairs {
-        let name: String = if k.eq_ignore_ascii_case("set-cookie") {
-            "set-cookie".to_string()
+        let name = if k.eq_ignore_ascii_case("set-cookie") {
+            pyo3::intern!(py, "set-cookie").clone()
+        } else if k.eq_ignore_ascii_case("content-type") {
+            pyo3::intern!(py, "content-type").clone()
+        } else if k.eq_ignore_ascii_case("content-length") {
+            pyo3::intern!(py, "content-length").clone()
+        } else if k.eq_ignore_ascii_case("server") {
+            pyo3::intern!(py, "server").clone()
+        } else if k.eq_ignore_ascii_case("allow") {
+            pyo3::intern!(py, "allow").clone()
+        } else if k.eq_ignore_ascii_case("access-control-allow-origin") {
+            pyo3::intern!(py, "access-control-allow-origin").clone()
+        } else if k.eq_ignore_ascii_case("access-control-allow-credentials") {
+            pyo3::intern!(py, "access-control-allow-credentials").clone()
+        } else if k.eq_ignore_ascii_case("access-control-allow-methods") {
+            pyo3::intern!(py, "access-control-allow-methods").clone()
+        } else if k.eq_ignore_ascii_case("access-control-allow-headers") {
+            pyo3::intern!(py, "access-control-allow-headers").clone()
+        } else if k.eq_ignore_ascii_case("access-control-max-age") {
+            pyo3::intern!(py, "access-control-max-age").clone()
+        } else if k.chars().all(|c| !c.is_ascii_uppercase()) {
+            PyString::new(py, k)
         } else {
-            k.to_ascii_lowercase()
+            PyString::new(py, &k.to_ascii_lowercase())
         };
-        let pair = PyTuple::new(
-            py,
-            [PyString::new(py, &name), PyString::new(py, v.as_str())],
-        )?;
+
+        let val = match v.as_str() {
+            "application/json; charset=utf-8" => {
+                pyo3::intern!(py, "application/json; charset=utf-8").clone()
+            }
+            "application/json" => pyo3::intern!(py, "application/json").clone(),
+            "text/plain; charset=utf-8" => pyo3::intern!(py, "text/plain; charset=utf-8").clone(),
+            "text/html; charset=utf-8" => pyo3::intern!(py, "text/html; charset=utf-8").clone(),
+            "0" => pyo3::intern!(py, "0").clone(),
+            "true" => pyo3::intern!(py, "true").clone(),
+            "*" => pyo3::intern!(py, "*").clone(),
+            other => PyString::new(py, other),
+        };
+
+        let pair = PyTuple::new(py, [name.as_any(), val.as_any()])?;
         out.append(pair)?;
     }
     Ok(out)
@@ -123,11 +154,20 @@ fn build_headers_ct<'py>(
     match content_type {
         None => Ok(PyList::empty(py)),
         Some(ct) => {
-            let pair = PyTuple::new(
-                py,
-                [PyString::new(py, "content-type"), PyString::new(py, ct)],
-            )?;
-            Ok(PyList::new(py, [pair])?)
+            let k = pyo3::intern!(py, "content-type");
+            let v = match ct {
+                "application/json; charset=utf-8" => {
+                    pyo3::intern!(py, "application/json; charset=utf-8").clone()
+                }
+                "application/json" => pyo3::intern!(py, "application/json").clone(),
+                "text/plain; charset=utf-8" => {
+                    pyo3::intern!(py, "text/plain; charset=utf-8").clone()
+                }
+                "text/html; charset=utf-8" => pyo3::intern!(py, "text/html; charset=utf-8").clone(),
+                other => PyString::new(py, other),
+            };
+            let pair = PyTuple::new(py, [k.as_any(), v.as_any()])?;
+            PyList::new(py, [pair])
         }
     }
 }
@@ -233,14 +273,17 @@ pub fn send_405_method_not_allowed_sync(
     protocol: &Py<PyAny>,
     allow: &[String],
 ) -> PyResult<()> {
-    let headers = vec![
-        ("allow".to_string(), allow.join(", ")),
-        (
-            "content-type".to_string(),
-            "text/plain; charset=utf-8".to_string(),
-        ),
-    ];
-    send_with_headers_sync(py, protocol, 405, b"Method Not Allowed", headers)
+    let p = protocol.bind(py);
+    let allow_key = pyo3::intern!(py, "allow");
+    let allow_val = PyString::new(py, &allow.join(", "));
+    let ct_key = pyo3::intern!(py, "content-type");
+    let ct_val = pyo3::intern!(py, "text/plain; charset=utf-8");
+    let pair1 = PyTuple::new(py, [allow_key.as_any(), allow_val.as_any()])?;
+    let pair2 = PyTuple::new(py, [ct_key.as_any(), ct_val.as_any()])?;
+    let h = PyList::new(py, [pair1, pair2])?;
+    p.getattr("response_bytes")?
+        .call1((405u16, h, b"Method Not Allowed" as &[u8]))?;
+    Ok(())
 }
 
 /// HEAD: no body, but `content-length` for `full_body_len`.
@@ -251,11 +294,28 @@ pub fn send_head_simple_sync(
     full_body_len: usize,
     content_type: &str,
 ) -> PyResult<()> {
-    let headers = vec![
-        ("content-type".to_string(), content_type.to_string()),
-        ("content-length".to_string(), full_body_len.to_string()),
-    ];
-    send_with_headers_sync(py, protocol, status, b"", headers)
+    let p = protocol.bind(py);
+    let ct_key = pyo3::intern!(py, "content-type");
+    let ct_val = match content_type {
+        "application/json; charset=utf-8" => {
+            pyo3::intern!(py, "application/json; charset=utf-8").clone()
+        }
+        "application/json" => pyo3::intern!(py, "application/json").clone(),
+        "text/plain; charset=utf-8" => pyo3::intern!(py, "text/plain; charset=utf-8").clone(),
+        "text/html; charset=utf-8" => pyo3::intern!(py, "text/html; charset=utf-8").clone(),
+        other => PyString::new(py, other),
+    };
+    let cl_key = pyo3::intern!(py, "content-length");
+    let cl_val = if full_body_len == 0 {
+        pyo3::intern!(py, "0").clone()
+    } else {
+        PyString::new(py, &full_body_len.to_string())
+    };
+    let pair1 = PyTuple::new(py, [ct_key.as_any(), ct_val.as_any()])?;
+    let pair2 = PyTuple::new(py, [cl_key.as_any(), cl_val.as_any()])?;
+    let h = PyList::new(py, [pair1, pair2])?;
+    p.getattr("response_empty")?.call1((status, h))?;
+    Ok(())
 }
 
 /// HEAD with arbitrary headers; strips body, sets `content-length` from `full_body.len()`.
