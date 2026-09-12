@@ -240,9 +240,9 @@ def test_concurrent_send_serialization() -> None:
         await ws.accept()
         # Launch 30 concurrent sends of text, bytes, and json via asyncio.gather
         tasks = [
-            ws.send_text(f"text-{i}") if i % 3 == 0 else (
-                ws.send_bytes(f"bytes-{i}".encode()) if i % 3 == 1 else ws.send_json({"num": i})
-            )
+            ws.send_text(f"text-{i}")
+            if i % 3 == 0
+            else (ws.send_bytes(f"bytes-{i}".encode()) if i % 3 == 1 else ws.send_json({"num": i}))
             for i in range(30)
         ]
         await asyncio.gather(*tasks)
@@ -281,4 +281,3 @@ def test_websocket_graceful_shutdown_1001() -> None:
         await task
 
     asyncio.run(_test())
-

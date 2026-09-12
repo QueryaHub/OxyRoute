@@ -56,8 +56,12 @@ class AdaptiveConcurrencyLimiter:
             # Vegas calculation: target = limit * gradient + alpha
             target = self.current_limit * gradient + self.alpha
             # Smooth adjustment towards target
-            self.current_limit = (1.0 - self.smoothing) * self.current_limit + self.smoothing * target
-            self.current_limit = max(float(self.min_limit), min(float(self.max_limit), self.current_limit))
+            self.current_limit = (
+                1.0 - self.smoothing
+            ) * self.current_limit + self.smoothing * target
+            self.current_limit = max(
+                float(self.min_limit), min(float(self.max_limit), self.current_limit)
+            )
             new_limit = int(self.current_limit)
             self.app.set_max_concurrency(new_limit)
             return new_limit

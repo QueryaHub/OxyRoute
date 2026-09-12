@@ -110,6 +110,7 @@ def test_dep_cycle_detection() -> None:
     app = App()
 
     with pytest.raises(ValueError, match=r"dependency cycle detected"):
+
         @app.get("/cycle", dependencies=[("a", make_a), ("b", make_b)])
         def route(a: int, b: int) -> str:
             return f"{a},{b}"
@@ -137,4 +138,3 @@ def test_dep_topological_reordering() -> None:
         assert r.text == "v=15"
 
     asyncio.run(run())
-
