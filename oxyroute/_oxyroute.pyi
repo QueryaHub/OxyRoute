@@ -88,7 +88,13 @@ class DBQuery:
 
     query: str
     args: tuple[Any, ...]
-    def __init__(self, query: str, args: tuple[Any, ...] | list[Any] | None = None) -> None: ...
+    chunk_size: int | None
+    def __init__(
+        self,
+        query: str,
+        args: tuple[Any, ...] | list[Any] | None = None,
+        chunk_size: int | None = None,
+    ) -> None: ...
 
 def decode_jwt_hs(
     token: str,
