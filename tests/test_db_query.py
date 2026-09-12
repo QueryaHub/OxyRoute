@@ -18,10 +18,19 @@ def test_db_query_constructor_and_attributes():
     # Empty args default
     q3 = DBQuery("SELECT 1")
     assert q3.args == ()
+    assert q3.chunk_size is None
+
+    # Chunk size configuration
+    q4 = DBQuery("SELECT 1", chunk_size=100)
+    assert q4.chunk_size == 100
 
     # Type error on invalid args
     with pytest.raises(TypeError, match="args must be a list or tuple"):
         DBQuery("SELECT 1", 123)  # type: ignore
+
+    # Value error on non-positive chunk_size
+    with pytest.raises(ValueError, match="chunk_size must be greater than 0"):
+        DBQuery("SELECT 1", chunk_size=0)
 
 
 @pytest.mark.anyio
