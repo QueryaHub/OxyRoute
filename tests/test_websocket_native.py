@@ -253,3 +253,32 @@ def test_concurrent_send_serialization() -> None:
 
     assert proto.transport is not None
     assert len(proto.transport.sent) == 30
+
+
+def test_websocket_graceful_shutdown_1001() -> None:
+    app = App()
+    event_connected = asyncio.Event()
+    event_shutdown = asyncio.Event()
+
+    @app.websocket("/ws/live")
+    async def ws_live(ws: WebSocket) -> None:
+        await ws.accept()
+        event_connected.set()
+        await event_shutdown.wait()
+
+    async def _test():
+        proto = _MockProtocol()
+        scope = _WSScope(path="/ws/live")
+
+        task = asyncio.create_task(app.__rsgi__(scope, proto))
+        await event_connected.wait()
+
+        # Trigger app shutdown (which notifies active websockets with 1001)
+        await app.on_shutdown()
+        assert proto.closed_with == 1001
+
+        event_shutdown.set()
+        await task
+
+    asyncio.run(_test())
+
