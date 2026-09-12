@@ -82,6 +82,7 @@ class App:
         title: str = "OxyRoute",
         *,
         include_openapi: bool = True,
+        openapi_version: str = "3.1.0",
         docs_ui: str | None = None,
         openapi_description: str | None = None,
         openapi_contact: Mapping[str, Any] | None = None,
@@ -90,6 +91,8 @@ class App:
     ) -> None:
         self._app = _oxyroute.App(include_openapi=include_openapi)
         self._app.set_openapi_title(title)
+        if openapi_version != "3.1.0":
+            self._app.set_openapi_version(openapi_version)
         self.title = title
         self.access_log_hook = access_log_hook
         # Per-process mutable bag for ``on_startup`` / factory setup (DB pool, clients, …).
@@ -116,6 +119,10 @@ class App:
     def set_openapi_served(self, enabled: bool) -> None:
         """Enable or disable the built-in ``GET /openapi.json`` route."""
         self._app.set_openapi_served(enabled)
+
+    def set_openapi_version(self, version: str) -> None:
+        """Set the OpenAPI specification version (default: '3.1.0')."""
+        self._app.set_openapi_version(version)
 
     def set_openapi_info(
         self,
