@@ -94,6 +94,8 @@ class APIRouter:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "GET",
@@ -110,6 +112,8 @@ class APIRouter:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def post(
@@ -132,6 +136,8 @@ class APIRouter:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "POST",
@@ -152,6 +158,8 @@ class APIRouter:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def put(
@@ -174,6 +182,8 @@ class APIRouter:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "PUT",
@@ -194,6 +204,8 @@ class APIRouter:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def patch(
@@ -216,6 +228,8 @@ class APIRouter:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "PATCH",
@@ -236,6 +250,8 @@ class APIRouter:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def delete(
@@ -254,6 +270,8 @@ class APIRouter:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "DELETE",
@@ -270,6 +288,8 @@ class APIRouter:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def options(
@@ -288,6 +308,8 @@ class APIRouter:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "OPTIONS",
@@ -304,4 +326,6 @@ class APIRouter:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )

@@ -374,6 +374,8 @@ class App:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "GET",
@@ -392,6 +394,8 @@ class App:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def post(
@@ -414,6 +418,8 @@ class App:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "POST",
@@ -434,6 +440,8 @@ class App:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def put(
@@ -456,6 +464,8 @@ class App:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "PUT",
@@ -476,6 +486,8 @@ class App:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def patch(
@@ -498,6 +510,8 @@ class App:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "PATCH",
@@ -518,6 +532,8 @@ class App:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def delete(
@@ -536,6 +552,8 @@ class App:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "DELETE",
@@ -554,6 +572,8 @@ class App:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def websocket(self, path: str) -> Callable[[F], F]:
@@ -590,6 +610,8 @@ class App:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "OPTIONS",
@@ -608,6 +630,8 @@ class App:
             parameters=parameters,
             query_params=query_params,
             header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def _route(
@@ -631,6 +655,8 @@ class App:
         parameters: list[Mapping[str, Any]] | None = None,
         query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
         header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         dlist = _norm_dependencies(dependencies)
         extra_params = _norm_extra_openapi_params(parameters, query_params, header_params)
@@ -717,6 +743,8 @@ class App:
                 tags,
                 body_param_name,
                 extra_params_json,
+                rate_limit,
+                rate_limit_key,
             )
             return handler
 
