@@ -4,6 +4,26 @@ from oxyroute import App, DBQuery, Depends
 from oxyroute.testing import asgi_test_app
 
 
+def test_db_query_constructor_and_attributes():
+    # Safe positional parameter binding via tuple
+    q1 = DBQuery("SELECT id, name FROM users WHERE id = $1", (42,))
+    assert q1.query == "SELECT id, name FROM users WHERE id = $1"
+    assert q1.args == (42,)
+
+    # Safe positional parameter binding via list
+    q2 = DBQuery("SELECT * FROM items WHERE price > $1 AND active = $2", [19.99, True])
+    assert q2.query == "SELECT * FROM items WHERE price > $1 AND active = $2"
+    assert q2.args == (19.99, True)
+
+    # Empty args default
+    q3 = DBQuery("SELECT 1")
+    assert q3.args == ()
+
+    # Type error on invalid args
+    with pytest.raises(TypeError, match="args must be a list or tuple"):
+        DBQuery("SELECT 1", 123)  # type: ignore
+
+
 @pytest.mark.anyio
 async def test_db_query_dependency_no_pool():
     app = App()

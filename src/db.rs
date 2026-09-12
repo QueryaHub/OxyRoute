@@ -2,15 +2,38 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use sqlx::Row;
 
+/// Represents a parameterized database query executed natively by sqlx in Rust.
+///
+/// **SECURITY NOTE**: Always use positional parameter placeholders (`$1`, `$2`, ...)
+/// and pass parameters in `args`. **NEVER** use Python f-strings or string concatenation
+/// to construct SQL queries, as this introduces SQL injection vulnerabilities.
+///
+/// ### Positive Example (Safe):
+/// ```python
+/// query = DBQuery("SELECT id, name FROM users WHERE email = $1 AND active = $2", (email, True))
+/// ```
+///
+/// ### Negative Example (VULNERABLE - DO NOT USE):
+/// ```python
+/// # UNSAFE: vulnerable to SQL injection
+/// query = DBQuery(f"SELECT id, name FROM users WHERE email = '{email}'")
+/// ```
 #[pyclass(module = "oxyroute._oxyroute")]
 #[derive(Clone)]
 pub struct DBQuery {
+    #[pyo3(get)]
     pub query: String,
+    #[pyo3(get)]
     pub args: PyObject,
 }
 
 #[pymethods]
 impl DBQuery {
+    /// Construct a new parameterized database query.
+    ///
+    /// Parameters:
+    /// - `query`: Parameterized SQL string using `$1`, `$2`, ... positional placeholders.
+    /// - `args`: Tuple or list of argument values to bind safely.
     #[new]
     #[pyo3(signature = (query, args=None))]
     fn new(py: Python<'_>, query: String, args: Option<Py<PyAny>>) -> PyResult<Self> {
@@ -21,7 +44,7 @@ impl DBQuery {
                 PyTuple::new(py, lst.iter())?.unbind().into()
             } else {
                 return Err(pyo3::exceptions::PyTypeError::new_err(
-                    "args must be a list or tuple",
+                    "args must be a list or tuple of query parameters",
                 ));
             }
         } else {

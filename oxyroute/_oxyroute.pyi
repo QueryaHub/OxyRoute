@@ -75,6 +75,14 @@ class WebSocket:
     async def close(self, code: int | None = None) -> None: ...
 
 class DBQuery:
+    """
+    Parameterized database query executed natively in Rust via sqlx.
+
+    SECURITY NOTE:
+        Always use positional parameter placeholders (`$1`, `$2`, ...) and supply values
+        via `args`. Never use Python f-strings or string concatenation for query building.
+    """
+
     query: str
     args: tuple[Any, ...]
     def __init__(self, query: str, args: tuple[Any, ...] | list[Any] | None = None) -> None: ...
