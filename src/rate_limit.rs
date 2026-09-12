@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use parking_lot::Mutex;
+use pyo3::prelude::*;
 
 const NUM_SHARDS: usize = 16;
 const MAX_SHARD_ENTRIES: usize = 8192;
