@@ -446,7 +446,7 @@ impl App {
         }
         let rate_limiter = if let Some(ref rl_str) = rate_limit {
             let cfg = crate::rate_limit::RateLimitConfig::parse(rl_str, rate_limit_key.as_deref())
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
             Some(crate::rate_limit::RateLimiter::new(cfg))
         } else {
             None
