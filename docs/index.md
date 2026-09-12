@@ -55,6 +55,7 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 | [Development](development.md) | Tests, CI, PyPI releases (tag `v*`), clippy, pytest |
 | [Branching and PRs](development-workflow.md) | `dev` as base, issue branches, `Closes #N`, no mixing code with `ISSUE_BACKLOG` in one commit |
 | [Feature gaps (research)](feature.md) | What is missing vs a “full” HTTP framework and what has been implemented — Russian |
+| [SIMD JSON Evaluation](simd-json-evaluation.md) | SIMD-accelerated JSON deserialization evaluation and throughput analysis |
 | [Contributing](../CONTRIBUTING.md) | Local setup, issue backlog, GitHub `gh` workflow |
 
 [← Back to project README](../README.md)
