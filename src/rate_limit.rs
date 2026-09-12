@@ -225,11 +225,9 @@ pub fn extract_rate_limit_key(
                 }
             }
             if let Ok(client) = scope.getattr("client") {
-                if let Ok(tuple) = client.extract::<&pyo3::types::PyTuple>() {
-                    if let Ok(item) = tuple.get_item(0) {
-                        if let Ok(ip) = item.extract::<String>() {
-                            return ip;
-                        }
+                if let Ok(item) = client.get_item(0) {
+                    if let Ok(ip) = item.extract::<String>() {
+                        return ip;
                     }
                 }
             }
