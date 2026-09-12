@@ -258,3 +258,19 @@ def test_openapi_body_model_and_body_schema_rejected() -> None:
         @app.post("/x", body_model=M, body_schema={"type": "object"})
         def _bad(json: dict) -> str:
             return "n"
+
+
+def test_openapi_default_version_3_1_0() -> None:
+    app = App()
+    doc = json.loads(app.openapi_json())
+    assert doc["openapi"] == "3.1.0"
+
+
+def test_openapi_custom_version_via_init_and_setter() -> None:
+    app = App(openapi_version="3.0.3")
+    doc = json.loads(app.openapi_json())
+    assert doc["openapi"] == "3.0.3"
+
+    app.set_openapi_version("3.1.1")
+    doc2 = json.loads(app.openapi_json())
+    assert doc2["openapi"] == "3.1.1"

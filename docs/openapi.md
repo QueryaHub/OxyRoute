@@ -2,7 +2,7 @@
 
 [← Documentation index](index.md)
 
-OxyRoute maintains an **OpenAPI 3.0**-shaped JSON document in Rust while routes are registered. It is suitable for discovery and interactive docs (Scalar / Swagger UI), and can be extended further in future versions.
+OxyRoute maintains an **OpenAPI 3.1.0** (or configured version) JSON document in Rust while routes are registered. It is fully compatible with Pydantic v2 JSON Schema and suitable for discovery and interactive docs (Scalar / Swagger UI).
 
 ## Constructor and toggles
 
@@ -39,9 +39,10 @@ app.mount_docs("/api/docs", ui="swagger")
 
 UI scripts load from **jsDelivr**. If you use `SecurityHeadersConfig` (or a strict CSP), allow `cdn.jsdelivr.net` in `script-src` / `style-src` for the docs route, or disable those headers on `/docs`.
 
-## Title, info, and servers
+## Title, version, info, and servers
 
 - **`title=`** / **`set_openapi_title`** — `info.title`.
+- **`openapi_version="3.1.0"`** (default) / **`set_openapi_version`** — root `openapi` specification version string.
 - **`openapi_description=`**, **`openapi_contact=`**, **`openapi_servers=`** constructor kwargs, or **`app.set_openapi_info(description=..., contact=..., servers=...)`**.
 
 ```python

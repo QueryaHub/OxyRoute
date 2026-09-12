@@ -518,6 +518,16 @@ impl App {
         Ok(())
     }
 
+    fn set_openapi_version(&self, version: &str) -> PyResult<()> {
+        let st = self.state.read();
+        let mut oa = st.openapi.lock();
+        if let Some(root) = oa.0.as_object_mut() {
+            root.insert("openapi".to_string(), json!(version));
+            oa.1 = None;
+        }
+        Ok(())
+    }
+
     /// Enrich OpenAPI ``info`` / ``servers``. Pass JSON strings for ``contact`` and ``servers``.
     #[pyo3(signature = (description=None, contact_json=None, servers_json=None))]
     fn set_openapi_info(
