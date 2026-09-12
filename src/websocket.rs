@@ -31,6 +31,7 @@ pub struct WebSocket {
     transport: Arc<Mutex<Option<Py<PyAny>>>>,
     path_params: Vec<(String, String)>,
     closed: Arc<Mutex<bool>>,
+    write_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl WebSocket {
@@ -41,6 +42,7 @@ impl WebSocket {
             transport: Arc::new(Mutex::new(None)),
             path_params,
             closed: Arc::new(Mutex::new(false)),
+            write_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -176,48 +178,75 @@ impl WebSocket {
         })
     }
 
-    /// Send a text frame. Returns when Granian has flushed the message.
+    /// Send a text frame. Concurrent send calls are serialized to prevent frame interleaving.
     fn send_text<'py>(&self, py: Python<'py>, data: String) -> PyResult<Bound<'py, PyAny>> {
-        let transport = self.transport_clone(py)?;
-        let coro = transport
-            .bind(py)
-            .call_method1("send_str", PyTuple::new(py, [data])?)?;
-        pyo3_async_runtimes::tokio::into_future(coro).and_then(|fut| {
-            pyo3_async_runtimes::tokio::future_into_py(py, async move {
-                fut.await?;
-                Python::with_gil(|py| Ok(py.None()))
-            })
+        let transport_slot = self.transport.clone();
+        let write_lock = self.write_lock.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let _guard = write_lock.lock().await;
+            let fut = Python::with_gil(|py| -> PyResult<_> {
+                let g = transport_slot.lock();
+                let transport = g.as_ref().ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err(
+                        "WebSocket: call accept() before send/receive",
+                    )
+                })?;
+                let coro = transport
+                    .bind(py)
+                    .call_method1("send_str", PyTuple::new(py, [data])?)?;
+                pyo3_async_runtimes::tokio::into_future(coro)
+            })?;
+            fut.await?;
+            Python::with_gil(|py| Ok(py.None()))
         })
     }
 
-    /// Send a binary frame. Returns when Granian has flushed the message.
+    /// Send a binary frame. Concurrent send calls are serialized to prevent frame interleaving.
     fn send_bytes<'py>(&self, py: Python<'py>, data: Vec<u8>) -> PyResult<Bound<'py, PyAny>> {
-        let transport = self.transport_clone(py)?;
-        let pb = PyBytes::new(py, &data);
-        let coro = transport
-            .bind(py)
-            .call_method1("send_bytes", PyTuple::new(py, [pb])?)?;
-        pyo3_async_runtimes::tokio::into_future(coro).and_then(|fut| {
-            pyo3_async_runtimes::tokio::future_into_py(py, async move {
-                fut.await?;
-                Python::with_gil(|py| Ok(py.None()))
-            })
+        let transport_slot = self.transport.clone();
+        let write_lock = self.write_lock.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let _guard = write_lock.lock().await;
+            let fut = Python::with_gil(|py| -> PyResult<_> {
+                let g = transport_slot.lock();
+                let transport = g.as_ref().ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err(
+                        "WebSocket: call accept() before send/receive",
+                    )
+                })?;
+                let pb = PyBytes::new(py, &data);
+                let coro = transport
+                    .bind(py)
+                    .call_method1("send_bytes", PyTuple::new(py, [pb])?)?;
+                pyo3_async_runtimes::tokio::into_future(coro)
+            })?;
+            fut.await?;
+            Python::with_gil(|py| Ok(py.None()))
         })
     }
 
-    /// Send a JSON-serialised object as a text frame (uses :func:`json.dumps`).
+    /// Send a JSON-serialised object as a text frame. Concurrent send calls are serialized.
     fn send_json<'py>(&self, py: Python<'py>, data: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
-        let transport = self.transport_clone(py)?;
-        let json_mod = py.import("json")?;
-        let dumped = json_mod.call_method1("dumps", (data.bind(py),))?;
-        let coro = transport
-            .bind(py)
-            .call_method1("send_str", PyTuple::new(py, [dumped])?)?;
-        pyo3_async_runtimes::tokio::into_future(coro).and_then(|fut| {
-            pyo3_async_runtimes::tokio::future_into_py(py, async move {
-                fut.await?;
-                Python::with_gil(|py| Ok(py.None()))
-            })
+        let transport_slot = self.transport.clone();
+        let write_lock = self.write_lock.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let _guard = write_lock.lock().await;
+            let fut = Python::with_gil(|py| -> PyResult<_> {
+                let g = transport_slot.lock();
+                let transport = g.as_ref().ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err(
+                        "WebSocket: call accept() before send/receive",
+                    )
+                })?;
+                let json_mod = py.import("json")?;
+                let dumped = json_mod.call_method1("dumps", (data.bind(py),))?;
+                let coro = transport
+                    .bind(py)
+                    .call_method1("send_str", PyTuple::new(py, [dumped])?)?;
+                pyo3_async_runtimes::tokio::into_future(coro)
+            })?;
+            fut.await?;
+            Python::with_gil(|py| Ok(py.None()))
         })
     }
 
