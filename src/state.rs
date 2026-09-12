@@ -170,6 +170,10 @@ pub struct AppState {
     /// Bitmask of allowed HTTP methods per registered path template.
     pub path_method_masks: Mutex<std::collections::HashMap<String, MethodMask>>,
     pub snapshot: Arc<FrozenState>,
+    /// Number of active in-flight requests (for concurrency limiting and metrics).
+    pub in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    /// Maximum permitted concurrent in-flight requests (0 = unlimited).
+    pub max_concurrency: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl AppState {
@@ -184,6 +188,8 @@ impl AppState {
         let request_middleware = Arc::new(Vec::new());
         let response_middleware = Arc::new(Vec::new());
         let exception_handlers = Arc::new(Vec::new());
+        let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let max_concurrency = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let snapshot = Arc::new(FrozenState {
             routes: Arc::clone(&routes),
             websocket_routes: Arc::clone(&websocket_routes),
@@ -218,6 +224,8 @@ impl AppState {
             db_pool: None,
             path_method_masks: Mutex::new(std::collections::HashMap::new()),
             snapshot,
+            in_flight,
+            max_concurrency,
         }
     }
 
@@ -248,7 +256,7 @@ impl AppState {
     pub fn snapshot_routers(&self) -> CompiledRouters {
         let mut all_paths = Router::new();
         for (path, mask) in self.path_method_masks.lock().iter() {
-            let _ = all_paths.insert(path, *mask);
+            all_paths.insert(path, *mask).expect("snapshot all_paths");
         }
         CompiledRouters {
             get: self.get.lock().clone(),

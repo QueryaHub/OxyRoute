@@ -284,6 +284,14 @@ impl App {
     }
 }
 
+pub struct InFlightGuard(pub Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Release);
+    }
+}
+
 #[pymethods]
 impl App {
     #[new]
@@ -294,6 +302,25 @@ impl App {
         Self {
             state: Arc::new(RwLock::new(s)),
         }
+    }
+
+    fn set_max_concurrency(&self, limit: usize) -> PyResult<()> {
+        let st = self.state.read();
+        st.max_concurrency
+            .store(limit, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn get_max_concurrency(&self) -> PyResult<usize> {
+        let st = self.state.read();
+        Ok(st
+            .max_concurrency
+            .load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    fn get_in_flight(&self) -> PyResult<usize> {
+        let st = self.state.read();
+        Ok(st.in_flight.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
@@ -709,13 +736,49 @@ impl App {
         scope: &Bound<'py, PyAny>,
         protocol: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let (in_flight, max_c) = {
+            let st = this.state.read();
+            (
+                Arc::clone(&st.in_flight),
+                st.max_concurrency
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            )
+        };
+        if max_c > 0 {
+            let current = in_flight.fetch_add(1, std::sync::atomic::Ordering::Acquire);
+            if current >= max_c {
+                in_flight.fetch_sub(1, std::sync::atomic::Ordering::Release);
+                let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
+                let headers = vec![
+                    (
+                        "content-type".to_string(),
+                        "text/plain; charset=utf-8".to_string(),
+                    ),
+                    ("retry-after".to_string(), "1".to_string()),
+                ];
+                response::send_with_headers_sync(
+                    py,
+                    &protocol_py,
+                    503,
+                    b"Service Unavailable: Concurrency Limit Exceeded",
+                    headers,
+                )?;
+                return Ok(py.None().into_bound(py));
+            }
+        } else {
+            in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        let guard = InFlightGuard(in_flight);
+
         if let Some(obj) = try_rsgi_sync_short_circuit(py, &this.state, scope, protocol)? {
+            drop(guard);
             return Ok(obj.into_bound(py));
         }
         let state = this.state.clone();
         let scope_py: Py<PyAny> = scope.as_any().clone().unbind();
         let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let _guard = guard;
             run_rsgi(state, scope_py, protocol_py).await
         })
     }
