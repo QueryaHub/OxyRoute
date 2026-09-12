@@ -174,6 +174,9 @@ pub struct AppState {
     pub in_flight: Arc<std::sync::atomic::AtomicUsize>,
     /// Maximum permitted concurrent in-flight requests (0 = unlimited).
     pub max_concurrency: Arc<std::sync::atomic::AtomicUsize>,
+    /// Registry of active WebSocket protocols for graceful shutdown notification (1001 Going Away).
+    pub active_websockets: Mutex<std::collections::HashMap<usize, Py<PyAny>>>,
+    pub next_ws_id: std::sync::atomic::AtomicUsize,
 }
 
 impl AppState {
@@ -226,6 +229,8 @@ impl AppState {
             snapshot,
             in_flight,
             max_concurrency,
+            active_websockets: Mutex::new(std::collections::HashMap::new()),
+            next_ws_id: std::sync::atomic::AtomicUsize::new(1),
         }
     }
 

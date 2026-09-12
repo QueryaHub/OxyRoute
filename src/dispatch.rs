@@ -1784,6 +1784,36 @@ async fn run_rsgi_websocket(
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
+
+    let ws_id = {
+        let st = state.read();
+        let id = st
+            .next_ws_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Python::with_gil(|py| {
+            st.active_websockets
+                .lock()
+                .insert(id, protocol.clone_ref(py));
+        });
+        id
+    };
+
+    struct ActiveWsGuard {
+        state: Arc<RwLock<AppState>>,
+        id: usize,
+    }
+
+    impl Drop for ActiveWsGuard {
+        fn drop(&mut self) {
+            self.state.read().active_websockets.lock().remove(&self.id);
+        }
+    }
+
+    let _ws_guard = ActiveWsGuard {
+        state: Arc::clone(&state),
+        id: ws_id,
+    };
+
     let call_result = Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
         let ws = WebSocket::new(protocol.clone_ref(py), scope.clone_ref(py), path_params);
         let py_ws = Py::new(py, ws)?;

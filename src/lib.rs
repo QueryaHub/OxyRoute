@@ -323,6 +323,18 @@ impl App {
         Ok(st.in_flight.load(std::sync::atomic::Ordering::Relaxed))
     }
 
+    /// Notify all active WebSocket connections with a close status code (default: 1001 Going Away).
+    #[pyo3(signature = (code=1001))]
+    fn shutdown_websockets(&self, py: Python<'_>, code: i32) -> PyResult<()> {
+        let st = self.state.read();
+        let mut map = st.active_websockets.lock();
+        for (_id, proto) in map.drain() {
+            let p = proto.bind(py);
+            let _ = p.call_method1("close", (code,));
+        }
+        Ok(())
+    }
+
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
         signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None, body_param_name=None, extra_params_json=None)

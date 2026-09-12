@@ -215,6 +215,10 @@ class App:
         """Get the current number of in-flight requests."""
         return self._app.get_in_flight()
 
+    def shutdown_websockets(self, code: int = 1001) -> None:
+        """Notify and close all active WebSocket connections with a close status code (default: 1001 Going Away)."""
+        self._app.shutdown_websockets(code)
+
     def freeze(self) -> None:
         """After ``freeze()``, no more route registration (matches Rust app state)."""
         self._app.freeze()
@@ -742,7 +746,8 @@ class App:
         return None
 
     async def on_shutdown(self) -> None:
-        """Per-worker async teardown. Closes the global connection pool if it exists."""
+        """Per-worker async teardown. Closes active WebSockets with 1001 Going Away and closes DB pool."""
+        self.shutdown_websockets(1001)
         await self.close_database()
 
     def __rsgi_init__(self, loop: Any | None = None, *args: Any, **kwargs: Any) -> Any:
