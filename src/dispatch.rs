@@ -10,6 +10,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use pyo3::IntoPyObjectExt;
 use serde_json::Value as JsonValue;
 
+use crate::buffer_pool::PooledBuffer;
 use crate::config;
 use crate::form::{self, ParsedFile};
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
@@ -223,7 +224,7 @@ fn run_trivial_sync_route(
     let _ = protocol.setattr(
         py,
         "__oxyroute_path_template__",
-        entry.path_template.clone(),
+        entry.extra.path_template.clone(),
     );
     let handler = entry.handler.bind(py);
     let out = match handler.call0() {
@@ -316,6 +317,7 @@ fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) -> Arc<CompiledRouter
     let mut st = state.write();
     if st.compiled.is_none() {
         st.compiled = Some(Arc::new(st.snapshot_routers()));
+        st.rebuild_snapshot();
     }
     Arc::clone(st.compiled.as_ref().expect("just populated"))
 }
@@ -472,20 +474,6 @@ pub async fn run_rsgi(
     let Some((method, path, query_string, is_head, snapshot)) = prelim else {
         return Ok(Python::with_gil(|py| py.None()));
     };
-    type CfgClones = (
-        Option<Py<PyAny>>,
-        Option<Py<PyAny>>,
-        Arc<Vec<Py<PyAny>>>,
-        Arc<Vec<Py<PyAny>>>,
-    );
-    let (cors_cfg, security_cfg, req_mw, res_mw): CfgClones = Python::with_gil(|_py| {
-        (
-            snapshot.cors.clone(),
-            snapshot.security_headers.clone(),
-            snapshot.request_middleware.clone(),
-            snapshot.response_middleware.clone(),
-        )
-    });
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
     {
         let _ = Python::with_gil(|py| {
@@ -539,7 +527,7 @@ pub async fn run_rsgi(
             }
         }
     }
-    for mw in req_mw.iter() {
+    for mw in snapshot.request_middleware.iter() {
         let out: Py<PyAny> = match Python::with_gil(|py| {
             let f = mw.bind(py);
             f.call1((scope.bind(py), protocol.bind(py)))
@@ -556,10 +544,12 @@ pub async fn run_rsgi(
             return match Python::with_gil(|py| -> PyResult<()> {
                 let mut mapped = map_handler_return(py, &out)?;
 
-                if !res_mw.is_empty() && !matches!(mapped, HandlerMap::AlreadySent) {
+                if !snapshot.response_middleware.is_empty()
+                    && !matches!(mapped, HandlerMap::AlreadySent)
+                {
                     let response_module = py.import("oxyroute.response")?;
                     let response_class = response_module.getattr("Response")?;
-                    for res_m in res_mw.iter() {
+                    for res_m in snapshot.response_middleware.iter() {
                         let kwargs = pyo3::types::PyDict::new(py);
                         match &mapped {
                             HandlerMap::Simple {
@@ -605,16 +595,16 @@ pub async fn run_rsgi(
                     }
                 }
 
-                let mapped = if security_cfg.is_some() || cors_cfg.is_some() {
+                let mapped = if snapshot.security_headers.is_some() || snapshot.cors.is_some() {
                     let scope_bound = scope.bind(py).clone();
                     let mapped = merge_config_response_headers(
                         py,
-                        &security_cfg,
+                        &snapshot.security_headers,
                         scope_bound.clone(),
                         mapped,
                         true,
                     )?;
-                    merge_config_response_headers(py, &cors_cfg, scope_bound, mapped, false)?
+                    merge_config_response_headers(py, &snapshot.cors, scope_bound, mapped, false)?
                 } else {
                     mapped
                 };
@@ -638,7 +628,7 @@ pub async fn run_rsgi(
         None => Err(pyo3::exceptions::PyValueError::new_err("method")),
         Some(m) => Ok(m),
     }?;
-    let (route_idx, param_map) = match route_out {
+    let (route_idx, params) = match route_out {
         Some(x) => x,
         None => {
             let m = methods_matching_path_compiled(&compiled, &path);
@@ -665,13 +655,12 @@ pub async fn run_rsgi(
         jwt_validation,
         read_json_body,
         read_form_body,
-        dep_names,
-        dep_factories,
-        dep_is_async,
-        dep_wants_request,
+        dependencies,
         handler_param_names,
         handler_varkw,
         body_model,
+        body_param_name,
+        rate_limiter,
     ) = Python::with_gil(|_py| -> PyResult<_> {
         let e = routes_arc
             .get(route_idx)
@@ -680,45 +669,57 @@ pub async fn run_rsgi(
             e.handler.clone(),
             e.is_async,
             e.require_jwt,
-            e.jwt_cookie.clone(),
-            e.jwt_decoding_key.clone(),
-            e.jwt_validation.clone(),
+            e.extra.jwt_cookie.clone(),
+            e.extra.jwt_decoding_key.clone(),
+            e.extra.jwt_validation.clone(),
             e.read_json_body,
             e.read_form_body,
-            Arc::clone(&e.dep_names),
-            Arc::clone(&e.dep_factories),
-            Arc::clone(&e.dep_is_async),
-            Arc::clone(&e.dep_wants_request),
-            Arc::clone(&e.handler_param_names),
+            Arc::clone(&e.extra.dependencies),
+            Arc::clone(&e.extra.handler_param_names),
             e.handler_varkw,
             e.body_model.clone(),
+            e.extra.body_param_name.clone(),
+            e.extra.rate_limiter.clone(),
         ))
     })?;
+    if let Some(ref rl) = rate_limiter {
+        let key = Python::with_gil(|py| {
+            let s = scope.bind(py);
+            crate::rate_limit::extract_rate_limit_key(s, &rl.key_strategy)
+        });
+        if let crate::rate_limit::RateLimitDecision::Denied { limit, reset_secs } = rl.check(&key) {
+            return response::send_429_rate_limited(&protocol, limit, reset_secs).await;
+        }
+    }
     let may_need_raw_body = handler_varkw || handler_param_names.contains("body");
     let should_read_body = read_json_body || read_form_body || may_need_raw_body;
     let _ = Python::with_gil(|py| {
         protocol.setattr(
             py,
             "__oxyroute_path_template__",
-            routes_arc[route_idx].path_template.clone(),
+            routes_arc[route_idx].extra.path_template.clone(),
         )
     });
-    let mut body_bytes: Vec<u8> = if should_read_body {
+    let mut body_bytes: PooledBuffer = if should_read_body {
         let read_fut = Python::with_gil(|py| {
             let p = protocol.bind(py);
             let aw: Bound<PyAny> = p.call0()?;
             pyo3_async_runtimes::tokio::into_future(aw)
         })?;
         let body_obj: PyObject = read_fut.await?;
-        let body = Python::with_gil(|py| -> PyResult<Vec<u8>> {
+        let mut body = PooledBuffer::new();
+        Python::with_gil(|py| -> PyResult<()> {
             let b = body_obj.bind(py);
-            if let Ok(x) = b.extract::<Vec<u8>>() {
-                return Ok(x);
+            if let Ok(py_bytes) = b.downcast::<pyo3::types::PyBytes>() {
+                body.extend_from_slice(py_bytes.as_bytes());
+            } else if let Ok(py_str) = b.downcast::<pyo3::types::PyString>() {
+                if let Ok(s) = py_str.to_str() {
+                    body.extend_from_slice(s.as_bytes());
+                }
+            } else if let Ok(bytes_vec) = b.extract::<Vec<u8>>() {
+                body.extend_from_slice(&bytes_vec);
             }
-            if let Ok(s) = b.str() {
-                return Ok(s.to_string().into_bytes());
-            }
-            Ok(Vec::new())
+            Ok(())
         })?;
         let max = form::max_body_bytes();
         if (body.len() as u64) > max {
@@ -732,7 +733,7 @@ pub async fn run_rsgi(
         }
         body
     } else {
-        Vec::new()
+        PooledBuffer::new()
     };
     let (auth, cookie_raw): (Option<String>, Option<String>) = if require_jwt {
         Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
@@ -890,7 +891,7 @@ pub async fn run_rsgi(
                         .await
                     }
                 };
-                let multipart_body = std::mem::take(&mut body_bytes);
+                let multipart_body = body_bytes.take();
                 let parsed = match form::parse_multipart(multipart_body, &boundary).await {
                     Ok(p) => p,
                     Err(e) => {
@@ -917,7 +918,7 @@ pub async fn run_rsgi(
     } else {
         (HashMap::new(), vec![])
     };
-    let need_req_ctx = dep_wants_request.iter().any(|&x| x);
+    let need_req_ctx = dependencies.iter().any(|d| d.wants_request);
     let request_ctx: Option<Py<PyAny>> = if need_req_ctx {
         match Python::with_gil(|py| -> PyResult<Py<PyAny>> {
             let s = scope.bind(py);
@@ -933,22 +934,25 @@ pub async fn run_rsgi(
     } else {
         None
     };
-    let mut dep_out: Vec<PyObject> = Vec::with_capacity(dep_factories.len());
-    for (i, fact) in dep_factories.iter().enumerate() {
-        let o = if dep_is_async.get(i) == Some(&true) {
+    let mut dep_out: Vec<PyObject> = Vec::with_capacity(dependencies.len());
+    for (i, dep) in dependencies.iter().enumerate() {
+        let o = if dep.is_async {
             let r = match Python::with_gil(|py| -> PyResult<PyObject> {
                 let kw = PyDict::new(py);
-                if dep_wants_request.get(i) == Some(&true) {
+                if dep.wants_request {
                     if let Some(ref rc) = request_ctx {
                         kw.set_item("request", rc.bind(py))?;
                     }
                 }
-                for j in 0..i {
-                    kw.set_item(dep_names[j].as_str(), dep_out[j].bind(py))?;
+                for (j, prev_dep) in dependencies[..i].iter().enumerate() {
+                    let name = &prev_dep.name;
+                    if dep.factory_varkw || dep.factory_params.contains(name) {
+                        kw.set_item(name.as_str(), dep_out[j].bind(py))?;
+                    }
                 }
-                let f = fact.bind(py);
+                let f = dep.factory.bind(py);
                 if kw.is_empty() {
-                    Ok(f.call((), None)?.unbind())
+                    Ok(f.call0()?.unbind())
                 } else {
                     Ok(f.call((), Some(&kw))?.unbind())
                 }
@@ -1000,17 +1004,20 @@ pub async fn run_rsgi(
         } else {
             match Python::with_gil(|py| -> PyResult<PyObject> {
                 let kw = PyDict::new(py);
-                if dep_wants_request.get(i) == Some(&true) {
+                if dep.wants_request {
                     if let Some(ref rc) = request_ctx {
                         kw.set_item("request", rc.bind(py))?;
                     }
                 }
-                for j in 0..i {
-                    kw.set_item(dep_names[j].as_str(), dep_out[j].bind(py))?;
+                for (j, prev_dep) in dependencies[..i].iter().enumerate() {
+                    let name = &prev_dep.name;
+                    if dep.factory_varkw || dep.factory_params.contains(name) {
+                        kw.set_item(name.as_str(), dep_out[j].bind(py))?;
+                    }
                 }
-                let f = fact.bind(py);
+                let f = dep.factory.bind(py);
                 if kw.is_empty() {
-                    Ok(f.call((), None)?.unbind())
+                    Ok(f.call0()?.unbind())
                 } else {
                     Ok(f.call((), Some(&kw))?.unbind())
                 }
@@ -1033,36 +1040,37 @@ pub async fn run_rsgi(
         let db_query_opt = Python::with_gil(|py| -> PyResult<Option<crate::db::DBQuery>> {
             let b = o.bind(py);
             if b.is_instance_of::<crate::db::DBQuery>() {
-                Ok(Some(b.extract::<crate::db::DBQuery>()?))
+                let q: crate::db::DBQuery = b.extract()?;
+                Ok(Some(q))
             } else {
                 Ok(None)
             }
-        });
+        })?;
 
-        let resolved = match db_query_opt {
-            Ok(Some(db_query)) => {
-                if let Some(pool) = snapshot.db_pool.as_ref() {
-                    match crate::db::execute_query(pool, &db_query).await {
-                        Ok(res) => res,
-                        Err(e) => {
-                            return send_python_error(
-                                &protocol,
-                                &method,
-                                &path,
-                                e,
-                                Some(&scope),
-                                Some(&state),
-                            )
-                            .await
-                        }
+        let resolved = if let Some(query) = db_query_opt {
+            let db_pool = state.read().db_pool.clone();
+            match db_pool {
+                Some(pool) => match crate::db::execute_query(&pool, &query).await {
+                    Ok(py_rows) => py_rows,
+                    Err(e) => {
+                        return send_python_error(
+                            &protocol,
+                            &method,
+                            &path,
+                            e,
+                            Some(&scope),
+                            Some(&state),
+                        )
+                        .await;
                     }
-                } else {
+                },
+                None => {
                     return send_python_error(
                         &protocol,
                         &method,
                         &path,
                         pyo3::exceptions::PyRuntimeError::new_err(
-                            "DBQuery returned by dependency but no database pool configured",
+                            "DBQuery used but database pool is not configured (call app.setup_database first)",
                         ),
                         Some(&scope),
                         Some(&state),
@@ -1070,11 +1078,8 @@ pub async fn run_rsgi(
                     .await;
                 }
             }
-            Ok(None) => o,
-            Err(e) => {
-                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
-                    .await
-            }
+        } else {
+            o
         };
 
         dep_out.push(resolved);
@@ -1085,10 +1090,10 @@ pub async fn run_rsgi(
         read_form_body && (handler_varkw || handler_param_names.contains("files"));
     let should_pass_protocol = handler_varkw || handler_param_names.contains("protocol");
     let should_pass_body = !read_form_body && !body_bytes.is_empty() && body_json.is_none();
-    let has_dep_kwargs = dep_names.iter().enumerate().any(|(i, name)| {
-        dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(name))
+    let has_dep_kwargs = dependencies.iter().enumerate().any(|(i, dep)| {
+        dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(&dep.name))
     });
-    let should_use_kwargs = !param_map.is_empty()
+    let should_use_kwargs = !params.is_empty()
         || !query_map.is_empty()
         || has_dep_kwargs
         || claims_val.is_some()
@@ -1108,8 +1113,8 @@ pub async fn run_rsgi(
             return Ok(RunHandlerResult::Ok((res, is_async)));
         }
         let kwargs = PyDict::new(py);
-        for (k, v) in param_map {
-            let vpy = value_for_path_param(py, &v);
+        for (k, v) in params.iter() {
+            let vpy = value_for_path_param(py, v);
             kwargs.set_item(k, vpy)?;
         }
         if !query_map.is_empty() {
@@ -1119,10 +1124,10 @@ pub async fn run_rsgi(
             }
             kwargs.set_item("query", qd)?;
         }
-        for (i, name) in dep_names.iter().enumerate() {
+        for (i, dep) in dependencies.iter().enumerate() {
             if let Some(oo) = dep_out.get(i) {
-                if handler_varkw || handler_param_names.contains(name) {
-                    kwargs.set_item(name, oo.bind(py))?;
+                if handler_varkw || handler_param_names.contains(&dep.name) {
+                    kwargs.set_item(&dep.name, oo.bind(py))?;
                 }
             }
         }
@@ -1135,7 +1140,15 @@ pub async fn run_rsgi(
             if let Some(ref bm) = body_model {
                 match bm.bind(py).call_method1("model_validate", (&pyv,)) {
                     Ok(validated) => {
-                        kwargs.set_item("json", validated)?;
+                        let target_name = if body_param_name.is_empty() {
+                            "json"
+                        } else {
+                            body_param_name.as_str()
+                        };
+                        kwargs.set_item(target_name, &validated)?;
+                        if target_name != "json" && handler_varkw {
+                            kwargs.set_item("json", &validated)?;
+                        }
                     }
                     Err(e) => {
                         let err_str: String =
@@ -1232,10 +1245,10 @@ pub async fn run_rsgi(
     match Python::with_gil(|py| -> PyResult<()> {
         let mut mapped = map_handler_return(py, &handler_out)?;
 
-        if !res_mw.is_empty() && !matches!(mapped, HandlerMap::AlreadySent) {
+        if !snapshot.response_middleware.is_empty() && !matches!(mapped, HandlerMap::AlreadySent) {
             let response_module = py.import("oxyroute.response")?;
             let response_class = response_module.getattr("Response")?;
-            for res_m in res_mw.iter() {
+            for res_m in snapshot.response_middleware.iter() {
                 let kwargs = pyo3::types::PyDict::new(py);
                 match &mapped {
                     HandlerMap::Simple {
@@ -1279,16 +1292,16 @@ pub async fn run_rsgi(
             }
         }
 
-        let mapped = if security_cfg.is_some() || cors_cfg.is_some() {
+        let mapped = if snapshot.security_headers.is_some() || snapshot.cors.is_some() {
             let scope_bound = scope.bind(py).clone();
             let mapped = merge_config_response_headers(
                 py,
-                &security_cfg,
+                &snapshot.security_headers,
                 scope_bound.clone(),
                 mapped,
                 true,
             )?;
-            merge_config_response_headers(py, &cors_cfg, scope_bound, mapped, false)?
+            merge_config_response_headers(py, &snapshot.cors, scope_bound, mapped, false)?
         } else {
             mapped
         };
@@ -1761,9 +1774,8 @@ async fn run_rsgi_websocket(
         Some(c) => c,
         None => ensure_compiled_snapshot(&state),
     };
-    let ws_routes = Arc::clone(&snapshot.websocket_routes);
     let route_match = match_ws_route_compiled(&compiled, &path);
-    let Some((route_idx, param_map)) = route_match else {
+    let Some((route_idx, params)) = route_match else {
         // No route → polite close. ``close`` is sync on RSGIWebsocketProtocol.
         let _ = Python::with_gil(|py| -> PyResult<()> {
             let p = protocol.bind(py);
@@ -1773,13 +1785,48 @@ async fn run_rsgi_websocket(
         return Ok(Python::with_gil(|py| py.None()));
     };
     let (handler, is_async) = Python::with_gil(|_py| -> PyResult<(Py<PyAny>, bool)> {
-        let e = ws_routes
+        let e = snapshot
+            .websocket_routes
             .get(route_idx)
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("ws route index"))?;
         Ok((e.handler.clone(), e.is_async))
     })?;
+    let path_params: Vec<(String, String)> = params
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+    let ws_id = {
+        let st = state.read();
+        let id = st
+            .next_ws_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Python::with_gil(|py| {
+            st.active_websockets
+                .lock()
+                .insert(id, protocol.clone_ref(py));
+        });
+        id
+    };
+
+    struct ActiveWsGuard {
+        state: Arc<RwLock<AppState>>,
+        id: usize,
+    }
+
+    impl Drop for ActiveWsGuard {
+        fn drop(&mut self) {
+            self.state.read().active_websockets.lock().remove(&self.id);
+        }
+    }
+
+    let _ws_guard = ActiveWsGuard {
+        state: Arc::clone(&state),
+        id: ws_id,
+    };
+
     let call_result = Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
-        let ws = WebSocket::new(protocol.clone_ref(py), scope.clone_ref(py), param_map);
+        let ws = WebSocket::new(protocol.clone_ref(py), scope.clone_ref(py), path_params);
         let py_ws = Py::new(py, ws)?;
         let res = handler.bind(py).call1((py_ws,))?.unbind();
         Ok((res, is_async))

@@ -8,11 +8,14 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use serde_json::json;
 
+mod buffer_pool;
 mod config;
 mod db;
+mod dependency;
 mod dispatch;
 mod form;
 mod params;
+mod rate_limit;
 mod response;
 mod schema;
 mod state;
@@ -36,6 +39,13 @@ pub mod microbench {
         let mut get = Router::new();
         get.insert("/hello", 0usize).expect("static route");
         get.insert("/items/:id", 1usize).expect("param route");
+        let mut all_paths = Router::new();
+        all_paths
+            .insert("/hello", crate::state::MethodMask::from_method("GET"))
+            .expect("static all_paths");
+        all_paths
+            .insert("/items/:id", crate::state::MethodMask::from_method("GET"))
+            .expect("param all_paths");
         CompiledRouters {
             get,
             post: Router::new(),
@@ -44,6 +54,7 @@ pub mod microbench {
             delete: Router::new(),
             options: Router::new(),
             websocket: Router::new(),
+            all_paths,
         }
     }
 
@@ -52,8 +63,6 @@ pub mod microbench {
         crate::dispatch::microbench_map_handler_return(py, out)
     }
 }
-
-type ParsedDependencies = (Vec<String>, Vec<Py<PyAny>>, Vec<bool>, Vec<bool>);
 
 /// Parameter names the route handler accepts, plus whether it has `**kwargs`.
 fn handler_signature_kinds(
@@ -87,14 +96,15 @@ fn parse_algorithm(s: &str) -> PyResult<jsonwebtoken::Algorithm> {
     })
 }
 
-fn parse_dependencies(py: Python<'_>, dep_list: &Bound<PyList>) -> PyResult<ParsedDependencies> {
+fn parse_dependencies(
+    py: Python<'_>,
+    dep_list: &Bound<PyList>,
+) -> PyResult<Vec<state::DependencyEntry>> {
     let inspect = py.import("inspect")?;
     let iscoro = inspect.getattr("iscoroutinefunction")?;
     let n = dep_list.len();
-    let mut names = Vec::with_capacity(n);
-    let mut facts = Vec::with_capacity(n);
-    let mut asy = Vec::with_capacity(n);
-    let mut want_req = Vec::with_capacity(n);
+    let mut names = HashSet::with_capacity(n);
+    let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let it = dep_list.get_item(i)?;
         let tup = it.downcast::<PyTuple>()?;
@@ -104,21 +114,26 @@ fn parse_dependencies(py: Python<'_>, dep_list: &Bound<PyList>) -> PyResult<Pars
             ));
         }
         let name: String = tup.get_item(0)?.extract()?;
-        if names.contains(&name) {
+        if !names.insert(name.clone()) {
             return Err(pyo3::exceptions::PyValueError::new_err(
                 "duplicate dependency name",
             ));
         }
         let f: Py<PyAny> = tup.get_item(1)?.unbind();
-        let is_a: bool = iscoro.call1((f.clone_ref(py),))?.extract()?;
+        let is_async: bool = iscoro.call1((f.clone_ref(py),))?.extract()?;
         let f_b = f.bind(py);
-        let has_req: bool = dependency_wants_request(py, f_b)?;
-        names.push(name);
-        facts.push(f);
-        asy.push(is_a);
-        want_req.push(has_req);
+        let wants_request: bool = dependency_wants_request(py, f_b)?;
+        let (factory_params, factory_varkw) = handler_signature_kinds(py, f_b)?;
+        out.push(state::DependencyEntry {
+            name,
+            factory: f,
+            is_async,
+            wants_request,
+            factory_params,
+            factory_varkw,
+        });
     }
-    Ok((names, facts, asy, want_req))
+    Ok(out)
 }
 
 /// True if the factory declares a `request` parameter (for the request context dict).
@@ -193,6 +208,7 @@ impl App {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn openapi_add_path(
         oa: &mut serde_json::Value,
         method: &str,
@@ -201,8 +217,12 @@ impl App {
         request_schema: Option<serde_json::Value>,
         require_jwt: bool,
         tags: Option<Vec<String>>,
+        extra_parameters: Option<Vec<serde_json::Value>>,
     ) {
-        let (oa_path, path_params) = Self::openapi_path_and_params(path);
+        let (oa_path, mut path_params) = Self::openapi_path_and_params(path);
+        if let Some(extra) = extra_parameters {
+            path_params.extend(extra);
+        }
         if require_jwt {
             Self::openapi_ensure_bearer_auth(oa);
         }
@@ -214,6 +234,18 @@ impl App {
             let method_lc = method.to_lowercase();
             let path_entry = paths.entry(oa_path).or_insert_with(|| json!({}));
             if let Some(obj) = path_entry.as_object_mut() {
+                let mut responses = serde_json::Map::new();
+                responses.insert("200".to_string(), json!({ "description": "OK" }));
+                if require_jwt {
+                    responses.insert("401".to_string(), json!({ "description": "Unauthorized" }));
+                }
+                if request_schema.is_some() {
+                    responses.insert(
+                        "422".to_string(),
+                        json!({ "description": "Validation Error" }),
+                    );
+                }
+
                 let mut op = if let Some(schema) = request_schema {
                     json!({
                         "summary": op_id,
@@ -226,13 +258,13 @@ impl App {
                                 }
                             }
                         },
-                        "responses": { "200": { "description": "OK" } }
+                        "responses": responses
                     })
                 } else {
                     json!({
                         "summary": op_id,
                         "operationId": op_id,
-                        "responses": { "200": { "description": "OK" } }
+                        "responses": responses
                     })
                 };
                 if let Some(op_obj) = op.as_object_mut() {
@@ -254,6 +286,14 @@ impl App {
     }
 }
 
+pub struct InFlightGuard(pub Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Release);
+    }
+}
+
 #[pymethods]
 impl App {
     #[new]
@@ -266,9 +306,40 @@ impl App {
         }
     }
 
+    fn set_max_concurrency(&self, limit: usize) -> PyResult<()> {
+        let st = self.state.read();
+        st.max_concurrency
+            .store(limit, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn get_max_concurrency(&self) -> PyResult<usize> {
+        let st = self.state.read();
+        Ok(st
+            .max_concurrency
+            .load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    fn get_in_flight(&self) -> PyResult<usize> {
+        let st = self.state.read();
+        Ok(st.in_flight.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Notify all active WebSocket connections with a close status code (default: 1001 Going Away).
+    #[pyo3(signature = (code=1001))]
+    fn shutdown_websockets(&self, py: Python<'_>, code: i32) -> PyResult<()> {
+        let st = self.state.read();
+        let mut map = st.active_websockets.lock();
+        for (_id, proto) in map.drain() {
+            let p = proto.bind(py);
+            let _ = p.call_method1("close", (code,));
+        }
+        Ok(())
+    }
+
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
-        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None)
+        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None, body_param_name=None, extra_params_json=None, rate_limit=None, rate_limit_key=None)
     )]
     #[allow(clippy::too_many_arguments)]
     fn add_route(
@@ -290,6 +361,10 @@ impl App {
         body_schema_json: Option<String>,
         body_model: Option<Py<PyAny>>,
         tags: Option<Bound<'_, PyList>>,
+        body_param_name: Option<String>,
+        extra_params_json: Option<String>,
+        rate_limit: Option<String>,
+        rate_limit_key: Option<String>,
     ) -> PyResult<()> {
         {
             let st = self.state.read();
@@ -349,12 +424,34 @@ impl App {
         } else {
             (None, None)
         };
-        let (dep_names, dep_factories, dep_is_async, dep_wants_request) =
-            if let Some(d) = dependencies {
-                parse_dependencies(py, &d)?
-            } else {
-                (vec![], vec![], vec![], vec![])
-            };
+        let mut dependencies = if let Some(d) = dependencies {
+            parse_dependencies(py, &d)?
+        } else {
+            vec![]
+        };
+        if !dependencies.is_empty() {
+            let graph = dependency::build_graph_from_entries(&dependencies);
+            let order = graph.topological_sort().map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("dependency cycle detected: {e}"))
+            })?;
+            let mut dep_map: std::collections::HashMap<String, state::DependencyEntry> =
+                dependencies
+                    .into_iter()
+                    .map(|d| (d.name.clone(), d))
+                    .collect();
+            dependencies = order
+                .into_iter()
+                .filter_map(|name| dep_map.remove(&name))
+                .collect();
+        }
+        let rate_limiter = if let Some(ref rl_str) = rate_limit {
+            let cfg = crate::rate_limit::RateLimitConfig::parse(rl_str, rate_limit_key.as_deref())
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            Some(crate::rate_limit::RateLimiter::new(cfg))
+        } else {
+            None
+        };
+        let has_rate_limit = rate_limiter.is_some();
         let op_id: String = handler
             .bind(py)
             .getattr(pyo3::intern!(py, "__name__"))?
@@ -364,30 +461,34 @@ impl App {
             && !require_jwt
             && !read_json_body
             && !read_form_body
-            && dep_factories.is_empty()
+            && dependencies.is_empty()
             && !handler_varkw
-            && handler_param_names.is_empty();
+            && handler_param_names.is_empty()
+            && !has_rate_limit;
         let mut st = self.state.write();
         let routes = Arc::make_mut(&mut st.routes);
         let idx = routes.len();
-        routes.push(state::RouteEntry {
+        let extra = Arc::new(state::RouteExtra {
             path_template: path.to_string(),
-            handler,
-            is_async,
-            require_jwt,
             jwt_cookie,
             jwt_decoding_key,
             jwt_validation,
+            dependencies: Arc::<[state::DependencyEntry]>::from(dependencies),
+            handler_param_names: Arc::new(handler_param_names),
+            body_param_name: body_param_name.unwrap_or_else(|| "json".to_string()),
+            rate_limiter,
+        });
+        routes.push(state::RouteEntry {
+            handler,
+            body_model,
+            extra,
+            is_async,
+            require_jwt,
             read_json_body,
             read_form_body,
-            dep_names: Arc::<[String]>::from(dep_names),
-            dep_factories: Arc::<[Py<PyAny>]>::from(dep_factories),
-            dep_is_async: Arc::<[bool]>::from(dep_is_async),
-            dep_wants_request: Arc::<[bool]>::from(dep_wants_request),
-            handler_param_names: Arc::new(handler_param_names),
             handler_varkw,
             trivial_sync,
-            body_model,
+            has_rate_limit,
         });
         let request_schema: Option<serde_json::Value> = match body_schema_json
             .as_deref()
@@ -408,6 +509,15 @@ impl App {
         } else {
             None
         };
+        let extra_params: Option<Vec<serde_json::Value>> = match extra_params_json
+            .as_deref()
+            .map(str::trim)
+        {
+            None | Some("") => None,
+            Some(s) => Some(serde_json::from_str(s).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid extra_params JSON: {e}"))
+            })?),
+        };
         {
             let mut oa = st.openapi.lock();
             App::openapi_add_path(
@@ -418,6 +528,7 @@ impl App {
                 request_schema,
                 require_jwt,
                 tag_list,
+                extra_params,
             );
             oa.1 = None;
         }
@@ -428,8 +539,13 @@ impl App {
             m.insert(&path, idx)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))?;
         }
+        {
+            let mut masks = st.path_method_masks.lock();
+            masks.entry(path).or_default().insert_method(&method);
+        }
         // Keep auto-compiled routing snapshots fresh when routes are added before explicit freeze().
         st.compiled = None;
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -463,6 +579,7 @@ impl App {
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("{e}")))?;
         }
         st.compiled = None;
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -473,12 +590,14 @@ impl App {
         if st.compiled.is_none() {
             st.compiled = Some(Arc::new(st.snapshot_routers()));
         }
+        st.rebuild_snapshot();
         Ok(())
     }
 
     fn set_openapi_served(&self, enabled: bool) -> PyResult<()> {
         let mut st = self.state.write();
         st.include_openapi = enabled;
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -491,6 +610,16 @@ impl App {
                 .and_then(|i| i.as_object_mut())
         {
             info.insert("title".to_string(), json!(title));
+            oa.1 = None;
+        }
+        Ok(())
+    }
+
+    fn set_openapi_version(&self, version: &str) -> PyResult<()> {
+        let st = self.state.read();
+        let mut oa = st.openapi.lock();
+        if let Some(root) = oa.0.as_object_mut() {
+            root.insert("openapi".to_string(), json!(version));
             oa.1 = None;
         }
         Ok(())
@@ -551,6 +680,7 @@ impl App {
         })
         .unwrap_or(false);
         Arc::make_mut(&mut st.exception_handlers).push((exc_type.unbind(), handler, is_async));
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -561,6 +691,7 @@ impl App {
         } else {
             st.request_middleware = Arc::new(Vec::new());
         }
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -579,6 +710,7 @@ impl App {
                 "phase must be 'request', 'response', or 'both'",
             ));
         }
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -586,6 +718,7 @@ impl App {
     fn set_cors(&self, config: Option<Py<PyAny>>) -> PyResult<()> {
         let mut st = self.state.write();
         st.cors = config;
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -594,6 +727,7 @@ impl App {
     fn set_security_headers(&self, config: Option<Py<PyAny>>) -> PyResult<()> {
         let mut st = self.state.write();
         st.security_headers = config;
+        st.rebuild_snapshot();
         Ok(())
     }
 
@@ -616,6 +750,7 @@ impl App {
                 })?;
             let mut st = state.write();
             st.db_pool = Some(pool);
+            st.rebuild_snapshot();
             Ok(())
         })
     }
@@ -626,7 +761,9 @@ impl App {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let pool = {
                 let mut st = state.write();
-                st.db_pool.take()
+                let p = st.db_pool.take();
+                st.rebuild_snapshot();
+                p
             };
             if let Some(p) = pool {
                 p.close().await;
@@ -641,13 +778,49 @@ impl App {
         scope: &Bound<'py, PyAny>,
         protocol: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let (in_flight, max_c) = {
+            let st = this.state.read();
+            (
+                Arc::clone(&st.in_flight),
+                st.max_concurrency
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            )
+        };
+        if max_c > 0 {
+            let current = in_flight.fetch_add(1, std::sync::atomic::Ordering::Acquire);
+            if current >= max_c {
+                in_flight.fetch_sub(1, std::sync::atomic::Ordering::Release);
+                let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
+                let headers = vec![
+                    (
+                        "content-type".to_string(),
+                        "text/plain; charset=utf-8".to_string(),
+                    ),
+                    ("retry-after".to_string(), "1".to_string()),
+                ];
+                response::send_with_headers_sync(
+                    py,
+                    &protocol_py,
+                    503,
+                    b"Service Unavailable: Concurrency Limit Exceeded",
+                    headers,
+                )?;
+                return Ok(py.None().into_bound(py));
+            }
+        } else {
+            in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        let guard = InFlightGuard(in_flight);
+
         if let Some(obj) = try_rsgi_sync_short_circuit(py, &this.state, scope, protocol)? {
+            drop(guard);
             return Ok(obj.into_bound(py));
         }
         let state = this.state.clone();
         let scope_py: Py<PyAny> = scope.as_any().clone().unbind();
         let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let _guard = guard;
             run_rsgi(state, scope_py, protocol_py).await
         })
     }

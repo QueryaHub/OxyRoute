@@ -83,10 +83,46 @@ fn bench_json_to_py(c: &mut Criterion) {
     });
 }
 
+fn bench_json_scale(c: &mut Criterion) {
+    let item = json!({"id": 12345, "name": "Product item name", "price": 99.95, "active": true});
+    let generate_payload = |count: usize| -> serde_json::Value {
+        let items: Vec<serde_json::Value> = (0..count).map(|_| item.clone()).collect();
+        json!({ "items": items, "count": count })
+    };
+
+    let p_1kb = generate_payload(15);
+    let p_10kb = generate_payload(150);
+    let p_100kb = generate_payload(1500);
+
+    Python::with_gil(|py| {
+        let mut group = c.benchmark_group("json_scale");
+        group.bench_function("1kb", |b| {
+            b.iter(|| {
+                let obj = json_to_py(py, black_box(&p_1kb)).unwrap();
+                black_box(obj)
+            })
+        });
+        group.bench_function("10kb", |b| {
+            b.iter(|| {
+                let obj = json_to_py(py, black_box(&p_10kb)).unwrap();
+                black_box(obj)
+            })
+        });
+        group.bench_function("100kb", |b| {
+            b.iter(|| {
+                let obj = json_to_py(py, black_box(&p_100kb)).unwrap();
+                black_box(obj)
+            })
+        });
+        group.finish();
+    });
+}
+
 criterion_group!(
     benches,
     bench_match_route,
     bench_map_handler_return,
-    bench_json_to_py
+    bench_json_to_py,
+    bench_json_scale
 );
 criterion_main!(benches);

@@ -61,6 +61,94 @@ def _norm_dependencies(
     return [(n, _unwrap_dep(c)) for n, c in deps]
 
 
+def _norm_type_to_schema(t: Any) -> dict[str, Any]:
+    if t is int:
+        return {"type": "integer"}
+    if t is float:
+        return {"type": "number"}
+    if t is bool:
+        return {"type": "boolean"}
+    if t is str:
+        return {"type": "string"}
+    if isinstance(t, Mapping):
+        return dict(t)
+    return {"type": "string"}
+
+
+def _norm_extra_openapi_params(
+    parameters: list[Mapping[str, Any]] | None,
+    query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None,
+    header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+    res: list[dict[str, Any]] = []
+    if parameters:
+        for p in parameters:
+            res.append(dict(p))
+    if query_params:
+        if isinstance(query_params, Mapping):
+            for k, v in query_params.items():
+                res.append(
+                    {
+                        "name": str(k),
+                        "in": "query",
+                        "required": False,
+                        "schema": _norm_type_to_schema(v),
+                    }
+                )
+        elif isinstance(query_params, list):
+            for item in query_params:
+                if isinstance(item, str):
+                    res.append(
+                        {
+                            "name": item,
+                            "in": "query",
+                            "required": False,
+                            "schema": {"type": "string"},
+                        }
+                    )
+                elif isinstance(item, Mapping):
+                    d = dict(item)
+                    d.setdefault("in", "query")
+                    d.setdefault("required", False)
+                    if "schema" not in d and "type" in d:
+                        d["schema"] = {"type": d.pop("type")}
+                    elif "schema" not in d:
+                        d["schema"] = {"type": "string"}
+                    res.append(d)
+    if header_params:
+        if isinstance(header_params, Mapping):
+            for k, v in header_params.items():
+                res.append(
+                    {
+                        "name": str(k),
+                        "in": "header",
+                        "required": False,
+                        "schema": _norm_type_to_schema(v),
+                    }
+                )
+        elif isinstance(header_params, list):
+            for item in header_params:
+                if isinstance(item, str):
+                    res.append(
+                        {
+                            "name": item,
+                            "in": "header",
+                            "required": False,
+                            "schema": {"type": "string"},
+                        }
+                    )
+                elif isinstance(item, Mapping):
+                    d = dict(item)
+                    d.setdefault("in", "header")
+                    d.setdefault("required", False)
+                    if "schema" not in d and "type" in d:
+                        d["schema"] = {"type": d.pop("type")}
+                    elif "schema" not in d:
+                        d["schema"] = {"type": "string"}
+                    res.append(d)
+    return res if res else None
+
+
 def Depends(call: Callable[..., Any]) -> _oxyroute.PyDepends:
     """Marker for a dependency factory; used with ``dependencies=[("name", Depends(fn)), ...]``."""
     return _oxyroute.PyDepends(call)
@@ -82,14 +170,20 @@ class App:
         title: str = "OxyRoute",
         *,
         include_openapi: bool = True,
+        openapi_version: str = "3.1.0",
         docs_ui: str | None = None,
         openapi_description: str | None = None,
         openapi_contact: Mapping[str, Any] | None = None,
         openapi_servers: list[Mapping[str, Any]] | None = None,
         access_log_hook: Callable[[Any, int, float, str], None] | None = None,
+        max_concurrency: int | None = None,
     ) -> None:
         self._app = _oxyroute.App(include_openapi=include_openapi)
         self._app.set_openapi_title(title)
+        if openapi_version != "3.1.0":
+            self._app.set_openapi_version(openapi_version)
+        if max_concurrency is not None:
+            self._app.set_max_concurrency(max_concurrency)
         self.title = title
         self.access_log_hook = access_log_hook
         # Per-process mutable bag for ``on_startup`` / factory setup (DB pool, clients, …).
@@ -109,6 +203,22 @@ class App:
         if self._docs_ui is not None:
             self.mount_docs("/docs", ui=self._docs_ui)
 
+    def set_max_concurrency(self, limit: int) -> None:
+        """Set maximum in-flight requests limit (0 to disable / unlimited)."""
+        self._app.set_max_concurrency(limit or 0)
+
+    def get_max_concurrency(self) -> int:
+        """Get the configured maximum concurrency limit (0 if unlimited)."""
+        return self._app.get_max_concurrency()
+
+    def get_in_flight(self) -> int:
+        """Get the current number of in-flight requests."""
+        return self._app.get_in_flight()
+
+    def shutdown_websockets(self, code: int = 1001) -> None:
+        """Notify and close all active WebSocket connections with a close status code (default: 1001 Going Away)."""
+        self._app.shutdown_websockets(code)
+
     def freeze(self) -> None:
         """After ``freeze()``, no more route registration (matches Rust app state)."""
         self._app.freeze()
@@ -116,6 +226,10 @@ class App:
     def set_openapi_served(self, enabled: bool) -> None:
         """Enable or disable the built-in ``GET /openapi.json`` route."""
         self._app.set_openapi_served(enabled)
+
+    def set_openapi_version(self, version: str) -> None:
+        """Set the OpenAPI specification version (default: '3.1.0')."""
+        self._app.set_openapi_version(version)
 
     def set_openapi_info(
         self,
@@ -257,6 +371,11 @@ class App:
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "GET",
@@ -272,6 +391,11 @@ class App:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def post(
@@ -291,6 +415,11 @@ class App:
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "POST",
@@ -308,6 +437,11 @@ class App:
             body_model=body_model,
             body_schema=body_schema,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def put(
@@ -327,6 +461,11 @@ class App:
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "PUT",
@@ -344,6 +483,11 @@ class App:
             body_model=body_model,
             body_schema=body_schema,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def patch(
@@ -363,6 +507,11 @@ class App:
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "PATCH",
@@ -380,6 +529,11 @@ class App:
             body_model=body_model,
             body_schema=body_schema,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def delete(
@@ -395,6 +549,11 @@ class App:
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "DELETE",
@@ -410,6 +569,11 @@ class App:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def websocket(self, path: str) -> Callable[[F], F]:
@@ -443,6 +607,11 @@ class App:
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "OPTIONS",
@@ -458,6 +627,11 @@ class App:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
+            rate_limit=rate_limit,
+            rate_limit_key=rate_limit_key,
         )
 
     def _route(
@@ -478,18 +652,76 @@ class App:
         body_model: Any | None = None,
         body_schema: Mapping[str, Any] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        rate_limit: str | None = None,
+        rate_limit_key: str | None = None,
     ) -> Callable[[F], F]:
         dlist = _norm_dependencies(dependencies)
+        extra_params = _norm_extra_openapi_params(parameters, query_params, header_params)
+        extra_params_json = json.dumps(extra_params) if extra_params else None
 
         def wrap(handler: F) -> F:
+            nonlocal body_model
             if body_model is not None and body_schema is not None:
                 raise TypeError("use only one of body_model and body_schema")
+
+            target_body_model = body_model
+            body_param_name = "json"
+
+            if callable(handler):
+                try:
+                    sig = inspect.signature(handler)
+                    reserved_names = {
+                        "request",
+                        "claims",
+                        "query",
+                        "form",
+                        "files",
+                        "protocol",
+                        "scope",
+                    }
+                    if dlist:
+                        for dep_tuple in dlist:
+                            if isinstance(dep_tuple, tuple) and len(dep_tuple) >= 1:
+                                reserved_names.add(dep_tuple[0])
+
+                    if target_body_model is None and body_schema is None:
+                        for p_name, param in sig.parameters.items():
+                            if p_name in reserved_names:
+                                continue
+                            ann = param.annotation
+                            if (
+                                ann is not inspect.Parameter.empty
+                                and isinstance(ann, type)
+                                and hasattr(ann, "model_validate")
+                                and hasattr(ann, "model_json_schema")
+                            ):
+                                target_body_model = ann
+                                body_param_name = p_name
+                                break
+                    elif target_body_model is not None:
+                        for p_name, param in sig.parameters.items():
+                            if p_name in reserved_names:
+                                continue
+                            if param.annotation is target_body_model or p_name == "json":
+                                body_param_name = p_name
+                                break
+                        else:
+                            for p_name in sig.parameters:
+                                if p_name not in reserved_names and not p_name.startswith("*"):
+                                    body_param_name = p_name
+                                    break
+                except Exception:
+                    pass
+
             rj = read_json_body
             if read_form_body:
                 rj = False
             body_schema_json: str | None = None
-            if body_model is not None:
-                body_schema_json = json.dumps(body_model.model_json_schema())
+            if target_body_model is not None:
+                body_schema_json = json.dumps(target_body_model.model_json_schema())
             elif body_schema is not None:
                 body_schema_json = json.dumps(body_schema)
             self._app.add_route(
@@ -507,8 +739,12 @@ class App:
                 jwt_leeway,
                 jwt_cookie,
                 body_schema_json,
-                body_model,
+                target_body_model,
                 tags,
+                body_param_name,
+                extra_params_json,
+                rate_limit,
+                rate_limit_key,
             )
             return handler
 
@@ -538,7 +774,8 @@ class App:
         return None
 
     async def on_shutdown(self) -> None:
-        """Per-worker async teardown. Closes the global connection pool if it exists."""
+        """Per-worker async teardown. Closes active WebSockets with 1001 Going Away and closes DB pool."""
+        self.shutdown_websockets(1001)
         await self.close_database()
 
     def __rsgi_init__(self, loop: Any | None = None, *args: Any, **kwargs: Any) -> Any:
@@ -566,12 +803,14 @@ class App:
 
             start = time.perf_counter_ns()
             p = _ProtocolWrapper(protocol)
-            r = self._app.handle_rsgi(scope, p)
-            if r is not None and inspect.isawaitable(r):
-                await r
-            dur = (time.perf_counter_ns() - start) / 1000000.0
-            self.access_log_hook(scope, p.status, dur, p.__oxyroute_path_template__)
-            return r
+            try:
+                r = self._app.handle_rsgi(scope, p)
+                if r is not None and inspect.isawaitable(r):
+                    await r
+                return r
+            finally:
+                dur = (time.perf_counter_ns() - start) / 1000000.0
+                self.access_log_hook(scope, p.status, dur, p.__oxyroute_path_template__)
 
         r = self._app.handle_rsgi(scope, protocol)
         if r is None or not inspect.isawaitable(r):

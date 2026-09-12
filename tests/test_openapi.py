@@ -258,3 +258,138 @@ def test_openapi_body_model_and_body_schema_rejected() -> None:
         @app.post("/x", body_model=M, body_schema={"type": "object"})
         def _bad(json: dict) -> str:
             return "n"
+
+
+def test_openapi_default_version_3_1_0() -> None:
+    app = App()
+    doc = json.loads(app.openapi_json())
+    assert doc["openapi"] == "3.1.0"
+
+
+def test_openapi_custom_version_via_init_and_setter() -> None:
+    app = App(openapi_version="3.0.3")
+    doc = json.loads(app.openapi_json())
+    assert doc["openapi"] == "3.0.3"
+
+    app.set_openapi_version("3.1.1")
+    doc2 = json.loads(app.openapi_json())
+    assert doc2["openapi"] == "3.1.1"
+
+
+def test_openapi_auto_document_401_and_422_responses() -> None:
+    pydantic = pytest.importorskip("pydantic")
+
+    class UserInput(pydantic.BaseModel):
+        username: str
+
+    app = App()
+
+    @app.get("/public")
+    def public() -> str:
+        return "ok"
+
+    @app.get("/protected", require_jwt=True, jwt_secret="secret")
+    def protected(claims: dict) -> str:
+        return "secret"
+
+    @app.post("/users", body_model=UserInput)
+    def create_user(json: dict) -> str:
+        return "created"
+
+    @app.post("/protected-users", require_jwt=True, jwt_secret="secret", body_model=UserInput)
+    def create_protected_user(json: dict, claims: dict) -> str:
+        return "created"
+
+    doc = json.loads(app.openapi_json())
+
+    # Public endpoint: only 200
+    public_resp = doc["paths"]["/public"]["get"]["responses"]
+    assert "200" in public_resp
+    assert "401" not in public_resp
+    assert "422" not in public_resp
+
+    # Protected endpoint: 200 and 401
+    prot_resp = doc["paths"]["/protected"]["get"]["responses"]
+    assert "200" in prot_resp
+    assert prot_resp["401"]["description"] == "Unauthorized"
+    assert "422" not in prot_resp
+
+    # Body model endpoint: 200 and 422
+    user_resp = doc["paths"]["/users"]["post"]["responses"]
+    assert "200" in user_resp
+    assert "401" not in user_resp
+    assert user_resp["422"]["description"] == "Validation Error"
+
+    # Protected + body model endpoint: 200, 401, 422
+    prot_user_resp = doc["paths"]["/protected-users"]["post"]["responses"]
+    assert "200" in prot_user_resp
+    assert prot_user_resp["401"]["description"] == "Unauthorized"
+    assert prot_user_resp["422"]["description"] == "Validation Error"
+
+
+def test_openapi_query_and_header_parameters() -> None:
+    app = App()
+
+    @app.get(
+        "/search",
+        query_params=["q", {"name": "limit", "schema": {"type": "integer"}}],
+        header_params={"X-Client-Version": str, "X-Request-ID": str},
+        parameters=[
+            {"name": "X-Custom", "in": "header", "required": True, "schema": {"type": "string"}}
+        ],
+    )
+    def search() -> str:
+        return "search"
+
+    doc = json.loads(app.openapi_json())
+    params = doc["paths"]["/search"]["get"]["parameters"]
+
+    params_by_name = {p["name"]: p for p in params}
+    assert "q" in params_by_name
+    assert params_by_name["q"]["in"] == "query"
+    assert params_by_name["q"]["schema"]["type"] == "string"
+
+    assert "limit" in params_by_name
+    assert params_by_name["limit"]["in"] == "query"
+    assert params_by_name["limit"]["schema"]["type"] == "integer"
+
+    assert "X-Client-Version" in params_by_name
+    assert params_by_name["X-Client-Version"]["in"] == "header"
+    assert params_by_name["X-Client-Version"]["schema"]["type"] == "string"
+
+    assert "X-Custom" in params_by_name
+    assert params_by_name["X-Custom"]["in"] == "header"
+    assert params_by_name["X-Custom"]["required"] is True
+
+
+def test_openapi_query_and_header_parameters_via_router() -> None:
+    router = APIRouter()
+
+    @router.get(
+        "/items/:id",
+        query_params={"include_details": bool},
+        header_params=["Authorization-Extra"],
+    )
+    def get_item(id: str) -> str:
+        return "item"
+
+    app = App()
+    app.include_router(router, prefix="/api")
+
+    doc = json.loads(app.openapi_json())
+    params = doc["paths"]["/api/items/{id}"]["get"]["parameters"]
+
+    params_by_name = {p["name"]: p for p in params}
+    # Path parameter
+    assert "id" in params_by_name
+    assert params_by_name["id"]["in"] == "path"
+    assert params_by_name["id"]["required"] is True
+
+    # Query parameter
+    assert "include_details" in params_by_name
+    assert params_by_name["include_details"]["in"] == "query"
+    assert params_by_name["include_details"]["schema"]["type"] == "boolean"
+
+    # Header parameter
+    assert "Authorization-Extra" in params_by_name
+    assert params_by_name["Authorization-Extra"]["in"] == "header"

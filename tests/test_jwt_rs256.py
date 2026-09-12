@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 import httpx
-import jwt
+import oxyjwt
 import pytest
 from oxyroute import App
 from oxyroute.testing import asgi_test_app
@@ -19,9 +19,10 @@ _PRIV = (_FIX / "private_pkcs8.pem").read_text()
 
 def test_asgi_jwt_rs256_bearer() -> None:
     now = int(time.time())
-    tok = jwt.encode(
+    signing_key = oxyjwt.EncodingKey.from_rsa_pem(_PRIV)
+    tok = oxyjwt.encode(
         {"sub": "u-rs", "exp": now + 3600},
-        _PRIV,
+        signing_key,
         algorithm="RS256",
     )
     assert isinstance(tok, str)

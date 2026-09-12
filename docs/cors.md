@@ -22,6 +22,7 @@ apply_cors(
     ),
 )
 
+
 @app.get("/api/x")
 def x() -> dict:
     return {"ok": True}
@@ -35,6 +36,7 @@ OxyRoute exposes a **single** pre-route hook (`set_middleware`). Calling `apply_
 def my_mw(scope, protocol):
     # runs only when apply_cors did not return a preflight response
     return None
+
 
 apply_cors(app, config, chain=my_mw)
 ```

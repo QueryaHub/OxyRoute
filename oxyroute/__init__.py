@@ -6,6 +6,7 @@ from oxyroute.cors import CORSConfig, apply_cors
 from oxyroute.csrf import CSRFConfig, apply_csrf, csrf_layer
 from oxyroute.exceptions import HTTPException
 from oxyroute.request import Request
+from oxyroute.resilience import AdaptiveConcurrencyLimiter
 from oxyroute.response import Response
 from oxyroute.router import APIRouter
 from oxyroute.security_headers import SecurityHeadersConfig
@@ -15,6 +16,7 @@ from oxyroute.streaming import stream_bytes, stream_jsonl, stream_text
 
 __all__ = [
     "APIRouter",
+    "AdaptiveConcurrencyLimiter",
     "App",
     "CORSConfig",
     "CSRFConfig",
@@ -38,4 +40,4 @@ __all__ = [
     "stream_jsonl",
     "stream_text",
 ]
-__version__ = "0.5.0"
+__version__ = "0.6.0"

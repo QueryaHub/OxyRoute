@@ -5,6 +5,55 @@ use matchit::Router;
 use parking_lot::Mutex;
 use pyo3::prelude::*;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MethodMask(pub u8);
+
+impl MethodMask {
+    pub const GET: u8 = 1 << 0;
+    pub const HEAD: u8 = 1 << 1;
+    pub const POST: u8 = 1 << 2;
+    pub const PUT: u8 = 1 << 3;
+    pub const PATCH: u8 = 1 << 4;
+    pub const DELETE: u8 = 1 << 5;
+    pub const OPTIONS: u8 = 1 << 6;
+
+    pub fn from_method(method: &str) -> Self {
+        match method {
+            "GET" => Self(Self::GET | Self::HEAD),
+            "HEAD" => Self(Self::HEAD),
+            "POST" => Self(Self::POST),
+            "PUT" => Self(Self::PUT),
+            "PATCH" => Self(Self::PATCH),
+            "DELETE" => Self(Self::DELETE),
+            "OPTIONS" => Self(Self::OPTIONS),
+            _ => Self(0),
+        }
+    }
+
+    pub fn insert_method(&mut self, method: &str) {
+        self.0 |= Self::from_method(method).0;
+    }
+
+    pub fn to_vec(self) -> Vec<String> {
+        const ORDER: [(&str, u8); 7] = [
+            ("GET", MethodMask::GET),
+            ("HEAD", MethodMask::HEAD),
+            ("POST", MethodMask::POST),
+            ("PUT", MethodMask::PUT),
+            ("PATCH", MethodMask::PATCH),
+            ("DELETE", MethodMask::DELETE),
+            ("OPTIONS", MethodMask::OPTIONS),
+        ];
+        let mut out = Vec::with_capacity(7);
+        for (name, flag) in ORDER {
+            if (self.0 & flag) != 0 {
+                out.push(name.to_string());
+            }
+        }
+        out
+    }
+}
+
 /// Immutable route tables built at [`AppState::freeze`](AppState) time so the request
 /// path can be matched without per-method `Mutex` locks (issue #4).
 pub struct CompiledRouters {
@@ -15,6 +64,7 @@ pub struct CompiledRouters {
     pub delete: Router<usize>,
     pub options: Router<usize>,
     pub websocket: Router<usize>,
+    pub all_paths: Router<MethodMask>,
 }
 
 fn router_for_compiled<'a>(c: &'a CompiledRouters, method: &str) -> Option<&'a Router<usize>> {
@@ -36,36 +86,47 @@ pub struct WebsocketRoute {
     pub is_async: bool,
 }
 
+/// A single route dependency definition.
 #[derive(Clone)]
-pub struct RouteEntry {
-    pub path_template: String,
-    pub handler: Py<PyAny>,
+pub struct DependencyEntry {
+    pub name: String,
+    pub factory: Py<PyAny>,
     pub is_async: bool,
-    pub require_jwt: bool,
-    /// If set, read JWT from the `Cookie` header when `Authorization: Bearer` is missing.
+    pub wants_request: bool,
+    pub factory_params: HashSet<String>,
+    pub factory_varkw: bool,
+}
+
+/// Auxiliary / cold metadata for a route.
+#[derive(Clone)]
+pub struct RouteExtra {
+    pub path_template: String,
     pub jwt_cookie: Option<String>,
-    /// Prebuilt at registration when `require_jwt` (issue #109); hot path reuses these.
     pub jwt_decoding_key: Option<Arc<jsonwebtoken::DecodingKey>>,
     pub jwt_validation: Option<Arc<jsonwebtoken::Validation>>,
-    pub read_json_body: bool,
-    /// When set, body is parsed as form data (``application/x-www-form-urlencoded`` or ``multipart/form-data``), not JSON.
-    pub read_form_body: bool,
-    /// Dependency `name` -> factory callable (linear order; resolved in order, then user handler).
-    pub dep_names: Arc<[String]>,
-    pub dep_factories: Arc<[Py<PyAny>]>,
-    pub dep_is_async: Arc<[bool]>,
-    /// Per factory: pass a `request` context dict (see `build_request_context` in dispatch).
-    pub dep_wants_request: Arc<[bool]>,
-    /// From `inspect.signature(handler)`: which parameter names the handler accepts (excluding
-    /// `*args` / only `*`-only); used to forward only matching dependency results.
+    pub dependencies: Arc<[DependencyEntry]>,
     pub handler_param_names: Arc<HashSet<String>>,
-    /// Handler has `**kwargs` (pass all dependency kwargs).
-    pub handler_varkw: bool,
-    /// Sync ``call0()`` route with no body/JWT/deps/kwargs — eligible for RSGI sync fast path.
-    pub trivial_sync: bool,
-    /// Pydantic model for request body validation.
-    pub body_model: Option<Py<PyAny>>,
+    pub body_param_name: String,
+    pub rate_limiter: Option<Arc<crate::rate_limit::RateLimiter>>,
 }
+
+/// Compact 32-byte route entry fitting comfortably inside a single 64-byte L1D cache line.
+#[derive(Clone)]
+#[repr(C)]
+pub struct RouteEntry {
+    pub handler: Py<PyAny>,
+    pub body_model: Option<Py<PyAny>>,
+    pub extra: Arc<RouteExtra>,
+    pub is_async: bool,
+    pub require_jwt: bool,
+    pub read_json_body: bool,
+    pub read_form_body: bool,
+    pub handler_varkw: bool,
+    pub trivial_sync: bool,
+    pub has_rate_limit: bool,
+}
+
+const _: () = assert!(std::mem::size_of::<RouteEntry>() <= 64);
 
 /// True when the route can be served by [`try_rsgi_sync_short_circuit`](crate::dispatch::try_rsgi_sync_short_circuit)
 /// without body read, JWT, or dependency resolution.
@@ -108,18 +169,47 @@ pub struct AppState {
     pub security_headers: Option<Py<PyAny>>,
     /// Global connection pool for the Postgres database.
     pub db_pool: Option<sqlx::PgPool>,
+    /// Bitmask of allowed HTTP methods per registered path template.
+    pub path_method_masks: Mutex<std::collections::HashMap<String, MethodMask>>,
+    pub snapshot: Arc<FrozenState>,
+    /// Number of active in-flight requests (for concurrency limiting and metrics).
+    pub in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    /// Maximum permitted concurrent in-flight requests (0 = unlimited).
+    pub max_concurrency: Arc<std::sync::atomic::AtomicUsize>,
+    /// Registry of active WebSocket protocols for graceful shutdown notification (1001 Going Away).
+    pub active_websockets: Mutex<std::collections::HashMap<usize, Py<PyAny>>>,
+    pub next_ws_id: std::sync::atomic::AtomicUsize,
 }
 
 impl AppState {
     pub fn new() -> Self {
         let openapi = serde_json::json!({
-            "openapi": "3.0.0",
-            "info": { "title": "OxyRoute", "version": "0.5.0" },
+            "openapi": "3.1.0",
+            "info": { "title": "OxyRoute", "version": "0.6.0" },
             "paths": {}
         });
+        let routes = Arc::new(Vec::new());
+        let websocket_routes = Arc::new(Vec::new());
+        let request_middleware = Arc::new(Vec::new());
+        let response_middleware = Arc::new(Vec::new());
+        let exception_handlers = Arc::new(Vec::new());
+        let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let max_concurrency = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let snapshot = Arc::new(FrozenState {
+            routes: Arc::clone(&routes),
+            websocket_routes: Arc::clone(&websocket_routes),
+            compiled: None,
+            cors: None,
+            security_headers: None,
+            request_middleware: Arc::clone(&request_middleware),
+            response_middleware: Arc::clone(&response_middleware),
+            exception_handlers: Arc::clone(&exception_handlers),
+            include_openapi: true,
+            db_pool: None,
+        });
         Self {
-            routes: Arc::new(Vec::new()),
-            websocket_routes: Arc::new(Vec::new()),
+            routes,
+            websocket_routes,
             get: Mutex::new(Router::new()),
             post: Mutex::new(Router::new()),
             put: Mutex::new(Router::new()),
@@ -131,38 +221,50 @@ impl AppState {
             compiled: None,
             frozen: false,
             include_openapi: true,
-            request_middleware: Arc::new(Vec::new()),
-            response_middleware: Arc::new(Vec::new()),
-            exception_handlers: Arc::new(Vec::new()),
+            request_middleware,
+            response_middleware,
+            exception_handlers,
             cors: None,
             security_headers: None,
             db_pool: None,
+            path_method_masks: Mutex::new(std::collections::HashMap::new()),
+            snapshot,
+            in_flight,
+            max_concurrency,
+            active_websockets: Mutex::new(std::collections::HashMap::new()),
+            next_ws_id: std::sync::atomic::AtomicUsize::new(1),
         }
     }
 
-    /// Cheap read-side snapshot of the fields the request hot path touches: the
-    /// returned [`HotSnapshot`] is built **inside one** `state.read()` so the request
-    /// dispatch can release the `RwLock` immediately and avoid further reads.
-    ///
-    /// Cheap because every cloned field is `Arc::clone` / `Option<Py<PyAny>>::clone`
-    /// (both refcount bumps), not deep clones.
-    pub fn hot_snapshot(&self) -> HotSnapshot {
-        HotSnapshot {
-            routes: Arc::clone(&self.routes),
-            websocket_routes: Arc::clone(&self.websocket_routes),
-            compiled: self.compiled.as_ref().map(Arc::clone),
-            cors: self.cors.clone(),
-            security_headers: self.security_headers.clone(),
-            request_middleware: Arc::clone(&self.request_middleware),
-            response_middleware: Arc::clone(&self.response_middleware),
-            exception_handlers: Arc::clone(&self.exception_handlers),
-            include_openapi: self.include_openapi,
-            db_pool: self.db_pool.clone(),
-        }
+    pub fn rebuild_snapshot(&mut self) {
+        pyo3::Python::with_gil(|_py| {
+            self.snapshot = Arc::new(FrozenState {
+                routes: Arc::clone(&self.routes),
+                websocket_routes: Arc::clone(&self.websocket_routes),
+                compiled: self.compiled.as_ref().map(Arc::clone),
+                cors: self.cors.clone(),
+                security_headers: self.security_headers.clone(),
+                request_middleware: Arc::clone(&self.request_middleware),
+                response_middleware: Arc::clone(&self.response_middleware),
+                exception_handlers: Arc::clone(&self.exception_handlers),
+                include_openapi: self.include_openapi,
+                db_pool: self.db_pool.clone(),
+            });
+        });
+    }
+
+    /// Read-side snapshot of the fields the request hot path touches: only 1 atomic
+    /// pointer clone (`Arc::clone(&self.snapshot)`).
+    pub fn hot_snapshot(&self) -> Arc<FrozenState> {
+        Arc::clone(&self.snapshot)
     }
 
     /// Clone current mutex-protected [`Router`]s into a snapshot (used at freeze / tests).
     pub fn snapshot_routers(&self) -> CompiledRouters {
+        let mut all_paths = Router::new();
+        for (path, mask) in self.path_method_masks.lock().iter() {
+            all_paths.insert(path, *mask).expect("snapshot all_paths");
+        }
         CompiledRouters {
             get: self.get.lock().clone(),
             post: self.post.lock().clone(),
@@ -171,14 +273,14 @@ impl AppState {
             delete: self.delete.lock().clone(),
             options: self.options.lock().clone(),
             websocket: self.websocket.lock().clone(),
+            all_paths,
         }
     }
 }
 
-/// One-shot read-side view of [`AppState`] for [`run_rsgi`]. All fields are cheap to clone
-/// (`Arc`/`Option<Py<PyAny>>` refcount bumps) so the hot path can drop the `RwLock` after a
-/// single `read()`. See [`AppState::hot_snapshot`].
-pub struct HotSnapshot {
+/// Consolidated immutable read-side view of [`AppState`] for request dispatching.
+/// Only 1 atomic refcount increment is needed per request.
+pub struct FrozenState {
     pub routes: Arc<Vec<RouteEntry>>,
     pub websocket_routes: Arc<Vec<WebsocketRoute>>,
     pub compiled: Option<Arc<CompiledRouters>>,
@@ -191,41 +293,40 @@ pub struct HotSnapshot {
     pub db_pool: Option<sqlx::PgPool>,
 }
 
+pub type HotSnapshot = Arc<FrozenState>;
+
 /// Lookup a WebSocket route in a precomputed [`CompiledRouters`] (lock-free).
-pub fn match_ws_route_compiled(
-    compiled: &CompiledRouters,
-    path: &str,
-) -> Option<(usize, Vec<(String, String)>)> {
-    compiled.websocket.at(path).ok().map(|m| {
-        let mut pmap = Vec::new();
-        for (k, v) in m.params.iter() {
-            pmap.push((k.to_string(), v.to_string()));
-        }
-        (*m.value, pmap)
-    })
+pub fn match_ws_route_compiled<'a, 'b>(
+    compiled: &'a CompiledRouters,
+    path: &'b str,
+) -> Option<(usize, matchit::Params<'a, 'b>)> {
+    compiled
+        .websocket
+        .at(path)
+        .ok()
+        .map(|m| (*m.value, m.params))
 }
 
 /// Lookup an HTTP route in a precomputed [`CompiledRouters`] (lock-free).
 ///
 /// Returns ``None`` for unsupported method, ``Some(None)`` for no match, ``Some(Some(...))`` on hit.
-#[allow(clippy::type_complexity)]
-pub fn match_route_compiled(
-    compiled: &CompiledRouters,
+pub fn match_route_compiled<'a, 'b>(
+    compiled: &'a CompiledRouters,
     method: &str,
-    path: &str,
-) -> Option<Option<(usize, Vec<(String, String)>)>> {
+    path: &'b str,
+) -> Option<Option<(usize, matchit::Params<'a, 'b>)>> {
     let g = router_for_compiled(compiled, method)?;
-    Some(g.at(path).ok().map(|m| {
-        let mut pmap = Vec::new();
-        for (k, v) in m.params.iter() {
-            pmap.push((k.to_string(), v.to_string()));
-        }
-        (*m.value, pmap)
-    }))
+    Some(g.at(path).ok().map(|m| (*m.value, m.params)))
 }
 
 /// All HTTP methods that match `path` in a precomputed [`CompiledRouters`] (lock-free 405 list).
 pub fn methods_matching_path_compiled(compiled: &CompiledRouters, path: &str) -> Vec<String> {
+    if let Ok(m) = compiled.all_paths.at(path) {
+        let v = m.value.to_vec();
+        if !v.is_empty() {
+            return v;
+        }
+    }
     const ORDER: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
     let mut have = [false; 7];
     if compiled.get.at(path).is_ok() {
@@ -277,77 +378,16 @@ pub fn map_method_router<'a>(
 /// [1]: https://www.rfc-editor.org/rfc/rfc9110#name-405-method-not-allowed
 #[cfg(test)]
 fn methods_matching_path(state: &AppState, path: &str) -> Vec<String> {
-    const ORDER: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
-    let mut have = [false; 7];
     if let Some(c) = &state.compiled {
-        if c.get.at(path).is_ok() {
-            have[0] = true;
-            have[1] = true;
-        }
-        if c.post.at(path).is_ok() {
-            have[2] = true;
-        }
-        if c.put.at(path).is_ok() {
-            have[3] = true;
-        }
-        if c.patch.at(path).is_ok() {
-            have[4] = true;
-        }
-        if c.delete.at(path).is_ok() {
-            have[5] = true;
-        }
-        if c.options.at(path).is_ok() {
-            have[6] = true;
-        }
+        methods_matching_path_compiled(c, path)
     } else {
-        {
-            let g = state.get.lock();
-            if g.at(path).is_ok() {
-                have[0] = true;
-                have[1] = true;
-            }
-        }
-        {
-            let r = state.post.lock();
-            if r.at(path).is_ok() {
-                have[2] = true;
-            }
-        }
-        {
-            let r = state.put.lock();
-            if r.at(path).is_ok() {
-                have[3] = true;
-            }
-        }
-        {
-            let r = state.patch.lock();
-            if r.at(path).is_ok() {
-                have[4] = true;
-            }
-        }
-        {
-            let r = state.delete.lock();
-            if r.at(path).is_ok() {
-                have[5] = true;
-            }
-        }
-        {
-            let r = state.options.lock();
-            if r.at(path).is_ok() {
-                have[6] = true;
-            }
-        }
+        let compiled = state.snapshot_routers();
+        methods_matching_path_compiled(&compiled, path)
     }
-    ORDER
-        .iter()
-        .zip(have)
-        .filter(|(_, ok)| *ok)
-        .map(|(m, _)| (*m).to_string())
-        .collect()
 }
 
 /// Returns route index and path params, or `None` if the method is unsupported; `Some(None)` if
-/// no match; `Some(Some)` on success. Uses [`CompiledRouters`] when set (lock-free).
+/// method is valid but path did not match.
 #[cfg(test)]
 #[allow(clippy::type_complexity)]
 fn match_route(
@@ -356,13 +396,13 @@ fn match_route(
     path: &str,
 ) -> Option<Option<(usize, Vec<(String, String)>)>> {
     if let Some(c) = &state.compiled {
-        let g = router_for_compiled(c, method)?;
-        return Some(g.at(path).ok().map(|m| {
+        let res = match_route_compiled(c, method, path)?;
+        return Some(res.map(|(idx, params)| {
             let mut pmap = Vec::new();
-            for (k, v) in m.params.iter() {
+            for (k, v) in params.iter() {
                 pmap.push((k.to_string(), v.to_string()));
             }
-            (*m.value, pmap)
+            (idx, pmap)
         }));
     }
     let g = map_method_router(state, method)?;
@@ -405,8 +445,22 @@ mod tests {
     fn methods_matching_path_uses_compiled() {
         let mut s = AppState::new();
         s.post.lock().insert("/x", 0usize).unwrap();
+        s.path_method_masks
+            .lock()
+            .entry("/x".to_string())
+            .or_default()
+            .insert_method("POST");
         s.compiled = Some(Arc::new(s.snapshot_routers()));
         let m = methods_matching_path(&s, "/x");
         assert_eq!(m, vec!["POST".to_string()]);
+    }
+
+    #[test]
+    fn test_route_entry_cacheline_packing() {
+        let size = std::mem::size_of::<RouteEntry>();
+        assert!(
+            size <= 64,
+            "RouteEntry size must be <= 64 bytes for L1D cacheline packing, got {size}"
+        );
     }
 }

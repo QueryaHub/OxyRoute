@@ -30,6 +30,9 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo clippy --all-targets -- -D warnings
+      - name: Native Rust tests
+        run: |
+          cargo test --all-targets
 
   test:
     strategy:

@@ -7,6 +7,51 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-12
+
+### Added
+
+- **Native Rate Limiting**: In-memory sharded Token Bucket rate limiter in Rust on route decorators
+  (`@app.get(..., rate_limit="100/minute")`) and `APIRouter`. Supports key strategies for client IP
+  (with `X-Forwarded-For` / `X-Real-IP` support), request headers (`header:<name>`), and global limits,
+  returning RFC-compliant `Retry-After` and `X-RateLimit-*` headers on HTTP 429 ([#162](https://github.com/QueryaHub/OxyRoute/issues/162)).
+- **DAG Dependency Resolution**: Directed Acyclic Graph dependency resolution with topological sorting
+  and cycle detection at route registration time ([#141](https://github.com/QueryaHub/OxyRoute/issues/141), [#189](https://github.com/QueryaHub/OxyRoute/pull/189)).
+- **Adaptive Concurrency Limiting & Load Shedding**: `AdaptiveConcurrencyLimiter` to protect against
+  out-of-memory errors and tail latency spikes under sudden load ([#161](https://github.com/QueryaHub/OxyRoute/issues/161), [#185](https://github.com/QueryaHub/OxyRoute/pull/185)).
+- **OpenAPI 3.1.0 & Schema Enhancements**: Upgraded default OpenAPI specification version to 3.1.0 for
+  Pydantic v2 JSON Schema compatibility ([#154](https://github.com/QueryaHub/OxyRoute/issues/154)),
+  auto-documented 401 Unauthorized and 422 Validation Error responses ([#153](https://github.com/QueryaHub/OxyRoute/issues/153)),
+  and added query / header parameter schema declarations ([#155](https://github.com/QueryaHub/OxyRoute/issues/155)).
+- **Pydantic DX**: Auto-infer Pydantic `body_model` from handler signature annotations and support
+  flexible parameter names ([#151](https://github.com/QueryaHub/OxyRoute/issues/151), [#152](https://github.com/QueryaHub/OxyRoute/issues/152)).
+- **WebSocket Enhancements**: Concurrent send frame serialization to prevent frame interleaving ([#146](https://github.com/QueryaHub/OxyRoute/issues/146))
+  and graceful shutdown broadcast sending WebSocket 1001 (Going Away) to active connections ([#158](https://github.com/QueryaHub/OxyRoute/issues/158)).
+- **Type Stubs & Packaging**: Added PEP 561 `py.typed` marker and comprehensive `_oxyroute.pyi` type stubs ([#150](https://github.com/QueryaHub/OxyRoute/issues/150)).
+- **Database Streaming**: Streaming and chunked row decoding for `DBQuery` SQLx results ([#143](https://github.com/QueryaHub/OxyRoute/issues/143)).
+
+### Performance
+
+- **PEP 590 Vectorcall Protocol**: Direct Python callable invocation using Vectorcall, eliminating `PyDict`
+  allocation for kwargs on the hot path ([#159](https://github.com/QueryaHub/OxyRoute/issues/159)).
+- **Packed 64B RouteEntry**: Packed route entry memory layout into a single 64-byte cacheline for optimal
+  L1 cacheline utilization during route dispatch ([#147](https://github.com/QueryaHub/OxyRoute/issues/147)).
+- **Unified Dependency & Snapshot Layout**: Contiguous `Arc<[DependencyEntry]>` arrays and consolidated
+  `Arc<FrozenState>` snapshot reducing atomic reference counts ([#148](https://github.com/QueryaHub/OxyRoute/issues/148), [#149](https://github.com/QueryaHub/OxyRoute/issues/149)).
+- **Thread-Local Buffer Pool**: Implemented `PooledBuffer` to reuse request body memory allocations ([#160](https://github.com/QueryaHub/OxyRoute/issues/160)).
+- **Zero-Allocation Path Parameters**: Slicing path parameters directly from URL strings without intermediate
+  heap allocations ([#140](https://github.com/QueryaHub/OxyRoute/issues/140)).
+- **Single-Pass Method Lookup**: Unified radix lookup and method bitmasks for 405 Method Not Allowed handling ([#139](https://github.com/QueryaHub/OxyRoute/issues/139)).
+- **Pre-Baked Static Response Headers**: Pre-formatted static response headers eliminating string formatting ([#164](https://github.com/QueryaHub/OxyRoute/issues/164), [#184](https://github.com/QueryaHub/OxyRoute/pull/184)).
+
+### Security & Hardening
+
+- **StaticFiles Hardening**: Prevented path traversal and symlink escape vulnerabilities ([#144](https://github.com/QueryaHub/OxyRoute/issues/144)).
+- **DBQuery Parameter Binding**: Verified and documented SQL parameter binding and injection guarantees ([#145](https://github.com/QueryaHub/OxyRoute/issues/145), [#186](https://github.com/QueryaHub/OxyRoute/pull/186)).
+- **FFI Safety**: Configured `panic = "abort"` in `Cargo.toml` to prevent undefined behavior from unwinding across FFI ([#156](https://github.com/QueryaHub/OxyRoute/issues/156)).
+- **Observability**: Ensured `access_log_hook` execution on unhandled exceptions via try-finally ([#157](https://github.com/QueryaHub/OxyRoute/issues/157)).
+- **Dependencies**: Upgraded to `oxyjwt >= 0.7.0` and dropped legacy `pyjwt`/`cryptography` dependencies ([#178](https://github.com/QueryaHub/OxyRoute/pull/178)).
+
 ## [0.5.0] - 2026-07-20
 
 ### Added
@@ -98,6 +143,7 @@ hardening after the v0.3.0 ASGI removal. See `git log v0.3.0..v0.4.0` for the fu
 
   ```python
   from tests._rsgi_test_transport import asgi_test_app
+
   transport = httpx.ASGITransport(app=asgi_test_app(app))
   ```
 

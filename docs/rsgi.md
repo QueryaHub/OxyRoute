@@ -52,6 +52,7 @@ def create_app() -> App:
     # register routes on `a` …
     return a
 
+
 app = create_app()
 ```
 

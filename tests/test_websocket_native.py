@@ -230,3 +230,54 @@ def test_websocket_frozen_app_rejects_route() -> None:
 
         @app.websocket("/late")
         async def late(ws: WebSocket) -> None: ...
+
+
+def test_concurrent_send_serialization() -> None:
+    app = App()
+
+    @app.websocket("/ws/concurrent")
+    async def ws_concurrent(ws: WebSocket) -> None:
+        await ws.accept()
+        # Launch 30 concurrent sends of text, bytes, and json via asyncio.gather
+        tasks = [
+            ws.send_text(f"text-{i}")
+            if i % 3 == 0
+            else (ws.send_bytes(f"bytes-{i}".encode()) if i % 3 == 1 else ws.send_json({"num": i}))
+            for i in range(30)
+        ]
+        await asyncio.gather(*tasks)
+        await ws.close(1000)
+
+    proto = _MockProtocol()
+    _drive(app, _WSScope(path="/ws/concurrent"), proto)
+
+    assert proto.transport is not None
+    assert len(proto.transport.sent) == 30
+
+
+def test_websocket_graceful_shutdown_1001() -> None:
+    app = App()
+    event_connected = asyncio.Event()
+    event_shutdown = asyncio.Event()
+
+    @app.websocket("/ws/live")
+    async def ws_live(ws: WebSocket) -> None:
+        await ws.accept()
+        event_connected.set()
+        await event_shutdown.wait()
+
+    async def _test():
+        proto = _MockProtocol()
+        scope = _WSScope(path="/ws/live")
+
+        task = asyncio.create_task(app.__rsgi__(scope, proto))
+        await event_connected.wait()
+
+        # Trigger app shutdown (which notifies active websockets with 1001)
+        await app.on_shutdown()
+        assert proto.closed_with == 1001
+
+        event_shutdown.set()
+        await task
+
+    asyncio.run(_test())

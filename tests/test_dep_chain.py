@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import httpx
+import pytest
 from oxyroute import App
 from oxyroute.testing import asgi_test_app
 
@@ -95,5 +96,45 @@ def test_dep_async_chain() -> None:
             r = await c.get("/a")
         assert r.status_code == 200
         assert r.text == "aab"
+
+    asyncio.run(run())
+
+
+def test_dep_cycle_detection() -> None:
+    def make_a(b: int) -> int:
+        return b + 1
+
+    def make_b(a: int) -> int:
+        return a + 1
+
+    app = App()
+
+    with pytest.raises(ValueError, match=r"dependency cycle detected"):
+
+        @app.get("/cycle", dependencies=[("a", make_a), ("b", make_b)])
+        def route(a: int, b: int) -> str:
+            return f"{a},{b}"
+
+
+def test_dep_topological_reordering() -> None:
+    def make_a() -> int:
+        return 10
+
+    def make_b(a: int) -> int:
+        return a + 5
+
+    app = App()
+
+    # Declared in reverse order (b before a), but b depends on a
+    @app.get("/rev", dependencies=[("b", make_b), ("a", make_a)])
+    def route(b: int) -> str:
+        return f"v={b}"
+
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.get("/rev")
+        assert r.status_code == 200
+        assert r.text == "v=15"
 
     asyncio.run(run())
