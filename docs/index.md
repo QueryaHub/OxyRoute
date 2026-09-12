@@ -48,6 +48,7 @@ Granian still invokes a Python `App` object; the “win” is doing routing, bod
 | [JWT](jwt.md) | `require_jwt`, HS* / RSA / EC PEM, `decode_jwt_hs` (HS* tests) |
 | [Streaming & SSE](streaming.md) | `stream_bytes`, `stream_text`, `send_sse`, streaming caveats |
 | [WebSockets](websocket.md) | Native RSGI `@app.websocket(path)` and `oxyroute.WebSocket` |
+| [Rate Limiting](rate-limiting.md) | Native Rust in-memory Token Bucket rate limiting on route decorators |
 | [HTTP/2 with Granian](http2.md) | Transport guarantees vs server/proxy responsibilities |
 | [Dependencies](dependencies.md) | `Depends`, `dependencies=[...]`, `freeze` |
 | [OpenAPI](openapi.md) | `openapi.json`, docs UI (Scalar/Swagger), tags, JWT security |

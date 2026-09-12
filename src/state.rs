@@ -107,6 +107,7 @@ pub struct RouteExtra {
     pub dependencies: Arc<[DependencyEntry]>,
     pub handler_param_names: Arc<HashSet<String>>,
     pub body_param_name: String,
+    pub rate_limiter: Option<Arc<crate::rate_limit::RateLimiter>>,
 }
 
 /// Compact 32-byte route entry fitting comfortably inside a single 64-byte L1D cache line.
@@ -122,6 +123,7 @@ pub struct RouteEntry {
     pub read_form_body: bool,
     pub handler_varkw: bool,
     pub trivial_sync: bool,
+    pub has_rate_limit: bool,
 }
 
 const _: () = assert!(std::mem::size_of::<RouteEntry>() <= 64);

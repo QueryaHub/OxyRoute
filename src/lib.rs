@@ -15,6 +15,7 @@ mod dependency;
 mod dispatch;
 mod form;
 mod params;
+mod rate_limit;
 mod response;
 mod schema;
 mod state;
@@ -338,7 +339,7 @@ impl App {
 
     /// Paths use **matchit 0.7** style: `/user/:id`. Pass `dependencies=[("x", get_x), ...]`.
     #[pyo3(
-        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None, body_param_name=None, extra_params_json=None)
+        signature = (method, path, handler, require_jwt=false, jwt_secret=None, algorithms=None, read_json_body=true, read_form_body=false, dependencies=None, jwt_issuer=None, jwt_audience=None, jwt_leeway=None, jwt_cookie=None, body_schema_json=None, body_model=None, tags=None, body_param_name=None, extra_params_json=None, rate_limit=None, rate_limit_key=None)
     )]
     #[allow(clippy::too_many_arguments)]
     fn add_route(
@@ -362,6 +363,8 @@ impl App {
         tags: Option<Bound<'_, PyList>>,
         body_param_name: Option<String>,
         extra_params_json: Option<String>,
+        rate_limit: Option<String>,
+        rate_limit_key: Option<String>,
     ) -> PyResult<()> {
         {
             let st = self.state.read();
@@ -441,6 +444,14 @@ impl App {
                 .filter_map(|name| dep_map.remove(&name))
                 .collect();
         }
+        let rate_limiter = if let Some(ref rl_str) = rate_limit {
+            let cfg = crate::rate_limit::RateLimitConfig::parse(rl_str, rate_limit_key.as_deref())
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))?;
+            Some(crate::rate_limit::RateLimiter::new(cfg))
+        } else {
+            None
+        };
+        let has_rate_limit = rate_limiter.is_some();
         let op_id: String = handler
             .bind(py)
             .getattr(pyo3::intern!(py, "__name__"))?
@@ -452,7 +463,8 @@ impl App {
             && !read_form_body
             && dependencies.is_empty()
             && !handler_varkw
-            && handler_param_names.is_empty();
+            && handler_param_names.is_empty()
+            && !has_rate_limit;
         let mut st = self.state.write();
         let routes = Arc::make_mut(&mut st.routes);
         let idx = routes.len();
@@ -464,6 +476,7 @@ impl App {
             dependencies: Arc::<[state::DependencyEntry]>::from(dependencies),
             handler_param_names: Arc::new(handler_param_names),
             body_param_name: body_param_name.unwrap_or_else(|| "json".to_string()),
+            rate_limiter,
         });
         routes.push(state::RouteEntry {
             handler,
@@ -475,6 +488,7 @@ impl App {
             read_form_body,
             handler_varkw,
             trivial_sync,
+            has_rate_limit,
         });
         let request_schema: Option<serde_json::Value> = match body_schema_json
             .as_deref()

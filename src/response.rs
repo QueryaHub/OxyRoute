@@ -51,6 +51,18 @@ pub async fn send_405_method_not_allowed(
     })
 }
 
+/// 429 Too Many Requests with IETF RateLimit and Retry-After headers (issue #162).
+pub async fn send_429_rate_limited(
+    protocol: &Py<PyAny>,
+    limit: u64,
+    reset_secs: u64,
+) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        send_429_rate_limited_sync(py, protocol, limit, reset_secs)?;
+        Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
+    })
+}
+
 /// RSGI `response_bytes` / `response_empty` with a full `[(name, value), ...]` header list.
 pub async fn send_with_headers(
     protocol: &Py<PyAny>,
@@ -283,6 +295,40 @@ pub fn send_405_method_not_allowed_sync(
     let h = PyList::new(py, [pair1, pair2])?;
     p.getattr("response_bytes")?
         .call1((405u16, h, b"Method Not Allowed" as &[u8]))?;
+    Ok(())
+}
+
+/// Sync 429 Too Many Requests with IETF RateLimit and Retry-After headers (issue #162).
+pub fn send_429_rate_limited_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    limit: u64,
+    reset_secs: u64,
+) -> PyResult<()> {
+    let p = protocol.bind(py);
+    let ct_key = pyo3::intern!(py, "content-type");
+    let ct_val = pyo3::intern!(py, "application/json; charset=utf-8");
+    let rl_limit_key = pyo3::intern!(py, "ratelimit-limit");
+    let rl_limit_val = PyString::new(py, &limit.to_string());
+    let rl_rem_key = pyo3::intern!(py, "ratelimit-remaining");
+    let rl_rem_val = pyo3::intern!(py, "0");
+    let rl_reset_key = pyo3::intern!(py, "ratelimit-reset");
+    let rl_reset_val = PyString::new(py, &reset_secs.to_string());
+    let retry_key = pyo3::intern!(py, "retry-after");
+    let retry_val = PyString::new(py, &reset_secs.to_string());
+
+    let pair1 = PyTuple::new(py, [ct_key.as_any(), ct_val.as_any()])?;
+    let pair2 = PyTuple::new(py, [rl_limit_key.as_any(), rl_limit_val.as_any()])?;
+    let pair3 = PyTuple::new(py, [rl_rem_key.as_any(), rl_rem_val.as_any()])?;
+    let pair4 = PyTuple::new(py, [rl_reset_key.as_any(), rl_reset_val.as_any()])?;
+    let pair5 = PyTuple::new(py, [retry_key.as_any(), retry_val.as_any()])?;
+    let h = PyList::new(py, [pair1, pair2, pair3, pair4, pair5])?;
+
+    p.getattr("response_bytes")?.call1((
+        429u16,
+        h,
+        b"{\"detail\":\"Too Many Requests\"}" as &[u8],
+    ))?;
     Ok(())
 }
 

@@ -660,6 +660,7 @@ pub async fn run_rsgi(
         handler_varkw,
         body_model,
         body_param_name,
+        rate_limiter,
     ) = Python::with_gil(|_py| -> PyResult<_> {
         let e = routes_arc
             .get(route_idx)
@@ -678,8 +679,18 @@ pub async fn run_rsgi(
             e.handler_varkw,
             e.body_model.clone(),
             e.extra.body_param_name.clone(),
+            e.extra.rate_limiter.clone(),
         ))
     })?;
+    if let Some(ref rl) = rate_limiter {
+        let key = Python::with_gil(|py| {
+            let s = scope.bind(py);
+            crate::rate_limit::extract_rate_limit_key(s, &rl.key_strategy)
+        });
+        if let crate::rate_limit::RateLimitDecision::Denied { limit, reset_secs } = rl.check(&key) {
+            return response::send_429_rate_limited(&protocol, limit, reset_secs).await;
+        }
+    }
     let may_need_raw_body = handler_varkw || handler_param_names.contains("body");
     let should_read_body = read_json_body || read_form_body || may_need_raw_body;
     let _ = Python::with_gil(|py| {
