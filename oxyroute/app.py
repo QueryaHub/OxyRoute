@@ -61,6 +61,94 @@ def _norm_dependencies(
     return [(n, _unwrap_dep(c)) for n, c in deps]
 
 
+def _norm_type_to_schema(t: Any) -> dict[str, Any]:
+    if t is int:
+        return {"type": "integer"}
+    if t is float:
+        return {"type": "number"}
+    if t is bool:
+        return {"type": "boolean"}
+    if t is str:
+        return {"type": "string"}
+    if isinstance(t, Mapping):
+        return dict(t)
+    return {"type": "string"}
+
+
+def _norm_extra_openapi_params(
+    parameters: list[Mapping[str, Any]] | None,
+    query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None,
+    header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None,
+) -> list[dict[str, Any]] | None:
+    res: list[dict[str, Any]] = []
+    if parameters:
+        for p in parameters:
+            res.append(dict(p))
+    if query_params:
+        if isinstance(query_params, Mapping):
+            for k, v in query_params.items():
+                res.append(
+                    {
+                        "name": str(k),
+                        "in": "query",
+                        "required": False,
+                        "schema": _norm_type_to_schema(v),
+                    }
+                )
+        elif isinstance(query_params, list):
+            for item in query_params:
+                if isinstance(item, str):
+                    res.append(
+                        {
+                            "name": item,
+                            "in": "query",
+                            "required": False,
+                            "schema": {"type": "string"},
+                        }
+                    )
+                elif isinstance(item, Mapping):
+                    d = dict(item)
+                    d.setdefault("in", "query")
+                    d.setdefault("required", False)
+                    if "schema" not in d and "type" in d:
+                        d["schema"] = {"type": d.pop("type")}
+                    elif "schema" not in d:
+                        d["schema"] = {"type": "string"}
+                    res.append(d)
+    if header_params:
+        if isinstance(header_params, Mapping):
+            for k, v in header_params.items():
+                res.append(
+                    {
+                        "name": str(k),
+                        "in": "header",
+                        "required": False,
+                        "schema": _norm_type_to_schema(v),
+                    }
+                )
+        elif isinstance(header_params, list):
+            for item in header_params:
+                if isinstance(item, str):
+                    res.append(
+                        {
+                            "name": item,
+                            "in": "header",
+                            "required": False,
+                            "schema": {"type": "string"},
+                        }
+                    )
+                elif isinstance(item, Mapping):
+                    d = dict(item)
+                    d.setdefault("in", "header")
+                    d.setdefault("required", False)
+                    if "schema" not in d and "type" in d:
+                        d["schema"] = {"type": d.pop("type")}
+                    elif "schema" not in d:
+                        d["schema"] = {"type": "string"}
+                    res.append(d)
+    return res if res else None
+
+
 def Depends(call: Callable[..., Any]) -> _oxyroute.PyDepends:
     """Marker for a dependency factory; used with ``dependencies=[("name", Depends(fn)), ...]``."""
     return _oxyroute.PyDepends(call)
@@ -264,6 +352,9 @@ class App:
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "GET",
@@ -279,6 +370,9 @@ class App:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def post(
@@ -298,6 +392,9 @@ class App:
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "POST",
@@ -315,6 +412,9 @@ class App:
             body_model=body_model,
             body_schema=body_schema,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def put(
@@ -334,6 +434,9 @@ class App:
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "PUT",
@@ -351,6 +454,9 @@ class App:
             body_model=body_model,
             body_schema=body_schema,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def patch(
@@ -370,6 +476,9 @@ class App:
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "PATCH",
@@ -387,6 +496,9 @@ class App:
             body_model=body_model,
             body_schema=body_schema,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def delete(
@@ -402,6 +514,9 @@ class App:
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "DELETE",
@@ -417,6 +532,9 @@ class App:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def websocket(self, path: str) -> Callable[[F], F]:
@@ -450,6 +568,9 @@ class App:
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._route(
             "OPTIONS",
@@ -465,6 +586,9 @@ class App:
             jwt_leeway=jwt_leeway,
             jwt_cookie=jwt_cookie,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def _route(
@@ -485,8 +609,13 @@ class App:
         body_model: Any | None = None,
         body_schema: Mapping[str, Any] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         dlist = _norm_dependencies(dependencies)
+        extra_params = _norm_extra_openapi_params(parameters, query_params, header_params)
+        extra_params_json = json.dumps(extra_params) if extra_params else None
 
         def wrap(handler: F) -> F:
             nonlocal body_model
@@ -568,6 +697,7 @@ class App:
                 target_body_model,
                 tags,
                 body_param_name,
+                extra_params_json,
             )
             return handler
 

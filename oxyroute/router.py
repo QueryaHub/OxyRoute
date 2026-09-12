@@ -91,6 +91,9 @@ class APIRouter:
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "GET",
@@ -104,6 +107,9 @@ class APIRouter:
             jwt_cookie=jwt_cookie,
             dependencies=dependencies,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def post(
@@ -123,6 +129,9 @@ class APIRouter:
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "POST",
@@ -140,6 +149,9 @@ class APIRouter:
             body_schema=body_schema,
             dependencies=dependencies,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def put(
@@ -159,6 +171,9 @@ class APIRouter:
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "PUT",
@@ -176,6 +191,9 @@ class APIRouter:
             body_schema=body_schema,
             dependencies=dependencies,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def patch(
@@ -195,6 +213,9 @@ class APIRouter:
         body_schema: Mapping[str, Any] | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "PATCH",
@@ -212,6 +233,9 @@ class APIRouter:
             body_schema=body_schema,
             dependencies=dependencies,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def delete(
@@ -227,6 +251,9 @@ class APIRouter:
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "DELETE",
@@ -240,6 +267,9 @@ class APIRouter:
             jwt_cookie=jwt_cookie,
             dependencies=dependencies,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
 
     def options(
@@ -255,6 +285,9 @@ class APIRouter:
         jwt_cookie: str | None = None,
         dependencies: list[tuple[str, Dep]] | None = None,
         tags: list[str] | None = None,
+        parameters: list[Mapping[str, Any]] | None = None,
+        query_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
+        header_params: list[str | Mapping[str, Any]] | Mapping[str, Any] | None = None,
     ) -> Callable[[F], F]:
         return self._reg(
             "OPTIONS",
@@ -268,4 +301,7 @@ class APIRouter:
             jwt_cookie=jwt_cookie,
             dependencies=dependencies,
             tags=tags,
+            parameters=parameters,
+            query_params=query_params,
+            header_params=header_params,
         )
