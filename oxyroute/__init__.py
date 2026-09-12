@@ -40,4 +40,4 @@ __all__ = [
     "stream_jsonl",
     "stream_text",
 ]
-__version__ = "0.5.0"
+__version__ = "0.6.0"

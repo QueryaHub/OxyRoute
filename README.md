@@ -7,14 +7,17 @@ High-performance web framework for **Granian RSGI**, tuned for high **single-wor
 ## Features
 
 - **RSGI** entrypoint (`async def __rsgi__(scope, protocol)`) compatible with Granian’s RSGI implementation
-- **Routing** via [matchit](https://crates.io/crates/matchit) (path parameters like `/users/:id`)
-- **JSON, form, and multipart bodies** parsed on the native path; successful values passed to handlers as kwargs
-- **JWT** verification on the Rust path before your handler runs (`require_jwt`, HS*, RSA, EC, EdDSA public-key verification)
-- **OpenAPI** `GET /openapi.json` plus optional Scalar/Swagger UI at `/docs`
-- **Dependencies**: linear list of named factories (`Depends`, sync or async) passed as kwargs
+- **Routing** via [matchit](https://crates.io/crates/matchit) (path parameters like `/users/:id`) with packed 64B cacheline entries and zero-allocation path param slicing
+- **Native Rate Limiting**: token bucket rate limiter in Rust on route decorators (`rate_limit="100/minute"`, `rate_limit_key="header:X-API-Key"`)
+- **JSON, form, and multipart bodies** parsed on the native path with thread-local buffer pooling; auto-inferred Pydantic `body_model` support
+- **PEP 590 Vectorcall**: direct Python handler invocation eliminating dictionary allocation on the hot path
+- **JWT** verification on the Rust path before your handler runs (`require_jwt`, HS*, RSA, EC, EdDSA public-key verification via `oxyjwt`)
+- **OpenAPI 3.1.0** `GET /openapi.json` with automatic 401/422 docs and optional Scalar/Swagger UI at `/docs`
+- **Dependencies**: DAG dependency resolution with cycle detection at registration (`Depends`, sync or async) passed as kwargs
+- **Resilience**: adaptive concurrency limiting and load shedding (`AdaptiveConcurrencyLimiter`)
 - **Optional middleware layers** for pre-route decisions, CORS, CSRF, and browser security headers
-- **Native RSGI WebSockets** via `@app.websocket(path)` and `oxyroute.WebSocket`
-- Native extension wheel (abi3) for **Python ≥ 3.10**
+- **Native RSGI WebSockets** via `@app.websocket(path)` and `oxyroute.WebSocket` with frame serialization and graceful shutdown notification
+- **Typed & Tested**: PEP 561 `py.typed` marker, complete `.pyi` stubs, and native extension wheel (abi3) for **Python ≥ 3.10**
 
 Start with the full **[Usage guide](docs/usage.md)**, or use **[docs/index.md](docs/index.md)** for topic-specific pages.
 
@@ -82,6 +85,7 @@ OxyRoute supports **only** Granian RSGI; the legacy ASGI bridge (`uvicorn` / `gr
 - [RSGI and Granian](docs/rsgi.md) — app entrypoint, lifespan hooks, worker process model
 - [Handlers](docs/handlers.md) — injected parameters and response mapping details
 - [Routing](docs/routing.md) — methods, path syntax, `APIRouter`, `freeze()`
+- [Rate Limiting](docs/rate-limiting.md) — native Token Bucket rate limiting on route decorators
 - [JWT](docs/jwt.md), [CORS](docs/cors.md), [CSRF](docs/csrf.md), [Security headers](docs/security-headers.md)
 - [WebSockets](docs/websocket.md) and [SSE](docs/sse.md)
 
