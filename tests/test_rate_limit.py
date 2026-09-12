@@ -1,5 +1,4 @@
 import asyncio
-from typing import Any
 
 import httpx
 from oxyroute import APIRouter, App
