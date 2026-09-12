@@ -11,6 +11,7 @@ use serde_json::json;
 mod buffer_pool;
 mod config;
 mod db;
+mod dependency;
 mod dispatch;
 mod form;
 mod params;
@@ -420,11 +421,25 @@ impl App {
         } else {
             (None, None)
         };
-        let dependencies = if let Some(d) = dependencies {
+        let mut dependencies = if let Some(d) = dependencies {
             parse_dependencies(py, &d)?
         } else {
             vec![]
         };
+        if !dependencies.is_empty() {
+            let graph = dependency::build_graph_from_entries(&dependencies);
+            let order = graph.topological_sort().map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("dependency cycle detected: {e}"))
+            })?;
+            let mut dep_map: std::collections::HashMap<String, state::DependencyEntry> = dependencies
+                .into_iter()
+                .map(|d| (d.name.clone(), d))
+                .collect();
+            dependencies = order
+                .into_iter()
+                .filter_map(|name| dep_map.remove(&name))
+                .collect();
+        }
         let op_id: String = handler
             .bind(py)
             .getattr(pyo3::intern!(py, "__name__"))?
