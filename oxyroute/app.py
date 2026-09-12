@@ -618,12 +618,14 @@ class App:
 
             start = time.perf_counter_ns()
             p = _ProtocolWrapper(protocol)
-            r = self._app.handle_rsgi(scope, p)
-            if r is not None and inspect.isawaitable(r):
-                await r
-            dur = (time.perf_counter_ns() - start) / 1000000.0
-            self.access_log_hook(scope, p.status, dur, p.__oxyroute_path_template__)
-            return r
+            try:
+                r = self._app.handle_rsgi(scope, p)
+                if r is not None and inspect.isawaitable(r):
+                    await r
+                return r
+            finally:
+                dur = (time.perf_counter_ns() - start) / 1000000.0
+                self.access_log_hook(scope, p.status, dur, p.__oxyroute_path_template__)
 
         r = self._app.handle_rsgi(scope, protocol)
         if r is None or not inspect.isawaitable(r):
