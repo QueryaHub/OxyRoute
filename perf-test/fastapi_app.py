@@ -1,9 +1,8 @@
 import contextlib
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 import asyncpg
+from fastapi import FastAPI
 
 DB_URI = "postgresql://postgres:postgres@127.0.0.1:5433/postgres"
 

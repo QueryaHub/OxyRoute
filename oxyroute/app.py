@@ -176,11 +176,14 @@ class App:
         openapi_contact: Mapping[str, Any] | None = None,
         openapi_servers: list[Mapping[str, Any]] | None = None,
         access_log_hook: Callable[[Any, int, float, str], None] | None = None,
+        max_concurrency: int | None = None,
     ) -> None:
         self._app = _oxyroute.App(include_openapi=include_openapi)
         self._app.set_openapi_title(title)
         if openapi_version != "3.1.0":
             self._app.set_openapi_version(openapi_version)
+        if max_concurrency is not None:
+            self._app.set_max_concurrency(max_concurrency)
         self.title = title
         self.access_log_hook = access_log_hook
         # Per-process mutable bag for ``on_startup`` / factory setup (DB pool, clients, …).
@@ -199,6 +202,18 @@ class App:
             )
         if self._docs_ui is not None:
             self.mount_docs("/docs", ui=self._docs_ui)
+
+    def set_max_concurrency(self, limit: int) -> None:
+        """Set maximum in-flight requests limit (0 to disable / unlimited)."""
+        self._app.set_max_concurrency(limit or 0)
+
+    def get_max_concurrency(self) -> int:
+        """Get the configured maximum concurrency limit (0 if unlimited)."""
+        return self._app.get_max_concurrency()
+
+    def get_in_flight(self) -> int:
+        """Get the current number of in-flight requests."""
+        return self._app.get_in_flight()
 
     def freeze(self) -> None:
         """After ``freeze()``, no more route registration (matches Rust app state)."""
