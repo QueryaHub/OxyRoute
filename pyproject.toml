@@ -5,15 +5,34 @@ build-backend = "maturin"
 [project]
 name = "oxyroute"
 version = "0.6.0"
-description = "RSGI-first web framework: routing, JSON, and JWT in Rust (PyO3), Python handlers"
+description = "High-performance RSGI web framework: Rust hot path (routing, JSON, rate limiting, JWT), Python handlers, OpenAPI 3.1, WebSockets"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
 license = { text = "MIT" }
-keywords = ["rsgi", "granian", "web", "async", "rust"]
+keywords = [
+    "rsgi",
+    "granian",
+    "fastapi",
+    "web-framework",
+    "async",
+    "rust",
+    "pyo3",
+    "openapi",
+    "rate-limiting",
+    "jwt",
+    "high-performance",
+    "websockets",
+    "api",
+    "microservice",
+]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: AsyncIO",
     "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -22,13 +41,19 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Rust",
+    "Topic :: Internet :: WWW/HTTP",
     "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
 ]
 
 [project.urls]
 Homepage = "https://github.com/QueryaHub/OxyRoute"
 Documentation = "https://github.com/QueryaHub/OxyRoute/blob/main/docs/index.md"
 Repository = "https://github.com/QueryaHub/OxyRoute"
+Changelog = "https://github.com/QueryaHub/OxyRoute/blob/main/CHANGELOG.md"
 Issues = "https://github.com/QueryaHub/OxyRoute/issues"
 
 [project.optional-dependencies]
