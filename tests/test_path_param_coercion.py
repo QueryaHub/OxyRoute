@@ -66,3 +66,24 @@ def test_path_parameter_coercion():
         resp = client.get("/items/false")
         assert resp.status_code == 200
         assert resp.json() == {"val": False, "type": "bool"}
+
+
+def test_wildcard_path_param_is_never_coerced():
+    """issue #212: a `*rest` catch-all always stays `str`, even for numeric-looking /
+    boolean-looking segments — only single-segment `:name` params get schema-lite coercion."""
+    app = App()
+
+    @app.get("/files/*rest")
+    def get_file(rest):
+        return {"rest": rest, "type": type(rest).__name__}
+
+    with TestClient(app) as client:
+        for value, expected in [
+            ("42", "42"),
+            ("true", "true"),
+            ("3.14", "3.14"),
+            ("a/b/42", "a/b/42"),
+        ]:
+            resp = client.get(f"/files/{value}")
+            assert resp.status_code == 200
+            assert resp.json() == {"rest": expected, "type": "str"}

@@ -88,6 +88,30 @@ fn handler_signature_kinds(
     Ok((names, w))
 }
 
+/// Names of `*name` catch-all path params in a matchit-style route template (as opposed to
+/// single-segment `:name` params). See [`state::RouteExtra::wildcard_params`].
+fn wildcard_param_names(path: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let chars: Vec<char> = path.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '*' {
+            i += 1;
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let name: String = chars[start..i].iter().collect();
+            if !name.is_empty() {
+                out.insert(name);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 fn parse_algorithm(s: &str) -> PyResult<jsonwebtoken::Algorithm> {
     jsonwebtoken::Algorithm::from_str(s).map_err(|_| {
         pyo3::exceptions::PyValueError::new_err(
@@ -477,6 +501,7 @@ impl App {
             handler_param_names: Arc::new(handler_param_names),
             body_param_name: body_param_name.unwrap_or_else(|| "json".to_string()),
             rate_limiter,
+            wildcard_params: Arc::new(wildcard_param_names(&path)),
         });
         routes.push(state::RouteEntry {
             handler,

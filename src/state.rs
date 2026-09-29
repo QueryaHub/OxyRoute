@@ -108,6 +108,12 @@ pub struct RouteExtra {
     pub handler_param_names: Arc<HashSet<String>>,
     pub body_param_name: String,
     pub rate_limiter: Option<Arc<crate::rate_limit::RateLimiter>>,
+    /// Path params captured by a `*name` catch-all segment (as opposed to a single-segment
+    /// `:name` param). A catch-all captures an arbitrary sub-path — potentially containing
+    /// slashes, and often a filename — so it must always reach the handler as `str`, never
+    /// coerced to `int`/`float`/`bool` (issue #212: this coercion previously broke
+    /// `StaticFiles` on any file whose name looked like a number, e.g. `/static/42`).
+    pub wildcard_params: Arc<HashSet<String>>,
 }
 
 /// Compact 32-byte route entry fitting comfortably inside a single 64-byte L1D cache line.

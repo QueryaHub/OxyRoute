@@ -634,6 +634,7 @@ pub async fn run_rsgi(
         body_model,
         body_param_name,
         rate_limiter,
+        wildcard_params,
     ) = Python::with_gil(|_py| -> PyResult<_> {
         let e = routes_arc
             .get(route_idx)
@@ -653,6 +654,7 @@ pub async fn run_rsgi(
             e.body_model.clone(),
             e.extra.body_param_name.clone(),
             e.extra.rate_limiter.clone(),
+            Arc::clone(&e.extra.wildcard_params),
         ))
     })?;
     if let Some(ref rl) = rate_limiter {
@@ -1111,7 +1113,14 @@ pub async fn run_rsgi(
         }
         let kwargs = PyDict::new(py);
         for (k, v) in params.iter() {
-            let vpy = value_for_path_param(py, v);
+            // A `*name` catch-all always stays `str` (it may contain slashes and is often a
+            // filename, e.g. under `StaticFiles`); only single-segment `:name` params get the
+            // int/float/bool schema-lite coercion (issue #212).
+            let vpy = if wildcard_params.contains(k) {
+                pyo3::types::PyString::new(py, v).into_any().unbind()
+            } else {
+                value_for_path_param(py, v)
+            };
             kwargs.set_item(k, vpy)?;
         }
         if !query_map.is_empty() {
