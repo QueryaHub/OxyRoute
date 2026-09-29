@@ -10,6 +10,10 @@ use pyo3::prelude::*;
 
 const NUM_SHARDS: usize = 16;
 const MAX_SHARD_ENTRIES: usize = 8192;
+/// Cap on the key string itself (issue #208): keys can come from client-controlled input
+/// (e.g. a forwarded-IP header value), so without a bound a single request could grow a
+/// shard's memory footprint arbitrarily via one oversized key.
+const MAX_KEY_LEN: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RateLimitKeyStrategy {
@@ -104,6 +108,18 @@ impl RateLimitConfig {
     }
 }
 
+/// Truncate `key` to `MAX_KEY_LEN` bytes on a valid UTF-8 boundary.
+fn truncate_key(key: &str) -> &str {
+    if key.len() <= MAX_KEY_LEN {
+        return key;
+    }
+    let mut end = MAX_KEY_LEN;
+    while end > 0 && !key.is_char_boundary(end) {
+        end -= 1;
+    }
+    &key[..end]
+}
+
 #[derive(Clone, Copy, Debug)]
 struct BucketState {
     tokens: f64,
@@ -125,6 +141,10 @@ pub enum RateLimitDecision {
 
 pub struct RateLimiter {
     pub limit: u64,
+    /// Kept for introspection alongside `limit`/`refill_rate_per_sec`; the eviction path no
+    /// longer reads it directly (see issue #208 — replaced the periodic `retain` sweep with
+    /// bounded per-shard eviction).
+    #[allow(dead_code)]
     pub window_secs: f64,
     pub refill_rate_per_sec: f64,
     pub key_strategy: RateLimitKeyStrategy,
@@ -152,13 +172,19 @@ impl RateLimiter {
     }
 
     pub fn check(&self, key: &str) -> RateLimitDecision {
+        let key = truncate_key(key);
         let now = Instant::now();
         let idx = self.shard_index(key);
         let mut shard = self.shards[idx].lock();
 
-        if shard.len() > MAX_SHARD_ENTRIES {
-            let expire_cutoff = self.window_secs * 2.0;
-            shard.retain(|_, v| (now - v.last_update).as_secs_f64() < expire_cutoff);
+        // Bound each shard's memory strictly: if this is a new key and the shard is already
+        // at capacity, evict one existing entry first instead of letting the map grow without
+        // limit (issue #208). This keeps `check` O(1) per request even under a flood of unique
+        // keys — no full-shard scan on the hot path, unlike the previous periodic `retain`.
+        if shard.len() >= MAX_SHARD_ENTRIES && !shard.contains_key(key) {
+            if let Some(evict) = shard.keys().next().cloned() {
+                shard.remove(&evict);
+            }
         }
 
         let limit_f64 = self.limit as f64;
@@ -352,5 +378,49 @@ mod tests {
             }
             RateLimitDecision::Denied { .. } => panic!("should be allowed"),
         }
+    }
+
+    #[test]
+    fn test_shard_bounded_under_unique_key_flood() {
+        // issue #208: a flood of unique keys must not grow a shard's map past
+        // MAX_SHARD_ENTRIES, and `check` must keep working (not panic/hang) throughout.
+        let config = RateLimitConfig {
+            limit: 5,
+            window_secs: 60.0,
+            key_strategy: RateLimitKeyStrategy::Ip,
+        };
+        let limiter = RateLimiter::new(config);
+
+        for i in 0..(MAX_SHARD_ENTRIES * NUM_SHARDS * 2) {
+            let key = format!("unique-key-{i}");
+            limiter.check(&key);
+        }
+
+        for shard in &limiter.shards {
+            assert!(
+                shard.lock().len() <= MAX_SHARD_ENTRIES,
+                "shard grew past MAX_SHARD_ENTRIES"
+            );
+        }
+    }
+
+    #[test]
+    fn test_key_length_is_capped() {
+        let config = RateLimitConfig {
+            limit: 5,
+            window_secs: 60.0,
+            key_strategy: RateLimitKeyStrategy::Ip,
+        };
+        let limiter = RateLimiter::new(config);
+
+        let huge_key = "x".repeat(1_000_000);
+        limiter.check(&huge_key);
+
+        let total_len: usize = limiter
+            .shards
+            .iter()
+            .flat_map(|s| s.lock().keys().map(|k| k.len()).collect::<Vec<_>>())
+            .sum();
+        assert!(total_len <= MAX_KEY_LEN);
     }
 }
