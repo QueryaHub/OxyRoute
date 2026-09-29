@@ -13,7 +13,14 @@ const MAX_SHARD_ENTRIES: usize = 8192;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RateLimitKeyStrategy {
+    /// The actual TCP peer address (``scope.client``). Cannot be spoofed by the client —
+    /// the safe default.
     Ip,
+    /// `X-Forwarded-For` / `X-Real-IP`, falling back to ``scope.client``. **Only safe behind
+    /// a trusted reverse proxy that overwrites these headers** — otherwise any client can pick
+    /// its own rate-limit bucket, or frame another client's IP, by setting the header itself
+    /// (issue #207). Opt in explicitly with ``rate_limit_key="trusted-forwarded-ip"``.
+    TrustedForwardedIp,
     Header(String),
     Global,
 }
@@ -23,6 +30,10 @@ impl RateLimitKeyStrategy {
         let trimmed = s.trim();
         if trimmed.eq_ignore_ascii_case("ip") || trimmed.eq_ignore_ascii_case("client") {
             Self::Ip
+        } else if trimmed.eq_ignore_ascii_case("trusted-forwarded-ip")
+            || trimmed.eq_ignore_ascii_case("forwarded-ip")
+        {
+            Self::TrustedForwardedIp
         } else if trimmed.eq_ignore_ascii_case("global") {
             Self::Global
         } else if let Some(hdr) = trimmed.strip_prefix("header:") {
@@ -192,6 +203,37 @@ impl RateLimiter {
     }
 }
 
+/// Read the peer address off ``scope.client``. Granian's RSGI scope exposes this as a
+/// ``"host:port"`` string; the ASGI bridge / test scopes expose an ASGI-style ``(host, port)``
+/// tuple. Handles both so the "safe" strategies below get the real peer, not (e.g.) the first
+/// character of a ``"host:port"`` string via a stray ``__getitem__``.
+fn scope_client_host(scope: &pyo3::Bound<'_, pyo3::PyAny>) -> Option<String> {
+    let client = scope.getattr("client").ok()?;
+    if let Ok(s) = client.extract::<String>() {
+        if s.is_empty() {
+            return None;
+        }
+        // "host:port" (IPv4) or "[::1]:port" (IPv6) — split off the trailing ":port".
+        if let Some(rest) = s.strip_prefix('[') {
+            if let Some(end) = rest.find(']') {
+                return Some(format!("[{}]", &rest[..end]));
+            }
+        }
+        return match s.rsplit_once(':') {
+            Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => {
+                Some(host.to_string())
+            }
+            _ => Some(s),
+        };
+    }
+    if let Ok(item) = client.get_item(0) {
+        if let Ok(ip) = item.extract::<String>() {
+            return Some(ip);
+        }
+    }
+    None
+}
+
 /// Extract rate limit key from Granian / ASGI scope based on strategy.
 pub fn extract_rate_limit_key(
     scope: &pyo3::Bound<'_, pyo3::PyAny>,
@@ -208,6 +250,12 @@ pub fn extract_rate_limit_key(
             "unknown".to_string()
         }
         RateLimitKeyStrategy::Ip => {
+            if let Some(ip) = scope_client_host(scope) {
+                return ip;
+            }
+            "127.0.0.1".to_string()
+        }
+        RateLimitKeyStrategy::TrustedForwardedIp => {
             if let Ok(headers) = scope.getattr("headers") {
                 if let Some(xf) = crate::params::header_get_lax(&headers, "x-forwarded-for") {
                     if let Some(first_ip) = xf.split(',').next() {
@@ -224,12 +272,8 @@ pub fn extract_rate_limit_key(
                     }
                 }
             }
-            if let Ok(client) = scope.getattr("client") {
-                if let Ok(item) = client.get_item(0) {
-                    if let Ok(ip) = item.extract::<String>() {
-                        return ip;
-                    }
-                }
+            if let Some(ip) = scope_client_host(scope) {
+                return ip;
             }
             "127.0.0.1".to_string()
         }

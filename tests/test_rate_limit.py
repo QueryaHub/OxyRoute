@@ -45,9 +45,11 @@ def test_native_token_bucket_rate_limiter() -> None:
             assert int(r3.headers.get("ratelimit-reset", "0")) >= 1
             assert int(r3.headers.get("retry-after", "0")) >= 1
 
-            # Different IP (via x-forwarded-for) is not blocked
-            r_other_ip = await c.get("/limited", headers={"x-forwarded-for": "198.51.100.1"})
-            assert r_other_ip.status_code == 200
+            # Default "ip" strategy keys on the real peer address, not a client-supplied
+            # X-Forwarded-For (issue #207): the header must NOT let a client escape the
+            # bucket it's already exhausted.
+            r_spoofed = await c.get("/limited", headers={"x-forwarded-for": "198.51.100.1"})
+            assert r_spoofed.status_code == 429
 
             # 2. Header-keyed rate limiting
             rh1 = await c.get("/custom-header", headers={"x-api-key": "client-A"})
@@ -68,5 +70,30 @@ def test_native_token_bucket_rate_limiter() -> None:
             assert rr2.status_code == 200
             rr3 = await c.get("/api/sub")
             assert rr3.status_code == 429
+
+    asyncio.run(_run())
+
+
+def test_trusted_forwarded_ip_opt_in() -> None:
+    """``rate_limit_key=\"trusted-forwarded-ip\"`` opts into honoring X-Forwarded-For /
+    X-Real-IP — only safe behind a reverse proxy that overwrites those headers (issue #207)."""
+    app = App()
+
+    @app.get("/limited", rate_limit="1/minute", rate_limit_key="trusted-forwarded-ip")
+    def handle_limited() -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def _run() -> None:
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r1 = await c.get("/limited", headers={"x-forwarded-for": "203.0.113.1"})
+            assert r1.status_code == 200
+
+            r2 = await c.get("/limited", headers={"x-forwarded-for": "203.0.113.1"})
+            assert r2.status_code == 429
+
+            # A different forwarded IP gets its own bucket.
+            r3 = await c.get("/limited", headers={"x-forwarded-for": "203.0.113.2"})
+            assert r3.status_code == 200
 
     asyncio.run(_run())
