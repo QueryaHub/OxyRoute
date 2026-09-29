@@ -136,12 +136,15 @@ def apply_cors(
 ) -> None:
     """
     Register CORS: stores ``config`` for native response merging and installs preflight
-    handling via :meth:`oxyroute.app.App.set_middleware`. If you already use middleware for
+    handling via :meth:`oxyroute.app.App.add_middleware`. If you already use middleware for
     other work, pass it as ``chain`` so it runs when the request is not a CORS preflight
     (your handler runs after the CORS layer returns ``None`` for continuation).
 
-    **Order:** this replaces ``set_middleware`` with an internal function. To combine with
-    another pre-route callback, use ``apply_cors(..., chain=your_middleware)``.
+    **Order:** this *appends* a request middleware rather than replacing the stack, so it
+    composes with anything already registered via :meth:`oxyroute.app.App.add_middleware`
+    (including another :func:`apply_cors` / :func:`oxyroute.csrf.apply_csrf` call) instead of
+    silently deleting it (issue #209). To combine with another pre-route callback that must run
+    strictly after the CORS preflight check, use ``apply_cors(..., chain=your_middleware)``.
     """
     app.set_cors(config)
 
@@ -153,4 +156,4 @@ def apply_cors(
             return chain(scope, protocol)
         return None
 
-    app.set_middleware(_cors_middleware)
+    app.add_middleware(_cors_middleware, phase="request")
