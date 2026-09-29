@@ -748,9 +748,14 @@ impl App {
                 .map_err(|e| {
                     pyo3::exceptions::PyRuntimeError::new_err(format!("DB connect error: {}", e))
                 })?;
-            let mut st = state.write();
-            st.db_pool = Some(pool);
-            st.rebuild_snapshot();
+            // GIL before the write lock (see the comment on `ensure_compiled_snapshot` in
+            // dispatch.rs / issue #205): this future runs on a tokio worker thread without
+            // the GIL, and `rebuild_snapshot` needs it to clone `Py<PyAny>` handles.
+            Python::with_gil(|_py| {
+                let mut st = state.write();
+                st.db_pool = Some(pool);
+                st.rebuild_snapshot();
+            });
             Ok(())
         })
     }
@@ -759,12 +764,12 @@ impl App {
     fn close_database<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let state = self.state.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let pool = {
+            let pool = Python::with_gil(|_py| {
                 let mut st = state.write();
                 let p = st.db_pool.take();
                 st.rebuild_snapshot();
                 p
-            };
+            });
             if let Some(p) = pool {
                 p.close().await;
             }

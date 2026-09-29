@@ -314,12 +314,17 @@ fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) -> Arc<CompiledRouter
     if let Some(c) = state.read().compiled.as_ref() {
         return Arc::clone(c);
     }
-    let mut st = state.write();
-    if st.compiled.is_none() {
-        st.compiled = Some(Arc::new(st.snapshot_routers()));
-        st.rebuild_snapshot();
-    }
-    Arc::clone(st.compiled.as_ref().expect("just populated"))
+    // Acquire the GIL *before* the write lock: `rebuild_snapshot` needs the GIL to clone
+    // `Py<PyAny>` handles, and taking a Rust lock first would let another thread hold the
+    // GIL while blocked on this same lock — classic AB-BA deadlock (issue #205).
+    Python::with_gil(|_py| {
+        let mut st = state.write();
+        if st.compiled.is_none() {
+            st.compiled = Some(Arc::new(st.snapshot_routers()));
+            st.rebuild_snapshot();
+        }
+        Arc::clone(st.compiled.as_ref().expect("just populated"))
+    })
 }
 
 /// Synchronous RSGI handling for **openapi**, **404**, **405**, and **trivial matched routes**:
