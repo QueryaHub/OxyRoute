@@ -190,6 +190,9 @@ class App:
         self.state: SimpleNamespace = SimpleNamespace()
         self._docs_ui: str | None = normalize_docs_ui(docs_ui)
         self._docs_mounted: bool = False
+        # Tracks request-middleware count so `set_middleware` can warn before it silently
+        # clobbers anything registered via `add_middleware` (issue #209).
+        self._request_mw_count: int = 0
         if (
             openapi_description is not None
             or openapi_contact is not None
@@ -331,8 +334,37 @@ class App:
         (e.g. :class:`oxyroute.Response` or a ``dict`` with ``status`` / ``body`` / ``headers``);
         the response is sent and routing / body read is skipped. Runs **before** the request
         body is read (e.g. for CORS preflight).
+
+        **Replaces** the entire request-middleware stack, including anything registered via
+        :meth:`add_middleware` (or :func:`oxyroute.cors.apply_cors` / :func:`oxyroute.csrf.apply_csrf`,
+        which use :meth:`add_middleware` internally). Prefer :meth:`add_middleware` to compose
+        multiple middlewares instead of replacing what is already registered (issue #209).
         """
+        if handler is not None and self._request_mw_count > 0:
+            import warnings
+
+            warnings.warn(
+                f"set_middleware() is replacing {self._request_mw_count} already-registered "
+                "request middleware(s) (e.g. from add_middleware/apply_cors/apply_csrf). "
+                "Use add_middleware() instead to compose middlewares without clobbering them.",
+                stacklevel=2,
+            )
         self._app.set_middleware(handler)
+        self._request_mw_count = 1 if handler is not None else 0
+
+    def add_middleware(self, handler: Callable[..., Any], phase: str = "request") -> None:
+        """
+        Append ``handler`` to the middleware stack instead of replacing it.
+
+        ``phase`` is one of ``"request"`` (runs before routing, same contract as
+        :meth:`set_middleware`), ``"response"`` (runs on the outgoing response, before
+        CORS / security-header merging), or ``"both"``. Request middlewares run in
+        registration order; the first one to return a non-``None`` value short-circuits
+        the rest and is sent as the response.
+        """
+        if phase in ("request", "both"):
+            self._request_mw_count += 1
+        self._app.add_middleware(handler, phase)
 
     def set_cors(self, config: Any | None) -> None:
         """
