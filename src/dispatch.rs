@@ -1341,27 +1341,11 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
     if is_oxyroute_response(py, b)? {
         return structured_from_response_attrs(py, b);
     }
-    if let Ok(s) = b.extract::<String>() {
-        return Ok(HandlerMap::Simple {
-            status: 200,
-            body: SimpleBody::Owned(s.into_bytes()),
-            content_type: "text/plain; charset=utf-8".to_string(),
-        });
-    }
-    if let Ok(s) = b.extract::<&str>() {
-        return Ok(HandlerMap::Simple {
-            status: 200,
-            body: SimpleBody::Owned(s.as_bytes().to_vec()),
-            content_type: "text/plain; charset=utf-8".to_string(),
-        });
-    }
-    if let Ok(buf) = b.extract::<Vec<u8>>() {
-        return Ok(HandlerMap::Simple {
-            status: 200,
-            body: SimpleBody::Owned(buf),
-            content_type: "application/octet-stream".to_string(),
-        });
-    }
+    // `dict` / `list` are JSON payloads by convention, not raw byte sequences — this must run
+    // *before* the `String` / `Vec<u8>` coercion attempts below. pyo3 happily extracts any
+    // Python sequence of small ints (including `[]`) as `Vec<u8>`, so without this a JSON
+    // handler return like `[]` or `[1, 2, 3]` was silently reinterpreted as raw bytes with
+    // `content-type: application/octet-stream` instead of being JSON-serialized (issue #211).
     if let Ok(d) = b.downcast::<PyDict>() {
         let h = d.get_item("headers")?;
         let c = d.get_item("cookies")?;
@@ -1380,13 +1364,44 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
         let st = d.get_item("status")?;
         let bd = d.get_item("body")?;
         if let (Some(sc), Some(body)) = (st, bd) {
-            if let (Ok(code), Ok(bstr)) = (sc.extract::<u16>(), body.str()) {
-                return Ok(HandlerMap::Simple {
-                    status: code,
-                    body: SimpleBody::Owned(bstr.to_string().into_bytes()),
-                    content_type: "text/plain; charset=utf-8".to_string(),
-                });
+            // Require a plausible HTTP status code (100-599, RFC 9110 §15) before treating this
+            // dict as a structured response — a plain JSON payload that happens to also have
+            // "status" and "body" keys (e.g. `{"status": 1, "body": "x"}`) must round-trip as
+            // data, not be reinterpreted as an HTTP response with status 1 (issue #211).
+            if let Ok(code) = sc.extract::<u16>() {
+                if (100..=599).contains(&code) {
+                    if let Ok(bstr) = body.str() {
+                        return Ok(HandlerMap::Simple {
+                            status: code,
+                            body: SimpleBody::Owned(bstr.to_string().into_bytes()),
+                            content_type: "text/plain; charset=utf-8".to_string(),
+                        });
+                    }
+                }
             }
+        }
+        // Not a structured response shape — fall through to JSON serialization below.
+    } else if !b.is_instance_of::<PyList>() {
+        if let Ok(s) = b.extract::<String>() {
+            return Ok(HandlerMap::Simple {
+                status: 200,
+                body: SimpleBody::Owned(s.into_bytes()),
+                content_type: "text/plain; charset=utf-8".to_string(),
+            });
+        }
+        if let Ok(s) = b.extract::<&str>() {
+            return Ok(HandlerMap::Simple {
+                status: 200,
+                body: SimpleBody::Owned(s.as_bytes().to_vec()),
+                content_type: "text/plain; charset=utf-8".to_string(),
+            });
+        }
+        if let Ok(buf) = b.extract::<Vec<u8>>() {
+            return Ok(HandlerMap::Simple {
+                status: 200,
+                body: SimpleBody::Owned(buf),
+                content_type: "application/octet-stream".to_string(),
+            });
         }
     }
     let jmod = py.import("json")?;
