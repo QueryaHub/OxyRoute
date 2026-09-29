@@ -705,6 +705,31 @@ pub async fn run_rsgi(
             routes_arc[route_idx].extra.path_template.clone(),
         )
     });
+    let max = form::max_body_bytes();
+    if should_read_body {
+        // Reject an oversized declared body *before* awaiting `protocol()` — Granian's
+        // `protocol()` reads the whole body into memory in one shot, so checking the limit
+        // only after that read still lets an attacker force a multi-GB allocation per request
+        // (issue #206). A `Content-Length` over the limit is rejected up front; bodies sent
+        // without `Content-Length` (e.g. chunked transfer-encoding) still fall through to the
+        // post-read check below.
+        let declared_len: Option<u64> = Python::with_gil(|py| {
+            let s = scope.bind(py);
+            let headers = s.getattr("headers").ok()?;
+            header_get_lax(&headers, "content-length")?.parse().ok()
+        });
+        if let Some(len) = declared_len {
+            if len > max {
+                return response::send_text(
+                    &protocol,
+                    413,
+                    r#"{"error":"payload too large"}"#,
+                    "application/json; charset=utf-8",
+                )
+                .await;
+            }
+        }
+    }
     let mut body_bytes: PooledBuffer = if should_read_body {
         let read_fut = Python::with_gil(|py| {
             let p = protocol.bind(py);
@@ -726,7 +751,6 @@ pub async fn run_rsgi(
             }
             Ok(())
         })?;
-        let max = form::max_body_bytes();
         if (body.len() as u64) > max {
             return response::send_text(
                 &protocol,
