@@ -83,55 +83,105 @@ fn decode_pg_row_to_dict<'py>(
     let d = PyDict::new(py);
     for (i, col) in row.columns().iter().enumerate() {
         let name = col.name();
-        let val_ref = row.try_get_raw(i).unwrap();
+        let val_ref = row.try_get_raw(i).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Failed to get raw column '{}' at index {}: {}",
+                name, i, e
+            ))
+        })?;
         if val_ref.is_null() {
             d.set_item(name, py.None())?;
             continue;
         }
-        let info = val_ref.type_info();
+        let info = col.type_info();
         let ty = info.name();
+
+        macro_rules! decode_val {
+            ($ty_dest:ty) => {
+                sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).map_err(|e| {
+                    pyo3::exceptions::PyValueError::new_err(format!(
+                        "Failed to decode column '{}' (type {}) as {}: {}",
+                        name,
+                        ty,
+                        stringify!($ty_dest),
+                        e
+                    ))
+                })?
+            };
+        }
+
         match ty {
             "BOOL" => {
-                let v: bool = sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                let v: bool = decode_val!(bool);
                 d.set_item(name, v)?;
             }
             "INT2" => {
-                let v: i16 = sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                let v: i16 = decode_val!(i16);
                 d.set_item(name, v)?;
             }
             "INT4" => {
-                let v: i32 = sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                let v: i32 = decode_val!(i32);
                 d.set_item(name, v)?;
             }
             "INT8" => {
-                let v: i64 = sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                let v: i64 = decode_val!(i64);
                 d.set_item(name, v)?;
             }
             "FLOAT4" => {
-                let v: f32 = sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                let v: f32 = decode_val!(f32);
                 d.set_item(name, v)?;
             }
             "FLOAT8" => {
-                let v: f64 = sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                let v: f64 = decode_val!(f64);
                 d.set_item(name, v)?;
             }
-            "TEXT" | "VARCHAR" | "CHAR" | "\"CHAR\"" | "NAME" => {
-                let v: String = sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+            "NUMERIC" | "DECIMAL" => {
+                let v: rust_decimal::Decimal = decode_val!(rust_decimal::Decimal);
+                d.set_item(name, v.to_string())?;
+            }
+            "TEXT" | "VARCHAR" | "CHAR" | "\"CHAR\"" | "NAME" | "CITEXT" | "BPCHAR" => {
+                let v: String = decode_val!(String);
                 d.set_item(name, v)?;
             }
             "JSON" | "JSONB" => {
-                let v: serde_json::Value =
-                    sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref).unwrap();
+                let v: serde_json::Value = decode_val!(serde_json::Value);
                 let py_v = crate::schema::json_to_py(py, &v)?;
                 d.set_item(name, py_v)?;
             }
+            "UUID" => {
+                let v: uuid::Uuid = decode_val!(uuid::Uuid);
+                d.set_item(name, v.to_string())?;
+            }
+            "DATE" => {
+                let v: chrono::NaiveDate = decode_val!(chrono::NaiveDate);
+                d.set_item(name, v.to_string())?;
+            }
+            "TIME" | "TIMETZ" => {
+                let v: chrono::NaiveTime = decode_val!(chrono::NaiveTime);
+                d.set_item(name, v.to_string())?;
+            }
+            "TIMESTAMP" => {
+                let v: chrono::NaiveDateTime = decode_val!(chrono::NaiveDateTime);
+                d.set_item(name, v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())?;
+            }
+            "TIMESTAMPTZ" => {
+                let v: chrono::DateTime<chrono::Utc> = decode_val!(chrono::DateTime<chrono::Utc>);
+                d.set_item(name, v.to_rfc3339())?;
+            }
+            "BYTEA" => {
+                let v: Vec<u8> = decode_val!(Vec<u8>);
+                d.set_item(name, pyo3::types::PyBytes::new(py, &v))?;
+            }
             _ => {
-                // Fallback: try as string
+                // Fallback: try as string if possible
                 if let Ok(v) = sqlx::Decode::<'_, sqlx::Postgres>::decode(val_ref) {
                     let s: String = v;
                     d.set_item(name, s)?;
                 } else {
-                    d.set_item(name, py.None())?;
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "Failed to decode column '{}' (unsupported Postgres type '{}')",
+                        name, ty
+                    )));
                 }
             }
         }
@@ -143,7 +193,9 @@ pub async fn execute_query(pool: &sqlx::PgPool, db_query: &DBQuery) -> PyResult<
     let q = sqlx::query(sqlx::AssertSqlSafe(db_query.query.as_str()));
     let q = Python::with_gil(|py| -> PyResult<_> {
         let mut q = q;
-        let args_tuple = db_query.args.bind(py).downcast::<PyTuple>().unwrap();
+        let args_tuple = db_query.args.bind(py).downcast::<PyTuple>().map_err(|e| {
+            pyo3::exceptions::PyTypeError::new_err(format!("Expected args to be a tuple: {}", e))
+        })?;
 
         for arg in args_tuple.iter() {
             if arg.is_none() {
