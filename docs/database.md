@@ -60,6 +60,24 @@ The native Rust executor automatically maps and type-checks the following Python
 | `str` | `TEXT`, `VARCHAR`, `CHAR` |
 | `dict` / `list` | `JSON`, `JSONB` |
 
+### Supported Result Decoding Types
+
+Rows returned from `DBQuery` are decoded into Python `dict`s according to their Postgres column type:
+
+| Postgres Type | Decoded Python Type / Representation |
+|---|---|
+| `NULL` | `None` |
+| `BOOL` | `bool` |
+| `INT2`, `INT4`, `INT8` | `int` |
+| `FLOAT4`, `FLOAT8` | `float` |
+| `NUMERIC`, `DECIMAL` | `str` (exact decimal representation) |
+| `TEXT`, `VARCHAR`, `CHAR`, `NAME`, `CITEXT` | `str` |
+| `JSON`, `JSONB` | `dict` / `list` / primitive |
+| `UUID` | `str` (canonical UUID format) |
+| `DATE`, `TIME`, `TIMETZ` | `str` (ISO-8601 date/time) |
+| `TIMESTAMP`, `TIMESTAMPTZ` | `str` (ISO-8601 timestamp) |
+| `BYTEA` | `bytes` |
+
 ---
 
 ## Database Connection Pool Lifecycle
