@@ -2113,7 +2113,7 @@ async fn run_rsgi_websocket(
     };
 
     let call_result = Python::with_gil(|py| -> PyResult<(PyObject, bool)> {
-        let ws = WebSocket::new(protocol.clone_ref(py), scope.clone_ref(py), path_params);
+        let ws = WebSocket::new(py, protocol.clone_ref(py), scope.clone_ref(py), path_params)?;
         let py_ws = Py::new(py, ws)?;
         let res = handler.bind(py).call1((py_ws,))?.unbind();
         Ok((res, is_async))

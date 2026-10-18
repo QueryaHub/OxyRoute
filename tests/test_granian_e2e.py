@@ -219,6 +219,12 @@ def test_granian_rsgi_post_json_body_with_access_log_hook() -> None:
                 with httpx.Client(timeout=1.0) as c:
                     r = c.post(f"http://127.0.0.1:{port}/echo", json={"n": 42})
                 if r.status_code == 200 and r.text == "n:42":
+                    for _ in range(50):
+                        if os.path.exists(log_file):
+                            with open(log_file, encoding="utf-8") as lf:
+                                if "200:/echo" in lf.read():
+                                    return
+                        time.sleep(0.05)
                     with open(log_file, encoding="utf-8") as lf:
                         lines = lf.read()
                     assert "200:/echo" in lines
