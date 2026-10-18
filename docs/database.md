@@ -99,13 +99,16 @@ async def shutdown():
 
 ---
 
-## Streaming & Chunked Row Decoding
+## Batched & Chunked Row Decoding
 
 For large result sets, `DBQuery` streams row decoding directly from the PostgreSQL socket without accumulating unmanaged `PgRow` structs in Rust memory (issue #143).
 
-You can also pass `chunk_size` to group rows into batches:
+You can also pass `chunk_size` to group rows into batches (a list of row chunks `list[list[dict]]`):
 
 ```python
-# Stream rows in chunks of 500
+# Group rows in batches of 500: [[row1, ...], [row501, ...]]
 query = DBQuery("SELECT * FROM large_log_table WHERE timestamp > $1", (since,), chunk_size=500)
 ```
+
+> [!NOTE]
+> `chunk_size` groups rows into sub-lists for bulk processing in handlers. The complete list of chunks is materialized in memory when the query resolves.
