@@ -37,7 +37,22 @@ app.mount_docs("/api/docs", ui="swagger")
 | `mount_docs(path, ui=...)` | Mount at a custom path |
 | Spec URL | Built-in `/openapi.json` |
 
-UI scripts load from **jsDelivr**. If you use `SecurityHeadersConfig` (or a strict CSP), allow `cdn.jsdelivr.net` in `script-src` / `style-src` for the docs route, or disable those headers on `/docs`.
+UI scripts load from **jsDelivr** with pinned release versions and Subresource Integrity (SRI) hashes (`integrity="..."`, `crossorigin="anonymous"`) to protect against CDN or upstream supply-chain tampering:
+- **Scalar**: pinned to `@scalar/api-reference@1.75.0`
+- **Swagger UI**: pinned to `swagger-ui-dist@5.33.3`
+
+If you use `SecurityHeadersConfig` (or a strict CSP), allow `cdn.jsdelivr.net` in `script-src` / `style-src` for the docs route, or disable those headers on `/docs`.
+
+To self-host documentation assets without third-party CDN dependencies, pass custom URLs and optional SRI hashes to `app.mount_docs`:
+
+```python
+app.mount_docs(
+    "/docs",
+    ui="swagger",
+    swagger_css_url="/static/swagger-ui.css",
+    swagger_js_url="/static/swagger-ui-bundle.js",
+)
+```
 
 ## Title, version, info, and servers
 
