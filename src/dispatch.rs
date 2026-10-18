@@ -15,7 +15,7 @@ use crate::config;
 use crate::form::{self, ParsedFile};
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
 use crate::response;
-use crate::schema::json_to_py;
+use crate::schema::{json_to_py, py_to_json_bytes_or_fallback};
 use crate::state::{
     match_route_compiled, match_ws_route_compiled, methods_matching_path_compiled,
     route_is_trivial_sync, AppState, CompiledRouters, HotSnapshot, RouteEntry,
@@ -1342,6 +1342,58 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
             content_type: "application/octet-stream".to_string(),
         });
     }
+    // Hot path: check `PyDict` / `PyList` early (issue #217). Neither can be a stream sentinel
+    // or an `oxyroute.Response` dataclass. Checking them before `getattr("__oxyroute_stream_done__")`
+    // eliminates the `AttributeError` exception machinery on every JSON response.
+    if let Ok(d) = b.downcast::<PyDict>() {
+        if let Some(st) = d.get_item("status")? {
+            if let Some(bd) = d.get_item("body")? {
+                let h = d.get_item("headers")?;
+                let c = d.get_item("cookies")?;
+                if h.is_some() || c.is_some() {
+                    return structured_from_status_body(py, &st, &bd, h, c);
+                }
+                // Require a plausible HTTP status code (100-599, RFC 9110 §15) before treating this
+                // dict as a structured response — a plain JSON payload that happens to also have
+                // "status" and "body" keys (e.g. `{"status": 1, "body": "x"}`) must round-trip as
+                // data, not be reinterpreted as an HTTP response with status 1 (issue #211).
+                if let Ok(code) = st.extract::<u16>() {
+                    if (100..=599).contains(&code) {
+                        if let Ok(bstr) = bd.str() {
+                            return Ok(HandlerMap::Simple {
+                                status: code,
+                                body: SimpleBody::Owned(bstr.to_string().into_bytes()),
+                                content_type: "text/plain; charset=utf-8".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        // Not a structured response shape — serialize directly to JSON.
+        let bytes = py_to_json_bytes_or_fallback(py, b)?;
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: SimpleBody::Owned(bytes),
+            content_type: "application/json; charset=utf-8".to_string(),
+        });
+    }
+    if b.downcast::<PyList>().is_ok() {
+        let bytes = py_to_json_bytes_or_fallback(py, b)?;
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: SimpleBody::Owned(bytes),
+            content_type: "application/json; charset=utf-8".to_string(),
+        });
+    }
+    if b.downcast::<PyTuple>().is_ok() {
+        let bytes = py_to_json_bytes_or_fallback(py, b)?;
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: SimpleBody::Owned(bytes),
+            content_type: "application/json; charset=utf-8".to_string(),
+        });
+    }
     if b.getattr("__oxyroute_stream_done__")
         .and_then(|x| x.extract::<bool>())
         .unwrap_or(false)
@@ -1353,75 +1405,31 @@ fn map_handler_return(py: Python<'_>, out: &Py<PyAny>) -> PyResult<HandlerMap> {
     if is_oxyroute_response(py, b)? {
         return structured_from_response_attrs(py, b);
     }
-    // `dict` / `list` are JSON payloads by convention, not raw byte sequences — this must run
-    // *before* the `String` / `Vec<u8>` coercion attempts below. pyo3 happily extracts any
-    // Python sequence of small ints (including `[]`) as `Vec<u8>`, so without this a JSON
-    // handler return like `[]` or `[1, 2, 3]` was silently reinterpreted as raw bytes with
-    // `content-type: application/octet-stream` instead of being JSON-serialized (issue #211).
-    if let Ok(d) = b.downcast::<PyDict>() {
-        let h = d.get_item("headers")?;
-        let c = d.get_item("cookies")?;
-        let has_structured = h.is_some() || c.is_some();
-        if has_structured {
-            if let (Some(st), Some(bd)) = (d.get_item("status")?, d.get_item("body")?) {
-                return structured_from_status_body(
-                    py,
-                    &st,
-                    &bd,
-                    d.get_item("headers")?,
-                    d.get_item("cookies")?,
-                );
-            }
-        }
-        let st = d.get_item("status")?;
-        let bd = d.get_item("body")?;
-        if let (Some(sc), Some(body)) = (st, bd) {
-            // Require a plausible HTTP status code (100-599, RFC 9110 §15) before treating this
-            // dict as a structured response — a plain JSON payload that happens to also have
-            // "status" and "body" keys (e.g. `{"status": 1, "body": "x"}`) must round-trip as
-            // data, not be reinterpreted as an HTTP response with status 1 (issue #211).
-            if let Ok(code) = sc.extract::<u16>() {
-                if (100..=599).contains(&code) {
-                    if let Ok(bstr) = body.str() {
-                        return Ok(HandlerMap::Simple {
-                            status: code,
-                            body: SimpleBody::Owned(bstr.to_string().into_bytes()),
-                            content_type: "text/plain; charset=utf-8".to_string(),
-                        });
-                    }
-                }
-            }
-        }
-        // Not a structured response shape — fall through to JSON serialization below.
-    } else if !b.is_instance_of::<PyList>() {
-        if let Ok(s) = b.extract::<String>() {
-            return Ok(HandlerMap::Simple {
-                status: 200,
-                body: SimpleBody::Owned(s.into_bytes()),
-                content_type: "text/plain; charset=utf-8".to_string(),
-            });
-        }
-        if let Ok(s) = b.extract::<&str>() {
-            return Ok(HandlerMap::Simple {
-                status: 200,
-                body: SimpleBody::Owned(s.as_bytes().to_vec()),
-                content_type: "text/plain; charset=utf-8".to_string(),
-            });
-        }
-        if let Ok(buf) = b.extract::<Vec<u8>>() {
-            return Ok(HandlerMap::Simple {
-                status: 200,
-                body: SimpleBody::Owned(buf),
-                content_type: "application/octet-stream".to_string(),
-            });
-        }
+    if let Ok(s) = b.extract::<String>() {
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: SimpleBody::Owned(s.into_bytes()),
+            content_type: "text/plain; charset=utf-8".to_string(),
+        });
     }
-    let jmod = py.import("json")?;
-    let dumped = jmod.call_method1("dumps", (b.clone().unbind(),))?;
-    let s: String = dumped.extract()?;
+    if let Ok(s) = b.extract::<&str>() {
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: SimpleBody::Owned(s.as_bytes().to_vec()),
+            content_type: "text/plain; charset=utf-8".to_string(),
+        });
+    }
+    if let Ok(buf) = b.extract::<Vec<u8>>() {
+        return Ok(HandlerMap::Simple {
+            status: 200,
+            body: SimpleBody::Owned(buf),
+            content_type: "application/octet-stream".to_string(),
+        });
+    }
+    let bytes = py_to_json_bytes_or_fallback(py, b)?;
     Ok(HandlerMap::Simple {
         status: 200,
-        body: SimpleBody::Owned(s.into_bytes()),
+        body: SimpleBody::Owned(bytes),
         content_type: "application/json; charset=utf-8".to_string(),
     })
 }
@@ -1762,6 +1770,11 @@ fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<
             "application/octet-stream".to_string(),
         ));
     }
+    if b.is_instance_of::<PyDict>() || b.is_instance_of::<PyList>() || b.is_instance_of::<PyTuple>()
+    {
+        let bytes = py_to_json_bytes_or_fallback(py, b)?;
+        return Ok((bytes, "application/json; charset=utf-8".to_string()));
+    }
     if let Ok(s) = b.extract::<String>() {
         return Ok((s.into_bytes(), "text/plain; charset=utf-8".to_string()));
     }
@@ -1774,13 +1787,8 @@ fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<
     if let Ok(buf) = b.extract::<Vec<u8>>() {
         return Ok((buf, "application/octet-stream".to_string()));
     }
-    let jmod = py.import("json")?;
-    let dumped = jmod.call_method1("dumps", (b.clone().unbind(),))?;
-    let s: String = dumped.extract()?;
-    Ok((
-        s.into_bytes(),
-        "application/json; charset=utf-8".to_string(),
-    ))
+    let bytes = py_to_json_bytes_or_fallback(py, b)?;
+    Ok((bytes, "application/json; charset=utf-8".to_string()))
 }
 
 /// Dispatch a Granian RSGI WebSocket scope: match `path` in `AppState::websocket` and run
