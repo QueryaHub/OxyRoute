@@ -84,6 +84,7 @@ fn router_for_compiled<'a>(c: &'a CompiledRouters, method: &str) -> Option<&'a R
 pub struct WebsocketRoute {
     pub handler: Py<PyAny>,
     pub is_async: bool,
+    pub allowed_origins: Option<Vec<String>>,
 }
 
 /// A single route dependency definition.
