@@ -35,3 +35,17 @@ async def test_database_pool_teardown_no_op():
 
     # __rsgi_del__ should also gracefully do nothing if no db was set up
     await app.__rsgi_del__()
+
+
+@pytest.mark.anyio
+async def test_database_pool_acquire_timeout_is_applied():
+    import time
+
+    app = App()
+    start = time.monotonic()
+    with pytest.raises(RuntimeError, match="DB connect error:"):
+        await app.setup_database(
+            "postgresql://foo:bar@127.0.0.1:12345/baz", acquire_timeout_secs=0.2
+        )
+    # The default is 3.0s, so finishing well under that shows the option applied.
+    assert time.monotonic() - start < 2.0
