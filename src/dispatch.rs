@@ -340,24 +340,27 @@ fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) -> Arc<CompiledRouter
 ///
 /// Returns `Ok(None)` if [`run_rsgi`] (async) must be used. Middleware, CORS, and security-header
 /// presets always defer to async.
-pub fn try_rsgi_sync_short_circuit(
-    py: Python<'_>,
+pub fn try_rsgi_sync_short_circuit<'py>(
+    py: Python<'py>,
     state: &Arc<RwLock<AppState>>,
-    scope: &Bound<'_, PyAny>,
-    protocol: &Bound<'_, PyAny>,
+    scope: &Bound<'py, PyAny>,
+    protocol: &Bound<'py, PyAny>,
 ) -> PyResult<Option<PyObject>> {
-    let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
-    let proto: String = scope.getattr("proto")?.extract()?;
+    let proto_obj = scope.getattr("proto")?;
+    let proto = proto_obj.extract::<&str>()?;
     if proto == "websocket" {
         return Ok(None);
     }
     if proto != "http" {
         return Ok(Some(py.None()));
     }
-    let method: String = scope.getattr("method")?.extract()?;
-    let path: String = scope.getattr("path")?.extract()?;
+    let method_obj = scope.getattr("method")?;
+    let method = method_obj.extract::<&str>()?;
+    let path_obj = scope.getattr("path")?;
+    let path = path_obj.extract::<&str>()?;
     let is_head = method == "HEAD";
     let snapshot = state.read().hot_snapshot();
+    let protocol_py: Py<PyAny> = protocol.clone().unbind();
 
     // Native CORS preflight handling (issue #218)
     if method == "OPTIONS" {
@@ -433,7 +436,7 @@ pub fn try_rsgi_sync_short_circuit(
         Some(c) => c,
         None => ensure_compiled_snapshot(state),
     };
-    let route_out = match match_route_compiled(&compiled, &method, &path) {
+    let route_out = match match_route_compiled(&compiled, method, path) {
         None => {
             return Err(pyo3::exceptions::PyValueError::new_err("method"));
         }
@@ -455,8 +458,8 @@ pub fn try_rsgi_sync_short_circuit(
                 run_trivial_sync_route(
                     py,
                     &protocol_py,
-                    &method,
-                    &path,
+                    method,
+                    path,
                     is_head,
                     entry,
                     scope,
@@ -468,7 +471,7 @@ pub fn try_rsgi_sync_short_circuit(
             Ok(None)
         }
         None => {
-            let m = methods_matching_path_compiled(&compiled, &path);
+            let m = methods_matching_path_compiled(&compiled, path);
             if m.is_empty() {
                 response::send_text_sync(
                     py,
