@@ -14,6 +14,12 @@ class SSEEvent:
     id: str | None = None
     retry: int | None = None
 
+    def __post_init__(self) -> None:
+        if self.event is not None and ("\r" in self.event or "\n" in self.event):
+            raise ValueError("SSE event field must not contain newline characters")
+        if self.id is not None and ("\r" in self.id or "\n" in self.id):
+            raise ValueError("SSE id field must not contain newline characters")
+
 
 class _SSEDone:
     __slots__ = ()
@@ -28,8 +34,12 @@ def sse_done() -> Any:
 def _format_sse_event(ev: SSEEvent) -> str:
     lines: list[str] = []
     if ev.event:
+        if "\r" in ev.event or "\n" in ev.event:
+            raise ValueError("SSE event field must not contain newline characters")
         lines.append(f"event: {ev.event}")
     if ev.id:
+        if "\r" in ev.id or "\n" in ev.id:
+            raise ValueError("SSE id field must not contain newline characters")
         lines.append(f"id: {ev.id}")
     if ev.retry is not None:
         lines.append(f"retry: {ev.retry}")
