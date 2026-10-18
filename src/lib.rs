@@ -202,6 +202,8 @@ fn dependency_wants_request(py: Python<'_>, f: &Bound<'_, PyAny>) -> PyResult<bo
 #[pyclass]
 pub struct App {
     state: Arc<RwLock<AppState>>,
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    max_concurrency: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl App {
@@ -353,28 +355,29 @@ impl App {
     fn new(include_openapi: bool) -> Self {
         let mut s = AppState::new();
         s.include_openapi = include_openapi;
+        let in_flight = Arc::clone(&s.in_flight);
+        let max_concurrency = Arc::clone(&s.max_concurrency);
         Self {
             state: Arc::new(RwLock::new(s)),
+            in_flight,
+            max_concurrency,
         }
     }
 
     fn set_max_concurrency(&self, limit: usize) -> PyResult<()> {
-        let st = self.state.read();
-        st.max_concurrency
+        self.max_concurrency
             .store(limit, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
     fn get_max_concurrency(&self) -> PyResult<usize> {
-        let st = self.state.read();
-        Ok(st
+        Ok(self
             .max_concurrency
             .load(std::sync::atomic::Ordering::Relaxed))
     }
 
     fn get_in_flight(&self) -> PyResult<usize> {
-        let st = self.state.read();
-        Ok(st.in_flight.load(std::sync::atomic::Ordering::Relaxed))
+        Ok(self.in_flight.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Notify all active WebSocket connections with a close status code (default: 1001 Going Away).
@@ -888,18 +891,16 @@ impl App {
         scope: &Bound<'py, PyAny>,
         protocol: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let (in_flight, max_c) = {
-            let st = this.state.read();
-            (
-                Arc::clone(&st.in_flight),
-                st.max_concurrency
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            )
-        };
+        let max_c = this
+            .max_concurrency
+            .load(std::sync::atomic::Ordering::Relaxed);
         if max_c > 0 {
-            let current = in_flight.fetch_add(1, std::sync::atomic::Ordering::Acquire);
+            let current = this
+                .in_flight
+                .fetch_add(1, std::sync::atomic::Ordering::Acquire);
             if current >= max_c {
-                in_flight.fetch_sub(1, std::sync::atomic::Ordering::Release);
+                this.in_flight
+                    .fetch_sub(1, std::sync::atomic::Ordering::Release);
                 let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
                 let headers = vec![
                     (
@@ -918,11 +919,15 @@ impl App {
                 return Ok(py.None().into_bound(py));
             }
         } else {
-            in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            this.in_flight
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        let guard = InFlightGuard(in_flight);
+        let guard = InFlightGuard(Arc::clone(&this.in_flight));
 
-        if let Some(obj) = try_rsgi_sync_short_circuit(py, &this.state, scope, protocol)? {
+        let snapshot = this.state.read().hot_snapshot();
+
+        if let Some(obj) = try_rsgi_sync_short_circuit(py, &this.state, &snapshot, scope, protocol)?
+        {
             drop(guard);
             return Ok(obj.into_bound(py));
         }
@@ -931,7 +936,7 @@ impl App {
         let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let _guard = guard;
-            run_rsgi(state, scope_py, protocol_py).await
+            run_rsgi(state, snapshot, scope_py, protocol_py).await
         })
     }
 

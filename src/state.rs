@@ -217,6 +217,7 @@ impl AppState {
             response_middleware: Arc::clone(&response_middleware),
             exception_handlers: Arc::clone(&exception_handlers),
             include_openapi: true,
+            db_pool: None,
         });
         Self {
             routes,
@@ -263,6 +264,7 @@ impl AppState {
                 response_middleware: Arc::clone(&self.response_middleware),
                 exception_handlers: Arc::clone(&self.exception_handlers),
                 include_openapi: self.include_openapi,
+                db_pool: self.db_pool.clone(),
             });
         });
     }
@@ -307,6 +309,7 @@ pub struct FrozenState {
     pub response_middleware: Arc<Vec<Py<PyAny>>>,
     pub exception_handlers: ExceptionHandlerList,
     pub include_openapi: bool,
+    pub db_pool: Option<sqlx::PgPool>,
 }
 
 pub type HotSnapshot = Arc<FrozenState>;

@@ -167,10 +167,9 @@ fn send_python_error_sync(
     path: &str,
     err: PyErr,
     scope: Option<&pyo3::Bound<'_, PyAny>>,
-    state: Option<&std::sync::Arc<parking_lot::RwLock<crate::state::AppState>>>,
+    snapshot: Option<&HotSnapshot>,
 ) -> PyResult<()> {
-    if let (Some(sc), Some(st)) = (scope, state) {
-        let snap = st.read().hot_snapshot();
+    if let (Some(sc), Some(snap)) = (scope, snapshot) {
         for (exc_type, handler, is_async) in snap.exception_handlers.iter().rev() {
             if let Ok(exc_obj) = err.clone_ref(py).into_bound_py_any(py) {
                 if exc_obj.is_instance(exc_type.bind(py)).unwrap_or(false) {
@@ -220,7 +219,6 @@ fn run_trivial_sync_route(
     entry: &RouteEntry,
     params: &matchit::Params<'_, '_>,
     scope: &pyo3::Bound<'_, PyAny>,
-    state: &std::sync::Arc<parking_lot::RwLock<crate::state::AppState>>,
     snapshot: &HotSnapshot,
 ) -> PyResult<()> {
     let _ = protocol.setattr(
@@ -240,7 +238,7 @@ fn run_trivial_sync_route(
                     path,
                     e,
                     Some(scope),
-                    Some(state),
+                    Some(snapshot),
                 );
             }
         }
@@ -260,7 +258,7 @@ fn run_trivial_sync_route(
                     path,
                     e,
                     Some(scope),
-                    Some(state),
+                    Some(snapshot),
                 );
             }
         }
@@ -274,7 +272,7 @@ fn run_trivial_sync_route(
                     path,
                     e,
                     Some(scope),
-                    Some(state),
+                    Some(snapshot),
                 );
             }
         }
@@ -282,17 +280,33 @@ fn run_trivial_sync_route(
     let mapped = match map_handler_return(py, &out) {
         Ok(m) => m,
         Err(e) => {
-            return send_python_error_sync(py, protocol, method, path, e, Some(scope), Some(state));
+            return send_python_error_sync(
+                py,
+                protocol,
+                method,
+                path,
+                e,
+                Some(scope),
+                Some(snapshot),
+            );
         }
     };
     let mapped = match merge_config_response_headers(py, snapshot, scope, mapped) {
         Ok(m) => m,
         Err(e) => {
-            return send_python_error_sync(py, protocol, method, path, e, Some(scope), Some(state));
+            return send_python_error_sync(
+                py,
+                protocol,
+                method,
+                path,
+                e,
+                Some(scope),
+                Some(snapshot),
+            );
         }
     };
     if let Err(e) = send_handler_map_inline(py, protocol, is_head, mapped) {
-        return send_python_error_sync(py, protocol, method, path, e, Some(scope), Some(state));
+        return send_python_error_sync(py, protocol, method, path, e, Some(scope), Some(snapshot));
     }
     Ok(())
 }
@@ -304,10 +318,9 @@ async fn send_python_error(
     path: &str,
     err: PyErr,
     scope: Option<&Py<PyAny>>,
-    state: Option<&std::sync::Arc<parking_lot::RwLock<crate::state::AppState>>>,
+    snapshot: Option<&HotSnapshot>,
 ) -> PyResult<PyObject> {
-    if let (Some(sc), Some(st)) = (scope, state) {
-        let snap = st.read().hot_snapshot();
+    if let (Some(sc), Some(snap)) = (scope, snapshot) {
         let coro_or_res = Python::with_gil(|py| -> PyResult<Option<(Py<PyAny>, bool)>> {
             for (exc_type, handler, is_async) in snap.exception_handlers.iter().rev() {
                 if let Ok(exc_obj) = err.clone_ref(py).into_bound_py_any(py) {
@@ -388,6 +401,7 @@ fn ensure_compiled_snapshot(state: &Arc<RwLock<AppState>>) -> Arc<CompiledRouter
 pub fn try_rsgi_sync_short_circuit<'py>(
     py: Python<'py>,
     state: &Arc<RwLock<AppState>>,
+    snapshot: &HotSnapshot,
     scope: &Bound<'py, PyAny>,
     protocol: &Bound<'py, PyAny>,
 ) -> PyResult<Option<PyObject>> {
@@ -404,7 +418,6 @@ pub fn try_rsgi_sync_short_circuit<'py>(
     let path_obj = scope.getattr("path")?;
     let path = path_obj.extract::<&str>()?;
     let is_head = method == "HEAD";
-    let snapshot = state.read().hot_snapshot();
     let protocol_py: Py<PyAny> = protocol.clone().unbind();
 
     // Native CORS preflight handling (issue #218)
@@ -509,8 +522,7 @@ pub fn try_rsgi_sync_short_circuit<'py>(
                     entry,
                     &params,
                     scope,
-                    state,
-                    &snapshot,
+                    snapshot,
                 )?;
                 return Ok(Some(py.None()));
             }
@@ -536,12 +548,13 @@ pub fn try_rsgi_sync_short_circuit<'py>(
 
 pub async fn run_rsgi(
     state: Arc<RwLock<AppState>>,
+    snapshot: HotSnapshot,
     scope: Py<PyAny>,
     protocol: Py<PyAny>,
 ) -> PyResult<PyObject> {
-    // Single GIL block: read proto, scope fields, and shared cfg in one acquire/release.
+    // Single GIL block: read proto and scope fields in one acquire/release.
     // Each `Python::with_gil` costs ~100-300ns; coalescing saves ~1µs/req on the http path.
-    type RsgiPrelim = (String, String, String, bool, HotSnapshot);
+    type RsgiPrelim = (String, String, String, bool);
     let (proto, prelim): (String, Option<RsgiPrelim>) = Python::with_gil(|py| -> PyResult<_> {
         let s = scope.bind(py);
         let proto: String = s.getattr("proto")?.extract()?;
@@ -558,16 +571,12 @@ pub async fn run_rsgi(
             .and_then(|x| x.extract())
             .unwrap_or_default();
         let is_head = method == "HEAD";
-        // One `state.read()` for the entire request: every subsequent dispatch step uses
-        // [`HotSnapshot`] without re-acquiring the `RwLock`. The snapshot's
-        // ``Option<Py<PyAny>>`` fields are cloned *here*, while the GIL is held.
-        let snapshot = state.read().hot_snapshot();
-        Ok((proto, Some((method, path, qs, is_head, snapshot))))
+        Ok((proto, Some((method, path, qs, is_head))))
     })?;
     if proto == "websocket" {
-        return run_rsgi_websocket(state, scope, protocol).await;
+        return run_rsgi_websocket(state, snapshot, scope, protocol).await;
     }
-    let Some((method, path, query_string, is_head, snapshot)) = prelim else {
+    let Some((method, path, query_string, is_head)) = prelim else {
         return Ok(Python::with_gil(|py| py.None()));
     };
     if (method == "GET" || method == "HEAD") && path == "/openapi.json" && snapshot.include_openapi
@@ -637,8 +646,15 @@ pub async fn run_rsgi(
         }) {
             Ok(x) => x,
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
-                    .await;
+                return send_python_error(
+                    &protocol,
+                    &method,
+                    &path,
+                    e,
+                    Some(&scope),
+                    Some(&snapshot),
+                )
+                .await;
             }
         };
         let skip = Python::with_gil(|py| out.bind(py).is_none());
@@ -714,7 +730,7 @@ pub async fn run_rsgi(
             }) {
                 Ok(()) => Ok(Python::with_gil(|py| py.None())),
                 Err(e) => {
-                    send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+                    send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&snapshot))
                         .await
                 }
             };
@@ -959,7 +975,7 @@ pub async fn run_rsgi(
                         &path,
                         e,
                         Some(&scope),
-                        Some(&state),
+                        Some(&snapshot),
                     )
                     .await;
                 }
@@ -1028,8 +1044,15 @@ pub async fn run_rsgi(
         }) {
             Ok(o) => Some(o),
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
-                    .await;
+                return send_python_error(
+                    &protocol,
+                    &method,
+                    &path,
+                    e,
+                    Some(&scope),
+                    Some(&snapshot),
+                )
+                .await;
             }
         }
     } else {
@@ -1066,7 +1089,7 @@ pub async fn run_rsgi(
                         &path,
                         e,
                         Some(&scope),
-                        Some(&state),
+                        Some(&snapshot),
                     )
                     .await;
                 }
@@ -1083,7 +1106,7 @@ pub async fn run_rsgi(
                         &path,
                         e,
                         Some(&scope),
-                        Some(&state),
+                        Some(&snapshot),
                     )
                     .await;
                 }
@@ -1097,7 +1120,7 @@ pub async fn run_rsgi(
                         &path,
                         e,
                         Some(&scope),
-                        Some(&state),
+                        Some(&snapshot),
                     )
                     .await;
                 }
@@ -1131,7 +1154,7 @@ pub async fn run_rsgi(
                         &path,
                         e,
                         Some(&scope),
-                        Some(&state),
+                        Some(&snapshot),
                     )
                     .await;
                 }
@@ -1149,7 +1172,7 @@ pub async fn run_rsgi(
         })?;
 
         let resolved = if let Some(query) = db_query_opt {
-            let db_pool = state.read().db_pool.clone();
+            let db_pool = snapshot.db_pool.clone();
             match db_pool {
                 Some(pool) => match crate::db::execute_query(&pool, &query).await {
                     Ok(py_rows) => py_rows,
@@ -1160,7 +1183,7 @@ pub async fn run_rsgi(
                             &path,
                             e,
                             Some(&scope),
-                            Some(&state),
+                            Some(&snapshot),
                         )
                         .await;
                     }
@@ -1174,7 +1197,7 @@ pub async fn run_rsgi(
                             "DBQuery used but database pool is not configured (call app.setup_database first)",
                         ),
                         Some(&scope),
-                        Some(&state),
+                        Some(&snapshot),
                     )
                     .await;
                 }
@@ -1375,7 +1398,7 @@ pub async fn run_rsgi(
             .await;
         }
         Err(e) => {
-            return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
+            return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&snapshot))
                 .await;
         }
     };
@@ -1386,15 +1409,29 @@ pub async fn run_rsgi(
         }) {
             Ok(f) => f,
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
-                    .await;
+                return send_python_error(
+                    &protocol,
+                    &method,
+                    &path,
+                    e,
+                    Some(&scope),
+                    Some(&snapshot),
+                )
+                .await;
             }
         };
         match fut.await {
             Ok(x) => x,
             Err(e) => {
-                return send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state))
-                    .await;
+                return send_python_error(
+                    &protocol,
+                    &method,
+                    &path,
+                    e,
+                    Some(&scope),
+                    Some(&snapshot),
+                )
+                .await;
             }
         }
     } else {
@@ -1467,7 +1504,9 @@ pub async fn run_rsgi(
         send_handler_map_inline(py, &protocol, is_head, mapped)
     }) {
         Ok(()) => Ok(Python::with_gil(|py| py.None())),
-        Err(e) => send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&state)).await,
+        Err(e) => {
+            send_python_error(&protocol, &method, &path, e, Some(&scope), Some(&snapshot)).await
+        }
     }
 }
 
@@ -1978,12 +2017,12 @@ fn value_to_bytes_and_ct(py: Python<'_>, b: &Bound<'_, PyAny>) -> PyResult<(Vec<
 /// handler error → close (best-effort) and propagate to logs.
 async fn run_rsgi_websocket(
     state: Arc<RwLock<AppState>>,
+    snapshot: HotSnapshot,
     scope: Py<PyAny>,
     protocol: Py<PyAny>,
 ) -> PyResult<PyObject> {
     let path: String =
         Python::with_gil(|py| -> PyResult<String> { scope.bind(py).getattr("path")?.extract() })?;
-    let snapshot = state.read().hot_snapshot();
     let compiled = match snapshot.compiled.clone() {
         Some(c) => c,
         None => ensure_compiled_snapshot(&state),
