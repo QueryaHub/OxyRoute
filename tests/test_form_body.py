@@ -94,3 +94,29 @@ asyncio.run(main())
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo)
     subprocess.run([sys.executable, "-c", code], env=env, check=True, cwd=repo)
+
+
+def test_malformed_multipart_body_error_escaped() -> None:
+    app = App()
+
+    @app.post("/up", read_form_body=True)
+    def up(form: dict) -> str:
+        return "ok"
+
+    async def _run() -> None:
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            # Corrupted multipart boundary / body containing quotes and special chars
+            bad_body = b'--boundary"\r\nContent-Disposition: form-data; name="bad"\r\n\r\n'
+            r = await c.post(
+                "/up",
+                content=bad_body,
+                headers={"content-type": 'multipart/form-data; boundary="boundary"'},
+            )
+        assert r.status_code == 400
+        assert r.headers["content-type"].startswith("application/json")
+        data = r.json()
+        assert "error" in data
+        assert data["error"].startswith("multipart: ")
+
+    asyncio.run(_run())

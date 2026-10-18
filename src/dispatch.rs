@@ -826,13 +826,14 @@ pub async fn run_rsgi(
             match serde_json::from_slice::<JsonValue>(&body_bytes) {
                 Ok(v) => Some(v),
                 Err(e) => {
+                    let err_body = serde_json::json!({ "error": format!("json: {e}") }).to_string();
                     return response::send_text(
                         &protocol,
                         400,
-                        &format!(r#"{{"error":"json: {e}"}}"#),
+                        &err_body,
                         "application/json; charset=utf-8",
                     )
-                    .await
+                    .await;
                 }
             }
         }
@@ -894,13 +895,15 @@ pub async fn run_rsgi(
                 let parsed = match form::parse_multipart(multipart_body, &boundary).await {
                     Ok(p) => p,
                     Err(e) => {
+                        let err_body =
+                            serde_json::json!({ "error": format!("multipart: {e}") }).to_string();
                         return response::send_text(
                             &protocol,
                             400,
-                            &format!(r#"{{"error":"multipart: {e}"}}"#),
+                            &err_body,
                             "application/json; charset=utf-8",
                         )
-                        .await
+                        .await;
                     }
                 };
                 (parsed.form, parsed.files)
