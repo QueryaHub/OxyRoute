@@ -92,3 +92,33 @@ def test_bearer_wins_over_cookie() -> None:
         assert r.text == "from-bearer"
 
     asyncio.run(run())
+
+
+def test_jwt_from_cookie_with_malformed_pairs() -> None:
+    app = App()
+
+    @app.get(
+        "/c",
+        require_jwt=True,
+        jwt_secret=SECRET,
+        algorithms=["HS256"],
+        jwt_cookie=COOKIE_NAME,
+    )
+    def c(claims: dict) -> str:
+        return claims.get("sub", "")
+
+    tok = _token()
+
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get(
+                "/c",
+                headers={
+                    "Cookie": f"stray_flag; malformed_no_equal; ; other=1; {COOKIE_NAME}={tok}; trailing_flag"
+                },
+            )
+        assert r.status_code == 200, r.text
+        assert r.text == "c1"
+
+    asyncio.run(run())
