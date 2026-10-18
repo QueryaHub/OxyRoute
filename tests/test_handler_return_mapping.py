@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 
 import httpx
-from oxyroute import App
+from oxyroute import App, Response
 from oxyroute.testing import asgi_test_app
 
 
@@ -86,5 +86,102 @@ def test_dict_with_valid_status_and_body_is_still_a_structured_response() -> Non
             r = await c.get("/teapot")
         assert r.status_code == 418
         assert r.text == "I'm a teapot"
+
+    asyncio.run(_run())
+
+
+def test_native_json_dict_payload() -> None:
+    """Dict containing primitives, arrays, and nested dicts serializes as JSON."""
+    app = App()
+
+    @app.get("/profile")
+    def profile() -> dict:
+        return {
+            "name": "Alice",
+            "age": 30,
+            "active": True,
+            "score": 98.5,
+            "tags": ["admin", "dev"],
+            "extra": None,
+            "meta": {"verified": False, "role_ids": (10, 20)},
+        }
+
+    async def _run() -> None:
+        async with _client(app) as c:
+            r = await c.get("/profile")
+        assert r.status_code == 200
+        assert r.headers.get("content-type", "").startswith("application/json")
+        assert r.json() == {
+            "name": "Alice",
+            "age": 30,
+            "active": True,
+            "score": 98.5,
+            "tags": ["admin", "dev"],
+            "extra": None,
+            "meta": {"verified": False, "role_ids": [10, 20]},
+        }
+
+    asyncio.run(_run())
+
+
+def test_native_json_list_of_dicts() -> None:
+    """List of dicts serializes as JSON."""
+    app = App()
+
+    @app.get("/users")
+    def users() -> list:
+        return [{"id": 1, "username": "user1"}, {"id": 2, "username": "user2"}]
+
+    async def _run() -> None:
+        async with _client(app) as c:
+            r = await c.get("/users")
+        assert r.status_code == 200
+        assert r.headers.get("content-type", "").startswith("application/json")
+        assert r.json() == [{"id": 1, "username": "user1"}, {"id": 2, "username": "user2"}]
+
+    asyncio.run(_run())
+
+
+def test_native_json_tuple_return() -> None:
+    """Tuple handler return serializes as JSON array."""
+    app = App()
+
+    @app.get("/items")
+    def items() -> tuple:
+        return ("foo", "bar", 123)
+
+    async def _run() -> None:
+        async with _client(app) as c:
+            r = await c.get("/items")
+        assert r.status_code == 200
+        assert r.headers.get("content-type", "").startswith("application/json")
+        assert r.json() == ["foo", "bar", 123]
+
+    asyncio.run(_run())
+
+
+def test_response_with_dict_and_list_body() -> None:
+    """Response dataclass with dict or list body serializes as JSON."""
+    app = App()
+
+    @app.get("/res-dict")
+    def res_dict() -> Response:
+        return Response(status=201, body={"created": True})
+
+    @app.get("/res-list")
+    def res_list() -> Response:
+        return Response(status=200, body=[10, 20, 30])
+
+    async def _run() -> None:
+        async with _client(app) as c:
+            r1 = await c.get("/res-dict")
+            r2 = await c.get("/res-list")
+        assert r1.status_code == 201
+        assert r1.headers.get("content-type", "").startswith("application/json")
+        assert r1.json() == {"created": True}
+
+        assert r2.status_code == 200
+        assert r2.headers.get("content-type", "").startswith("application/json")
+        assert r2.json() == [10, 20, 30]
 
     asyncio.run(_run())
