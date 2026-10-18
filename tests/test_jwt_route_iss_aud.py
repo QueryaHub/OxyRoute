@@ -98,3 +98,29 @@ def test_jwt_route_wrong_aud_401() -> None:
         assert r.status_code == 401
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("scheme", ["Bearer", "bearer", "BEARER", "bEaReR"])
+def test_jwt_route_bearer_case_insensitive(scheme: str) -> None:
+    now = int(time.time())
+    app = App()
+
+    @app.get(
+        "/auth",
+        require_jwt=True,
+        jwt_secret=SECRET,
+        algorithms=["HS256"],
+    )
+    def auth_route(claims: dict) -> str:
+        return claims.get("sub", "")
+
+    tok = _token(sub="alice", exp=now + 3600)
+
+    async def run() -> None:
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.get("/auth", headers={"Authorization": f"{scheme} {tok}"})
+        assert r.status_code == 200
+        assert r.text == "alice"
+
+    asyncio.run(run())

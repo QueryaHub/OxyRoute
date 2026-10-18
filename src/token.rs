@@ -8,11 +8,16 @@ use serde_json::Value as JsonValue;
 
 pub fn extract_bearer(h: Option<&str>) -> Option<String> {
     let h = h?.trim();
-    let b = h.strip_prefix("Bearer ")?.trim();
-    if b.is_empty() {
-        None
+    let (scheme, rest) = h.split_once(|c: char| c.is_ascii_whitespace())?;
+    if scheme.eq_ignore_ascii_case("bearer") {
+        let token = rest.trim();
+        if token.is_empty() {
+            None
+        } else {
+            Some(token.to_string())
+        }
     } else {
-        Some(b.to_string())
+        None
     }
 }
 
@@ -273,5 +278,34 @@ mod tests {
             extract_cookie_value(r#"t="a.b.c""#, "t").as_deref(),
             Some("a.b.c")
         );
+    }
+
+    #[test]
+    fn extract_bearer_case_insensitivity() {
+        assert_eq!(
+            extract_bearer(Some("Bearer my.secret.token")).as_deref(),
+            Some("my.secret.token")
+        );
+        assert_eq!(
+            extract_bearer(Some("bearer my.secret.token")).as_deref(),
+            Some("my.secret.token")
+        );
+        assert_eq!(
+            extract_bearer(Some("BEARER my.secret.token")).as_deref(),
+            Some("my.secret.token")
+        );
+        assert_eq!(
+            extract_bearer(Some("bEaReR   my.secret.token  ")).as_deref(),
+            Some("my.secret.token")
+        );
+        assert_eq!(
+            extract_bearer(Some("Bearer\tmy.secret.token")).as_deref(),
+            Some("my.secret.token")
+        );
+        assert_eq!(extract_bearer(Some("Basic my.secret.token")), None);
+        assert_eq!(extract_bearer(Some("Bearer ")), None);
+        assert_eq!(extract_bearer(Some("Bearer")), None);
+        assert_eq!(extract_bearer(Some("")), None);
+        assert_eq!(extract_bearer(None), None);
     }
 }
