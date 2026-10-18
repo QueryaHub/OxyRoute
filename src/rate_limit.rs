@@ -177,21 +177,24 @@ impl RateLimiter {
         let idx = self.shard_index(key);
         let mut shard = self.shards[idx].lock();
 
-        // Bound each shard's memory strictly: if this is a new key and the shard is already
-        // at capacity, evict one existing entry first instead of letting the map grow without
-        // limit (issue #208). This keeps `check` O(1) per request even under a flood of unique
-        // keys — no full-shard scan on the hot path, unlike the previous periodic `retain`.
-        if shard.len() >= MAX_SHARD_ENTRIES && !shard.contains_key(key) {
-            if let Some(evict) = shard.keys().next().cloned() {
-                shard.remove(&evict);
-            }
-        }
-
         let limit_f64 = self.limit as f64;
-        let bucket = shard.entry(key.to_string()).or_insert_with(|| BucketState {
-            tokens: limit_f64,
-            last_update: now,
-        });
+        let bucket = if let Some(bucket) = shard.get_mut(key) {
+            bucket
+        } else {
+            // Bound each shard's memory strictly: if this is a new key and the shard is already
+            // at capacity, evict one existing entry first instead of letting the map grow without
+            // limit (issue #208). This keeps `check` O(1) per request even under a flood of unique
+            // keys — no full-shard scan on the hot path, unlike the previous periodic `retain`.
+            if shard.len() >= MAX_SHARD_ENTRIES {
+                if let Some(evict) = shard.keys().next().cloned() {
+                    shard.remove(&evict);
+                }
+            }
+            shard.entry(key.to_string()).or_insert_with(|| BucketState {
+                tokens: limit_f64,
+                last_update: now,
+            })
+        };
 
         let elapsed = (now - bucket.last_update).as_secs_f64();
         let refilled = (bucket.tokens + elapsed * self.refill_rate_per_sec).min(limit_f64);
@@ -422,5 +425,27 @@ mod tests {
             .flat_map(|s| s.lock().keys().map(|k| k.len()).collect::<Vec<_>>())
             .sum();
         assert!(total_len <= MAX_KEY_LEN);
+    }
+
+    #[test]
+    fn test_existing_key_tokens_drain_correctly() {
+        let config = RateLimitConfig {
+            limit: 3,
+            window_secs: 60.0,
+            key_strategy: RateLimitKeyStrategy::Ip,
+        };
+        let limiter = RateLimiter::new(config);
+        for expected_rem in [2, 1, 0] {
+            match limiter.check("test-user") {
+                RateLimitDecision::Allowed { remaining, .. } => {
+                    assert_eq!(remaining, expected_rem);
+                }
+                _ => panic!("expected allowed"),
+            }
+        }
+        match limiter.check("test-user") {
+            RateLimitDecision::Denied { .. } => {}
+            _ => panic!("expected denied"),
+        }
     }
 }
