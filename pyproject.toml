@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "oxyroute"
-version = "0.6.0"
+version = "0.7.0"
 description = "High-performance RSGI web framework: Rust hot path (routing, JSON, rate limiting, JWT), Python handlers, OpenAPI 3.1, WebSockets"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.10"
