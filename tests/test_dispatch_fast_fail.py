@@ -104,3 +104,30 @@ def test_rsgi_reads_body_when_handler_accepts_body_param() -> None:
         assert proto.sent[-1][1] == 200
 
     asyncio.run(_run())
+
+
+def test_rsgi_body_bytes_zero_copy_identity() -> None:
+    """Issue #219: PyBytes body should be passed directly without copying."""
+    app = App()
+    received_body: bytes | None = None
+    expected_payload = b"distinct_payload_for_zero_copy_test"
+
+    class _CustomProtocol(_ProbeProtocol):
+        async def __call__(self) -> bytes:
+            self.body_calls += 1
+            return expected_payload
+
+    @app.post("/raw", read_json_body=False)
+    def raw_handler(body: bytes) -> str:
+        nonlocal received_body
+        received_body = body
+        return "ok"
+
+    async def _run() -> None:
+        proto = _CustomProtocol()
+        await app.__rsgi__(_scope("POST", "/raw"), proto)
+        assert proto.body_calls == 1
+        assert received_body == expected_payload
+        assert received_body is expected_payload
+
+    asyncio.run(_run())

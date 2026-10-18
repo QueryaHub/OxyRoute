@@ -10,7 +10,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyString, PyTuple};
 use pyo3::IntoPyObjectExt;
 use serde_json::Value as JsonValue;
 
-use crate::buffer_pool::PooledBuffer;
+use crate::buffer_pool::RequestBody;
 use crate::config;
 use crate::form::{self, ParsedFile};
 use crate::params::{build_request_context, header_get_lax, parse_query, value_for_path_param};
@@ -700,27 +700,17 @@ pub async fn run_rsgi(
             }
         }
     }
-    let mut body_bytes: PooledBuffer = if should_read_body {
+    let (body_bytes, body_py_obj): (RequestBody, Option<PyObject>) = if should_read_body {
         let read_fut = Python::with_gil(|py| {
             let p = protocol.bind(py);
             let aw: Bound<PyAny> = p.call0()?;
             pyo3_async_runtimes::tokio::into_future(aw)
         })?;
         let body_obj: PyObject = read_fut.await?;
-        let mut body = PooledBuffer::new();
-        Python::with_gil(|py| -> PyResult<()> {
+        let (body, body_py_opt) = Python::with_gil(|py| {
             let b = body_obj.bind(py);
-            if let Ok(py_bytes) = b.downcast::<pyo3::types::PyBytes>() {
-                body.extend_from_slice(py_bytes.as_bytes());
-            } else if let Ok(py_str) = b.downcast::<pyo3::types::PyString>() {
-                if let Ok(s) = py_str.to_str() {
-                    body.extend_from_slice(s.as_bytes());
-                }
-            } else if let Ok(bytes_vec) = b.extract::<Vec<u8>>() {
-                body.extend_from_slice(&bytes_vec);
-            }
-            Ok(())
-        })?;
+            RequestBody::from_py_any(b)
+        });
         if (body.len() as u64) > max {
             return response::send_text(
                 &protocol,
@@ -730,9 +720,9 @@ pub async fn run_rsgi(
             )
             .await;
         }
-        body
+        (body, body_py_opt)
     } else {
-        PooledBuffer::new()
+        (RequestBody::Empty, None)
     };
     let (auth, cookie_raw): (Option<String>, Option<String>) = if require_jwt {
         Python::with_gil(|py| -> PyResult<(Option<String>, Option<String>)> {
@@ -891,7 +881,7 @@ pub async fn run_rsgi(
                         .await
                     }
                 };
-                let multipart_body = body_bytes.take();
+                let multipart_body = body_bytes.as_bytes().to_vec();
                 let parsed = match form::parse_multipart(multipart_body, &boundary).await {
                     Ok(p) => p,
                     Err(e) => {
@@ -1204,7 +1194,11 @@ pub async fn run_rsgi(
                 kwargs.set_item("files", fl)?;
             }
         } else if should_pass_body {
-            kwargs.set_item("body", PyBytes::new(py, &body_bytes))?;
+            if let Some(ref py_obj) = body_py_obj {
+                kwargs.set_item("body", py_obj.bind(py))?;
+            } else {
+                kwargs.set_item("body", PyBytes::new(py, body_bytes.as_bytes()))?;
+            }
         }
         if should_pass_protocol {
             kwargs.set_item("protocol", protocol.bind(py))?;
