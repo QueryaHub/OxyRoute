@@ -116,7 +116,7 @@ fn write_py_json<W: Write>(obj: &Bound<'_, PyAny>, writer: &mut W, depth: usize)
         for (k, v) in d.iter() {
             if !first {
                 writer
-                    .write_all(b",")
+                    .write_all(b", ")
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
             } else {
                 first = false;
@@ -132,7 +132,7 @@ fn write_py_json<W: Write>(obj: &Bound<'_, PyAny>, writer: &mut W, depth: usize)
             serde_json::to_writer(&mut *writer, k_str)
                 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
             writer
-                .write_all(b":")
+                .write_all(b": ")
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
             write_py_json(&v, writer, depth + 1)?;
         }
@@ -149,7 +149,7 @@ fn write_py_json<W: Write>(obj: &Bound<'_, PyAny>, writer: &mut W, depth: usize)
         for item in l.iter() {
             if !first {
                 writer
-                    .write_all(b",")
+                    .write_all(b", ")
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
             } else {
                 first = false;
@@ -169,7 +169,7 @@ fn write_py_json<W: Write>(obj: &Bound<'_, PyAny>, writer: &mut W, depth: usize)
         for item in t.iter() {
             if !first {
                 writer
-                    .write_all(b",")
+                    .write_all(b", ")
                     .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
             } else {
                 first = false;
