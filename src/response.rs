@@ -108,7 +108,7 @@ pub async fn send_head_simple(
     send_empty_with_header_pairs(protocol, status, headers).await
 }
 
-fn build_header_list_from_pairs<'py>(
+pub(crate) fn build_header_list_from_pairs<'py>(
     py: Python<'py>,
     pairs: &[(String, String)],
 ) -> PyResult<Bound<'py, PyList>> {
@@ -365,6 +365,7 @@ pub fn send_head_simple_sync(
 }
 
 /// HEAD with arbitrary headers; strips body, sets `content-length` from `full_body.len()`.
+#[allow(dead_code)]
 pub fn send_head_with_headers_sync(
     py: Python<'_>,
     protocol: &Py<PyAny>,
@@ -373,6 +374,19 @@ pub fn send_head_with_headers_sync(
     mut headers: Vec<(String, String)>,
 ) -> PyResult<()> {
     let len = full_body.len();
+    headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-length"));
+    headers.push(("content-length".to_string(), len.to_string()));
+    send_with_headers_sync(py, protocol, status, b"", headers)
+}
+
+/// HEAD with arbitrary headers given precomputed body length; strips body, sets `content-length`.
+pub fn send_head_len_with_headers_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    len: usize,
+    mut headers: Vec<(String, String)>,
+) -> PyResult<()> {
     headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-length"));
     headers.push(("content-length".to_string(), len.to_string()));
     send_with_headers_sync(py, protocol, status, b"", headers)
