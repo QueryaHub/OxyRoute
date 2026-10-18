@@ -81,6 +81,16 @@ impl WebSocket {
         *self.closed.lock()
     }
 
+    /// The HTTP ``Origin`` header sent by the client during the WebSocket handshake, if present.
+    #[getter]
+    fn origin<'py>(&self, py: Python<'py>) -> PyResult<Option<String>> {
+        let s = self.scope.bind(py);
+        let Ok(headers) = s.getattr("headers") else {
+            return Ok(None);
+        };
+        Ok(crate::params::header_get_lax(&headers, "origin"))
+    }
+
     /// Perform the handshake. Stores the transport for subsequent send/receive calls.
     fn accept<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let proto = self.protocol.clone_ref(py);

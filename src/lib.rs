@@ -577,11 +577,13 @@ impl App {
     /// Register a WebSocket route. ``handler`` receives a single
     /// :class:`oxyroute._oxyroute.WebSocket` argument; sync handlers run inline, async
     /// handlers are awaited on Granian's loop. Same matchit ``/ws/:room`` syntax as HTTP routes.
+    #[pyo3(signature = (path, handler, allowed_origins=None))]
     fn add_websocket_route(
         &self,
         py: Python<'_>,
         path: String,
         handler: Py<PyAny>,
+        allowed_origins: Option<Vec<String>>,
     ) -> PyResult<()> {
         {
             let st = self.state.read();
@@ -597,7 +599,11 @@ impl App {
         let mut st = self.state.write();
         let ws_routes = Arc::make_mut(&mut st.websocket_routes);
         let idx = ws_routes.len();
-        ws_routes.push(state::WebsocketRoute { handler, is_async });
+        ws_routes.push(state::WebsocketRoute {
+            handler,
+            is_async,
+            allowed_origins,
+        });
         {
             let mut m = st.websocket.lock();
             m.insert(&path, idx)

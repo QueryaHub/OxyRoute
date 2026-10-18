@@ -1805,13 +1805,47 @@ async fn run_rsgi_websocket(
         });
         return Ok(Python::with_gil(|py| py.None()));
     };
-    let (handler, is_async) = Python::with_gil(|_py| -> PyResult<(Py<PyAny>, bool)> {
-        let e = snapshot
-            .websocket_routes
-            .get(route_idx)
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("ws route index"))?;
-        Ok((e.handler.clone(), e.is_async))
-    })?;
+    let (handler, is_async, allowed_origins) =
+        Python::with_gil(|_py| -> PyResult<(Py<PyAny>, bool, Option<Vec<String>>)> {
+            let e = snapshot
+                .websocket_routes
+                .get(route_idx)
+                .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("ws route index"))?;
+            Ok((e.handler.clone(), e.is_async, e.allowed_origins.clone()))
+        })?;
+
+    if let Some(origins) = allowed_origins {
+        let origin_header: Option<String> = Python::with_gil(|py| {
+            let s = scope.bind(py);
+            let headers = s.getattr("headers").ok()?;
+            header_get_lax(&headers, "origin")
+        });
+
+        let is_allowed = if origins.iter().any(|o| o == "*") {
+            true
+        } else if let Some(ref origin) = origin_header {
+            origins
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(origin.trim()))
+        } else {
+            false
+        };
+
+        if !is_allowed {
+            log::warn!(
+                target: "oxyroute",
+                "websocket {path} rejected: origin {:?} not permitted by allowed_origins",
+                origin_header
+            );
+            let _ = Python::with_gil(|py| -> PyResult<()> {
+                let p = protocol.bind(py);
+                let _ = p.call_method1("close", (1008i32,));
+                Ok(())
+            });
+            return Ok(Python::with_gil(|py| py.None()));
+        }
+    }
+
     let path_params: Vec<(String, String)> = params
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

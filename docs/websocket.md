@@ -41,6 +41,7 @@ granian app:app --interface rsgi --host 127.0.0.1 --port 8000
 |---|---|---|
 | `scope` | property | The Granian RSGI scope (`proto == "websocket"`). |
 | `path_params` | property | `dict[str, str]` of path parameters extracted by the router. |
+| `origin` | property | The client's HTTP `Origin` header (`str` or `None`) sent during the handshake. |
 | `is_closed` | property | `True` once `close()` has run or the peer disconnected. |
 | `await ws.accept()` | coroutine | Performs the handshake; required before send/receive. |
 | `await ws.receive()` | coroutine | Returns the next frame as `str` **or** `bytes`. Raises `RuntimeError` if the peer closed. |
@@ -54,6 +55,33 @@ granian app:app --interface rsgi --host 127.0.0.1 --port 8000
 Sync handlers are accepted by `@app.websocket(path)` for symmetry but should generally be
 async — Granian dispatches WebSockets on its event loop and most useful patterns require
 `await`.
+
+## Origin validation & CSWSH protection
+
+Browsers do not enforce Same-Origin Policy (SOP) or CORS for WebSocket connections. When using cookie-based or ambient authentication, malicious third-party websites can establish cross-site WebSocket connections and ride the victim's session (Cross-Site WebSocket Hijacking / CSWSH).
+
+OxyRoute provides native Origin validation via `allowed_origins`:
+
+```python
+@app.websocket("/ws/chat", allowed_origins=["https://app.example.com"])
+async def chat(ws: WebSocket) -> None:
+    await ws.accept()
+    ...
+```
+
+* If `allowed_origins` is set, OxyRoute checks the client's `Origin` header before dispatching to the handler.
+* If the `Origin` header is missing or disallowed, the connection is closed immediately with close code **`1008` (Policy Violation)**.
+* Use `allowed_origins=["*"]` to explicitly permit any origin.
+* You can also inspect `ws.origin` in Python for programmatic origin checks:
+
+```python
+@app.websocket("/ws/custom")
+async def custom(ws: WebSocket) -> None:
+    if ws.origin not in trusted_set:
+        await ws.close(1008)
+        return
+    await ws.accept()
+```
 
 ## Routing semantics
 

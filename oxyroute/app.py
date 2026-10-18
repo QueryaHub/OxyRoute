@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, TypeVar
 
@@ -635,7 +635,12 @@ class App:
             rate_limit_key=rate_limit_key,
         )
 
-    def websocket(self, path: str) -> Callable[[F], F]:
+    def websocket(
+        self,
+        path: str,
+        *,
+        allowed_origins: Sequence[str] | None = None,
+    ) -> Callable[[F], F]:
         """
         Register a native RSGI WebSocket handler.
 
@@ -643,12 +648,20 @@ class App:
         The handler receives a single :class:`oxyroute.WebSocket` argument; ``await``
         :meth:`oxyroute.WebSocket.accept` once before sending or receiving frames.
 
+        Parameters:
+        - ``allowed_origins``: Optional list or tuple of trusted Origin header values
+          (e.g. ``["https://app.example.com"]`` or ``["*"]``) to protect against
+          Cross-Site WebSocket Hijacking (CSWSH). If specified and the handshake's
+          ``Origin`` header is missing or disallowed, the connection is closed immediately
+          with code 1008 (Policy Violation) before the handler runs or handshake completes.
+
         Sync handlers run inline (the Rust dispatcher does not bridge them through Tokio
         twice); async handlers are awaited on Granian's loop.
         """
+        origins_list = list(allowed_origins) if allowed_origins is not None else None
 
         def wrap(handler: F) -> F:
-            self._app.add_websocket_route(path, handler)
+            self._app.add_websocket_route(path, handler, allowed_origins=origins_list)
             return handler
 
         return wrap
