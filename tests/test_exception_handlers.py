@@ -15,11 +15,6 @@ def test_exception_handlers():
 
     app = App()
 
-    # Note: the `add_exception_handler` method might be used as a decorator or a regular method.
-    # We didn't implement it as a decorator returning the function, but in our `app.py` it's just:
-    # def add_exception_handler(self, exc_type: type[BaseException], handler: Callable[..., Any]) -> None:
-    # So we call it directly.
-
     def handle_custom_error(scope, exc):
         return Response(status=400, body=exc.msg.encode())
 
@@ -54,5 +49,32 @@ def test_exception_handlers():
 
             r3 = await c.get("/unhandled")
             assert r3.status_code == 500
+
+    asyncio.run(_run())
+
+
+def test_exception_handler_decorator():
+    """@app.exception_handler(exc_type) decorator syntax (issue #274)."""
+
+    class DecoratorError(Exception):
+        def __init__(self, msg: str):
+            self.msg = msg
+
+    app = App()
+
+    @app.exception_handler(DecoratorError)
+    def handle_decorator_error(scope, exc: DecoratorError):
+        return Response(status=422, body=f"decorated:{exc.msg}".encode())
+
+    @app.get("/decorated-error")
+    def raise_decorated() -> str:
+        raise DecoratorError("via-decorator")
+
+    async def _run() -> None:
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.get("/decorated-error")
+            assert r.status_code == 422
+            assert r.text == "decorated:via-decorator"
 
     asyncio.run(_run())
