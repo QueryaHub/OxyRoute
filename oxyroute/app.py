@@ -341,7 +341,7 @@ class App:
         max_connections: int = 10,
         *,
         min_connections: int = 1,
-        acquire_timeout_secs: float = 30.0,
+        acquire_timeout_secs: float = 3.0,
         idle_timeout_secs: float = 600.0,
         max_lifetime_secs: float = 1800.0,
     ) -> None:

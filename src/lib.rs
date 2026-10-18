@@ -859,7 +859,7 @@ impl App {
         max_connections=10,
         *,
         min_connections=1,
-        acquire_timeout_secs=30.0,
+        acquire_timeout_secs=3.0,
         idle_timeout_secs=600.0,
         max_lifetime_secs=1800.0
     ))]
