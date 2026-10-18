@@ -14,8 +14,9 @@ use sqlx::Row;
 /// query = DBQuery("SELECT id, name FROM users WHERE email = $1 AND active = $2", (email, True))
 /// ```
 ///
-/// ### Chunked / Streaming Example (Memory Bounded):
+/// ### Batched / Chunked Rows Example:
 /// ```python
+/// # Groups decoded rows into batches of 100: [[row1, row2, ...], [row101, ...]]
 /// query = DBQuery("SELECT * FROM large_table", chunk_size=100)
 /// ```
 #[pyclass(module = "oxyroute._oxyroute")]
@@ -36,7 +37,7 @@ impl DBQuery {
     /// Parameters:
     /// - `query`: Parameterized SQL string using `$1`, `$2`, ... positional placeholders.
     /// - `args`: Tuple or list of argument values to bind safely.
-    /// - `chunk_size`: Optional chunk size for batched row decoding.
+    /// - `chunk_size`: Optional chunk size for grouping decoded rows into batched sub-lists. All batches are accumulated into a list upon query completion.
     #[new]
     #[pyo3(signature = (query, args=None, chunk_size=None))]
     fn new(
