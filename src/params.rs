@@ -107,8 +107,44 @@ pub fn value_for_path_param(py: Python<'_>, s: &str) -> Py<PyAny> {
 
 pub fn header_get_lax(headers: &Bound<'_, PyAny>, name: &str) -> Option<String> {
     if let Ok(d) = headers.downcast::<PyDict>() {
-        for key in [name, &name.to_lowercase(), &name.to_uppercase()] {
-            if let Ok(Some(v)) = d.get_item(key) {
+        // Fast path: exact match (RSGI headers are lowercase per spec).
+        if let Ok(Some(v)) = d.get_item(name) {
+            if let Ok(s) = v.extract::<String>() {
+                if !s.is_empty() {
+                    return Some(s);
+                }
+            }
+        }
+        // Fallback: scan dict keys case-insensitively with zero key allocations.
+        for (k, v) in d.iter() {
+            if let Ok(k_str) = k.extract::<&str>() {
+                if k_str.eq_ignore_ascii_case(name) {
+                    if let Ok(s) = v.extract::<String>() {
+                        if !s.is_empty() {
+                            return Some(s);
+                        }
+                    }
+                }
+            }
+        }
+        return None;
+    }
+
+    // Fallback for non-dict mapping objects with a `.get()` method.
+    let get = headers.getattr("get").ok()?;
+    if let Ok(v) = get.call1((name,)) {
+        if !v.is_none() {
+            if let Ok(s) = v.extract::<String>() {
+                if !s.is_empty() {
+                    return Some(s);
+                }
+            }
+        }
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower != name {
+        if let Ok(v) = get.call1((&lower,)) {
+            if !v.is_none() {
                 if let Ok(s) = v.extract::<String>() {
                     if !s.is_empty() {
                         return Some(s);
@@ -117,15 +153,14 @@ pub fn header_get_lax(headers: &Bound<'_, PyAny>, name: &str) -> Option<String> 
             }
         }
     }
-    let get = headers.getattr("get").ok()?;
-    for key in [name, &name.to_lowercase(), &name.to_uppercase()] {
-        if let Ok(v) = get.call1((key,)) {
-            if v.is_none() {
-                continue;
-            }
-            if let Ok(s) = v.extract::<String>() {
-                if !s.is_empty() {
-                    return Some(s);
+    let upper = name.to_ascii_uppercase();
+    if upper != name && upper != lower {
+        if let Ok(v) = get.call1((&upper,)) {
+            if !v.is_none() {
+                if let Ok(s) = v.extract::<String>() {
+                    if !s.is_empty() {
+                        return Some(s);
+                    }
                 }
             }
         }
@@ -206,5 +241,45 @@ mod tests {
         assert!(!is_valid_float_literal("+3.14"));
         assert!(!is_valid_float_literal("1e5"));
         assert!(!is_valid_float_literal(""));
+    }
+
+    #[test]
+    fn test_header_get_lax() {
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let d = PyDict::new(py);
+            d.set_item("authorization", "Bearer secret123").unwrap();
+            d.set_item("Content-Type", "application/json").unwrap();
+            d.set_item("X-CUSTOM", "my-val").unwrap();
+            d.set_item("empty", "").unwrap();
+
+            let bound = d.as_any();
+
+            // Exact match
+            assert_eq!(
+                header_get_lax(bound, "authorization"),
+                Some("Bearer secret123".to_string())
+            );
+
+            // Case-insensitive matches
+            assert_eq!(
+                header_get_lax(bound, "content-type"),
+                Some("application/json".to_string())
+            );
+            assert_eq!(
+                header_get_lax(bound, "CONTENT-TYPE"),
+                Some("application/json".to_string())
+            );
+            assert_eq!(
+                header_get_lax(bound, "x-custom"),
+                Some("my-val".to_string())
+            );
+
+            // Empty value returns None
+            assert_eq!(header_get_lax(bound, "empty"), None);
+
+            // Nonexistent key returns None
+            assert_eq!(header_get_lax(bound, "cookie"), None);
+        });
     }
 }

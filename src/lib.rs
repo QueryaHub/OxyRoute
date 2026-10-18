@@ -31,6 +31,7 @@ pub mod microbench {
     use matchit::Router;
     use pyo3::prelude::*;
 
+    pub use crate::params::header_get_lax;
     pub use crate::schema::{json_to_py, py_to_json_bytes, py_to_json_bytes_or_fallback};
     pub use crate::state::{match_route_compiled, CompiledRouters};
 

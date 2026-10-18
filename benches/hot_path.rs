@@ -17,7 +17,7 @@ use pyo3::types::{PyBytes, PyDict, PyList, PyString};
 use serde_json::json;
 
 use _oxyroute::microbench::{
-    json_to_py, map_handler_return_status, match_route_compiled, py_to_json_bytes,
+    header_get_lax, json_to_py, map_handler_return_status, match_route_compiled, py_to_json_bytes,
     sample_compiled_routers,
 };
 
@@ -161,12 +161,39 @@ fn bench_py_to_json(c: &mut Criterion) {
     });
 }
 
+fn bench_header_get_lax(c: &mut Criterion) {
+    Python::with_gil(|py| {
+        let d = PyDict::new(py);
+        d.set_item("authorization", "Bearer token123").unwrap();
+        d.set_item("content-type", "application/json").unwrap();
+        d.set_item("host", "example.com").unwrap();
+        d.set_item("user-agent", "bench/1.0").unwrap();
+        let bound = d.as_any();
+
+        let mut group = c.benchmark_group("header_get_lax");
+        group.bench_function("hit_exact", |b| {
+            b.iter(|| {
+                let val = header_get_lax(black_box(bound), black_box("authorization"));
+                black_box(val)
+            })
+        });
+        group.bench_function("miss", |b| {
+            b.iter(|| {
+                let val = header_get_lax(black_box(bound), black_box("cookie"));
+                black_box(val)
+            })
+        });
+        group.finish();
+    });
+}
+
 criterion_group!(
     benches,
     bench_match_route,
     bench_map_handler_return,
     bench_json_to_py,
     bench_py_to_json,
-    bench_json_scale
+    bench_json_scale,
+    bench_header_get_lax
 );
 criterion_main!(benches);
