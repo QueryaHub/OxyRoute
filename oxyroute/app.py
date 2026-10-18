@@ -383,20 +383,18 @@ class App:
         """
         self._app.add_exception_handler(exc_type, handler)
 
-    def exception_handler(
-        self, exc_type: type[BaseException]
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def exception_handler(self, exc_type: type[BaseException]) -> Callable[[F], F]:
         """
         Decorator to register a global exception handler for a specific exception type.
 
         Example::
 
             @app.exception_handler(ValueError)
-            def handle_value_error(request, exc: ValueError):
-                return {"detail": str(exc)}, 400
+            def handle_value_error(scope, exc: ValueError):
+                return Response(status=400, body=str(exc).encode())
         """
 
-        def decorator(handler: Callable[..., Any]) -> Callable[..., Any]:
+        def decorator(handler: F) -> F:
             self.add_exception_handler(exc_type, handler)
             return handler
 
