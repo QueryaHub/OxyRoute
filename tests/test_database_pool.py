@@ -8,7 +8,22 @@ async def test_database_pool_failure():
 
     # Attempting to connect to a non-existent database should fail fast
     with pytest.raises(RuntimeError, match="DB connect error:"):
-        await app.setup_database("postgresql://foo:bar@127.0.0.1:12345/baz")
+        await app.setup_database(
+            "postgresql://foo:bar@127.0.0.1:12345/baz", acquire_timeout_secs=0.5
+        )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "option", ["acquire_timeout_secs", "idle_timeout_secs", "max_lifetime_secs"]
+)
+@pytest.mark.parametrize("bad", [-1.0, float("nan"), float("inf")])
+async def test_database_pool_rejects_bad_durations(option, bad):
+    app = App()
+
+    # Negative or non-finite durations must raise a ValueError, not panic in Rust
+    with pytest.raises(ValueError, match=option):
+        await app.setup_database("postgresql://foo:bar@127.0.0.1:12345/baz", **{option: bad})
 
 
 @pytest.mark.anyio

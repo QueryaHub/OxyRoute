@@ -52,8 +52,9 @@ class App:
     def setup_database(
         self,
         url: str,
-        min_connections: int = 1,
         max_connections: int = 10,
+        *,
+        min_connections: int = 1,
         acquire_timeout_secs: float = 30.0,
         idle_timeout_secs: float = 600.0,
         max_lifetime_secs: float = 1800.0,

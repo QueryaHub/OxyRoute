@@ -335,12 +335,34 @@ class App:
         self._docs_ui = ui_n
         self._docs_mounted = True
 
-    async def setup_database(self, url: str, max_connections: int = 10) -> None:
+    async def setup_database(
+        self,
+        url: str,
+        max_connections: int = 10,
+        *,
+        min_connections: int = 1,
+        acquire_timeout_secs: float = 30.0,
+        idle_timeout_secs: float = 600.0,
+        max_lifetime_secs: float = 1800.0,
+    ) -> None:
         """
         Connect to a PostgreSQL database and store the pool in the Rust hot path.
         Must be awaited (e.g. inside ``on_startup``).
+
+        Pool tuning (all durations are seconds and must be finite and >= 0):
+        ``min_connections`` and ``max_connections`` bound the pool size,
+        ``acquire_timeout_secs`` is how long to wait for a free connection,
+        ``idle_timeout_secs`` closes connections left idle that long, and
+        ``max_lifetime_secs`` recycles connections after that long.
         """
-        await self._app.setup_database(url, max_connections)
+        await self._app.setup_database(
+            url,
+            max_connections,
+            min_connections=min_connections,
+            acquire_timeout_secs=acquire_timeout_secs,
+            idle_timeout_secs=idle_timeout_secs,
+            max_lifetime_secs=max_lifetime_secs,
+        )
 
     async def close_database(self) -> None:
         """
