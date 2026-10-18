@@ -52,6 +52,188 @@ pub fn json_to_py(py: Python<'_>, v: &JsonValue) -> PyResult<Py<PyAny>> {
     json_value_to_py(py, v)
 }
 
+struct PyStringVisitor<'py>(Python<'py>);
+
+impl<'de, 'py> serde::de::Visitor<'de> for PyStringVisitor<'py> {
+    type Value = Py<PyString>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a string key")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(PyString::new(self.0, v).unbind())
+    }
+
+    fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(PyString::new(self.0, v).unbind())
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(PyString::new(self.0, &v).unbind())
+    }
+}
+
+struct PyStringSeed<'py>(Python<'py>);
+
+impl<'de, 'py> serde::de::DeserializeSeed<'de> for PyStringSeed<'py> {
+    type Value = Py<PyString>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        deserializer.deserialize_str(PyStringVisitor(self.0))
+    }
+}
+
+struct PyJsonVisitor<'py>(Python<'py>);
+
+impl<'de, 'py> serde::de::Visitor<'de> for PyJsonVisitor<'py> {
+    type Value = Py<PyAny>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("any valid JSON value")
+    }
+
+    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        v.into_py_any(self.0).map_err(serde::de::Error::custom)
+    }
+
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        v.into_py_any(self.0).map_err(serde::de::Error::custom)
+    }
+
+    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        v.into_py_any(self.0).map_err(serde::de::Error::custom)
+    }
+
+    fn visit_i128<E>(self, v: i128) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        v.into_py_any(self.0).map_err(serde::de::Error::custom)
+    }
+
+    fn visit_u128<E>(self, v: u128) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        v.into_py_any(self.0).map_err(serde::de::Error::custom)
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(PyFloat::new(self.0, v).into_any().unbind())
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(PyString::new(self.0, v).into_any().unbind())
+    }
+
+    fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(PyString::new(self.0, v).into_any().unbind())
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(PyString::new(self.0, &v).into_any().unbind())
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(self.0.None())
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(self.0.None())
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let py = self.0;
+        let list = PyList::empty(py);
+        while let Some(elem) = seq.next_element_seed(PyJsonSeed(py))? {
+            list.append(elem.bind(py))
+                .map_err(serde::de::Error::custom)?;
+        }
+        Ok(list.into_any().unbind())
+    }
+
+    fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+    where
+        M: serde::de::MapAccess<'de>,
+    {
+        let py = self.0;
+        let dict = PyDict::new(py);
+        while let Some(k) = access.next_key_seed(PyStringSeed(py))? {
+            let v = access.next_value_seed(PyJsonSeed(py))?;
+            dict.set_item(k.bind(py), v.bind(py))
+                .map_err(serde::de::Error::custom)?;
+        }
+        Ok(dict.into_any().unbind())
+    }
+}
+
+pub struct PyJsonSeed<'py>(pub Python<'py>);
+
+impl<'de, 'py> serde::de::DeserializeSeed<'de> for PyJsonSeed<'py> {
+    type Value = Py<PyAny>;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(PyJsonVisitor(self.0))
+    }
+}
+
+/// Deserialize raw JSON bytes directly into Python objects (`dict`, `list`, `str`, `int`,
+/// `float`, `bool`, `None`) in a single pass without intermediate `serde_json::Value` AST
+/// allocations.
+pub fn json_bytes_to_py(py: Python<'_>, bytes: &[u8]) -> Result<Py<PyAny>, serde_json::Error> {
+    use serde::de::DeserializeSeed;
+    let mut de = serde_json::Deserializer::from_slice(bytes);
+    let val = PyJsonSeed(py).deserialize(&mut de)?;
+    de.end()?;
+    Ok(val)
+}
+
 fn write_py_json<W: Write>(obj: &Bound<'_, PyAny>, writer: &mut W, depth: usize) -> PyResult<()> {
     if depth > 128 {
         return Err(pyo3::exceptions::PyValueError::new_err(

@@ -935,30 +935,10 @@ pub async fn run_rsgi(
     } else {
         HashMap::new()
     };
-    let body_json: Option<JsonValue> = if read_json_body
+    let has_json_body = read_json_body
         && !read_form_body
         && (method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE")
-    {
-        if body_bytes.is_empty() {
-            None
-        } else {
-            match serde_json::from_slice::<JsonValue>(&body_bytes) {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    let err_body = serde_json::json!({ "error": format!("json: {e}") }).to_string();
-                    return response::send_text(
-                        &protocol,
-                        400,
-                        &err_body,
-                        "application/json; charset=utf-8",
-                    )
-                    .await;
-                }
-            }
-        }
-    } else {
-        None
-    };
+        && !body_bytes.is_empty();
     let (form_map, form_files): (HashMap<String, String>, Vec<ParsedFile>) = if read_form_body
         && (method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE")
     {
@@ -1210,7 +1190,7 @@ pub async fn run_rsgi(
     let should_pass_files =
         read_form_body && (handler_varkw || handler_param_names.contains("files"));
     let should_pass_protocol = handler_varkw || handler_param_names.contains("protocol");
-    let should_pass_body = !read_form_body && !body_bytes.is_empty() && body_json.is_none();
+    let should_pass_body = !read_form_body && !body_bytes.is_empty() && !has_json_body;
     let has_dep_kwargs = dependencies.iter().enumerate().any(|(i, dep)| {
         dep_out.get(i).is_some() && (handler_varkw || handler_param_names.contains(&dep.name))
     });
@@ -1218,7 +1198,7 @@ pub async fn run_rsgi(
         || !query_map.is_empty()
         || has_dep_kwargs
         || claims_val.is_some()
-        || body_json.is_some()
+        || has_json_body
         || should_pass_form
         || should_pass_files
         || should_pass_body
@@ -1226,6 +1206,7 @@ pub async fn run_rsgi(
     enum RunHandlerResult {
         Ok((PyObject, bool)),
         ValidationError(String),
+        JsonParseError(String),
     }
 
     let (res, run_async) = match Python::with_gil(|py| -> PyResult<RunHandlerResult> {
@@ -1263,10 +1244,39 @@ pub async fn run_rsgi(
             let pyv = json_to_py(py, c)?;
             kwargs.set_item("claims", pyv)?;
         }
-        if let Some(ref j) = body_json {
-            let pyv = json_to_py(py, j)?;
+        if has_json_body {
             if let Some(ref bm) = body_model {
-                match bm.bind(py).call_method1("model_validate", (&pyv,)) {
+                let bound_bm = bm.bind(py);
+                let py_bytes_bound = match body_py_obj {
+                    Some(ref obj) => obj.bind(py).clone(),
+                    None => pyo3::types::PyBytes::new(py, body_bytes.as_bytes()).into_any(),
+                };
+                let validated_res = if bound_bm
+                    .hasattr(pyo3::intern!(py, "model_validate_json"))
+                    .unwrap_or(false)
+                {
+                    bound_bm
+                        .call_method1(pyo3::intern!(py, "model_validate_json"), (&py_bytes_bound,))
+                } else {
+                    match crate::schema::json_bytes_to_py(py, body_bytes.as_bytes()) {
+                        Ok(pyv) => {
+                            if bound_bm
+                                .hasattr(pyo3::intern!(py, "model_validate"))
+                                .unwrap_or(false)
+                            {
+                                bound_bm.call_method1(pyo3::intern!(py, "model_validate"), (&pyv,))
+                            } else {
+                                bound_bm.call1((&pyv,))
+                            }
+                        }
+                        Err(e) => {
+                            let err_body =
+                                serde_json::json!({ "error": format!("json: {e}") }).to_string();
+                            return Ok(RunHandlerResult::JsonParseError(err_body));
+                        }
+                    }
+                };
+                match validated_res {
                     Ok(validated) => {
                         let target_name = if body_param_name.is_empty() {
                             "json"
@@ -1279,24 +1289,34 @@ pub async fn run_rsgi(
                         }
                     }
                     Err(e) => {
-                        let err_str: String =
-                            if let Ok(exc_obj) = e.clone_ref(py).into_bound_py_any(py) {
-                                if let Ok(j_method) = exc_obj.call_method0("json") {
-                                    j_method
-                                        .extract::<String>()
-                                        .unwrap_or_else(|_| "[]".to_string())
-                                } else {
-                                    "[]".to_string()
-                                }
+                        let err_str: String = if let Ok(exc_obj) =
+                            e.clone_ref(py).into_bound_py_any(py)
+                        {
+                            if let Ok(j_method) = exc_obj.call_method0(pyo3::intern!(py, "json")) {
+                                j_method
+                                    .extract::<String>()
+                                    .unwrap_or_else(|_| "[]".to_string())
                             } else {
                                 "[]".to_string()
-                            };
+                            }
+                        } else {
+                            "[]".to_string()
+                        };
                         let err_json = format!(r#"{{"detail":{err_str}}}"#);
                         return Ok(RunHandlerResult::ValidationError(err_json));
                     }
                 }
             } else {
-                kwargs.set_item("json", pyv)?;
+                match crate::schema::json_bytes_to_py(py, body_bytes.as_bytes()) {
+                    Ok(pyv) => {
+                        kwargs.set_item(pyo3::intern!(py, "json"), pyv)?;
+                    }
+                    Err(e) => {
+                        let err_body =
+                            serde_json::json!({ "error": format!("json: {e}") }).to_string();
+                        return Ok(RunHandlerResult::JsonParseError(err_body));
+                    }
+                }
             }
         }
         if read_form_body {
@@ -1336,6 +1356,15 @@ pub async fn run_rsgi(
         Ok(RunHandlerResult::Ok((res, is_async)))
     }) {
         Ok(RunHandlerResult::Ok((res, is_async))) => (res, is_async),
+        Ok(RunHandlerResult::JsonParseError(err_body)) => {
+            return response::send_text(
+                &protocol,
+                400,
+                &err_body,
+                "application/json; charset=utf-8",
+            )
+            .await;
+        }
         Ok(RunHandlerResult::ValidationError(err_json)) => {
             return response::send_text(
                 &protocol,
