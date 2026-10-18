@@ -218,6 +218,7 @@ fn run_trivial_sync_route(
     path: &str,
     is_head: bool,
     entry: &RouteEntry,
+    params: &matchit::Params<'_, '_>,
     scope: &pyo3::Bound<'_, PyAny>,
     state: &std::sync::Arc<parking_lot::RwLock<crate::state::AppState>>,
     snapshot: &HotSnapshot,
@@ -228,10 +229,54 @@ fn run_trivial_sync_route(
         entry.extra.path_template.clone(),
     );
     let handler = entry.handler.bind(py);
-    let out = match handler.call0() {
-        Ok(x) => x.unbind(),
-        Err(e) => {
-            return send_python_error_sync(py, protocol, method, path, e, Some(scope), Some(state));
+    let out = if params.is_empty() {
+        match handler.call0() {
+            Ok(x) => x.unbind(),
+            Err(e) => {
+                return send_python_error_sync(
+                    py,
+                    protocol,
+                    method,
+                    path,
+                    e,
+                    Some(scope),
+                    Some(state),
+                );
+            }
+        }
+    } else {
+        let kwargs = PyDict::new(py);
+        for (k, v) in params.iter() {
+            let vpy = if entry.extra.wildcard_params.contains(k) {
+                pyo3::types::PyString::new(py, v).into_any().unbind()
+            } else {
+                value_for_path_param(py, v)
+            };
+            if let Err(e) = kwargs.set_item(k, vpy) {
+                return send_python_error_sync(
+                    py,
+                    protocol,
+                    method,
+                    path,
+                    e,
+                    Some(scope),
+                    Some(state),
+                );
+            }
+        }
+        match handler.call((), Some(&kwargs)) {
+            Ok(x) => x.unbind(),
+            Err(e) => {
+                return send_python_error_sync(
+                    py,
+                    protocol,
+                    method,
+                    path,
+                    e,
+                    Some(scope),
+                    Some(state),
+                );
+            }
         }
     };
     let mapped = match map_handler_return(py, &out) {
@@ -443,7 +488,7 @@ pub fn try_rsgi_sync_short_circuit<'py>(
         Some(m) => m,
     };
     match route_out {
-        Some((idx, _)) => {
+        Some((idx, params)) => {
             let has_uncompiled_cfg = (snapshot.cors.is_some() && snapshot.compiled_cors.is_none())
                 || (snapshot.security_headers.is_some()
                     && snapshot.compiled_security_headers.is_none());
@@ -462,6 +507,7 @@ pub fn try_rsgi_sync_short_circuit<'py>(
                     path,
                     is_head,
                     entry,
+                    &params,
                     scope,
                     state,
                     &snapshot,

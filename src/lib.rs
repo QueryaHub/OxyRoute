@@ -115,6 +115,29 @@ fn wildcard_param_names(path: &str) -> HashSet<String> {
     out
 }
 
+/// All parameter names (`:name` and `*name`) declared in a matchit-style route template.
+fn all_path_param_names(path: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let chars: Vec<char> = path.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == ':' || chars[i] == '*' {
+            i += 1;
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let name: String = chars[start..i].iter().collect();
+            if !name.is_empty() {
+                out.insert(name);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
 fn parse_algorithm(s: &str) -> PyResult<jsonwebtoken::Algorithm> {
     jsonwebtoken::Algorithm::from_str(s).map_err(|_| {
         pyo3::exceptions::PyValueError::new_err(
@@ -484,13 +507,21 @@ impl App {
             .getattr(pyo3::intern!(py, "__name__"))?
             .extract()?;
         let (handler_param_names, handler_varkw) = handler_signature_kinds(py, handler.bind(py))?;
+        let path_params = all_path_param_names(&path);
+        let reserved_names = [
+            "query", "request", "scope", "proto", "protocol", "body", "form", "files", "claims",
+        ];
+        let has_reserved = handler_param_names
+            .iter()
+            .any(|n| reserved_names.contains(&n.as_str()));
+        let params_compatible =
+            !handler_varkw && !has_reserved && handler_param_names == path_params;
         let trivial_sync = !is_async
             && !require_jwt
             && !read_json_body
             && !read_form_body
             && dependencies.is_empty()
-            && !handler_varkw
-            && handler_param_names.is_empty()
+            && params_compatible
             && !has_rate_limit;
         let mut st = self.state.write();
         let routes = Arc::make_mut(&mut st.routes);
