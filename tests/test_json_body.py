@@ -48,3 +48,27 @@ def test_json_body_scalar_and_empty_object() -> None:
 
     asyncio.run(_run())
     assert seen["json"] == {"n": 42, "f": 1.25, "s": "z", "t": True, "u": {}}
+
+
+def test_malformed_json_body_error_escaped() -> None:
+    app = App()
+
+    @app.post("/echo")
+    def echo(json: dict) -> str:
+        return "ok"
+
+    async def _run() -> None:
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.post(
+                "/echo",
+                content=b'{"bad": "quotes" "and" \\ \x00 }',
+                headers={"content-type": "application/json"},
+            )
+        assert r.status_code == 400
+        assert r.headers["content-type"].startswith("application/json")
+        body = r.json()
+        assert "error" in body
+        assert body["error"].startswith("json: ")
+
+    asyncio.run(_run())
