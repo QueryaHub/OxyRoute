@@ -220,6 +220,7 @@ fn run_trivial_sync_route(
     entry: &RouteEntry,
     scope: &pyo3::Bound<'_, PyAny>,
     state: &std::sync::Arc<parking_lot::RwLock<crate::state::AppState>>,
+    snapshot: &HotSnapshot,
 ) -> PyResult<()> {
     let _ = protocol.setattr(
         py,
@@ -234,6 +235,12 @@ fn run_trivial_sync_route(
         }
     };
     let mapped = match map_handler_return(py, &out) {
+        Ok(m) => m,
+        Err(e) => {
+            return send_python_error_sync(py, protocol, method, path, e, Some(scope), Some(state));
+        }
+    };
+    let mapped = match merge_config_response_headers(py, snapshot, scope, mapped) {
         Ok(m) => m,
         Err(e) => {
             return send_python_error_sync(py, protocol, method, path, e, Some(scope), Some(state));
@@ -351,7 +358,41 @@ pub fn try_rsgi_sync_short_circuit(
     let path: String = scope.getattr("path")?.extract()?;
     let is_head = method == "HEAD";
     let snapshot = state.read().hot_snapshot();
-    let needs_response_cfg_merge = snapshot.cors.is_some() || snapshot.security_headers.is_some();
+
+    // Native CORS preflight handling (issue #218)
+    if method == "OPTIONS" {
+        if let Some(ref cors) = snapshot.compiled_cors {
+            let headers = scope.getattr("headers")?;
+            if let Some(raw_acrm) = header_get_lax(&headers, "access-control-request-method") {
+                let origin = header_get_lax(&headers, "origin").unwrap_or_default();
+                let raw_ach =
+                    header_get_lax(&headers, "access-control-request-headers").unwrap_or_default();
+                match cors.handle_preflight(&raw_acrm, &origin, &raw_ach) {
+                    Ok(preflight_headers) => {
+                        response::send_with_headers_sync(
+                            py,
+                            &protocol_py,
+                            204,
+                            b"",
+                            preflight_headers,
+                        )?;
+                        return Ok(Some(py.None()));
+                    }
+                    Err((status, msg)) => {
+                        response::send_text_sync(
+                            py,
+                            &protocol_py,
+                            status,
+                            msg,
+                            "text/plain; charset=utf-8",
+                        )?;
+                        return Ok(Some(py.None()));
+                    }
+                }
+            }
+        }
+    }
+
     if !snapshot.request_middleware.is_empty() || !snapshot.response_middleware.is_empty() {
         return Ok(None);
     }
@@ -400,7 +441,10 @@ pub fn try_rsgi_sync_short_circuit(
     };
     match route_out {
         Some((idx, _)) => {
-            if needs_response_cfg_merge {
+            let has_uncompiled_cfg = (snapshot.cors.is_some() && snapshot.compiled_cors.is_none())
+                || (snapshot.security_headers.is_some()
+                    && snapshot.compiled_security_headers.is_none());
+            if has_uncompiled_cfg {
                 return Ok(None);
             }
             let routes = Arc::clone(&snapshot.routes);
@@ -417,6 +461,7 @@ pub fn try_rsgi_sync_short_circuit(
                     entry,
                     scope,
                     state,
+                    &snapshot,
                 )?;
                 return Ok(Some(py.None()));
             }
@@ -500,6 +545,41 @@ pub async fn run_rsgi(
         }
         return response::send_str(&protocol, 200, &doc, "application/json; charset=utf-8").await;
     }
+    if method == "OPTIONS" {
+        let is_preflight =
+            Python::with_gil(|py| -> PyResult<Option<crate::cors::PreflightResult>> {
+                if let Some(ref cors) = snapshot.compiled_cors {
+                    let s = scope.bind(py);
+                    let headers = s.getattr("headers")?;
+                    if let Some(raw_acrm) =
+                        header_get_lax(&headers, "access-control-request-method")
+                    {
+                        let origin = header_get_lax(&headers, "origin").unwrap_or_default();
+                        let raw_ach = header_get_lax(&headers, "access-control-request-headers")
+                            .unwrap_or_default();
+                        return Ok(Some(cors.handle_preflight(&raw_acrm, &origin, &raw_ach)));
+                    }
+                }
+                Ok(None)
+            })?;
+        if let Some(res) = is_preflight {
+            match res {
+                Ok(preflight_headers) => {
+                    return response::send_with_headers(&protocol, 204, b"", preflight_headers)
+                        .await;
+                }
+                Err((status, msg)) => {
+                    return response::send_text(
+                        &protocol,
+                        status,
+                        msg,
+                        "text/plain; charset=utf-8",
+                    )
+                    .await;
+                }
+            }
+        }
+    }
     for mw in snapshot.request_middleware.iter() {
         let out: Py<PyAny> = match Python::with_gil(|py| {
             let f = mw.bind(py);
@@ -554,7 +634,14 @@ pub async fn run_rsgi(
                                     hdrs.set_item(k, v)?;
                                 }
                                 kwargs.set_item("headers", hdrs)?;
-                                kwargs.set_item("body", pyo3::types::PyBytes::new(py, body))?;
+                                match body {
+                                    SimpleBody::Owned(v) => kwargs.set_item(
+                                        "body",
+                                        pyo3::types::PyBytes::new(py, v.as_slice()),
+                                    )?,
+                                    SimpleBody::PyBytes(b) => kwargs.set_item("body", b)?,
+                                    SimpleBody::PyString(s) => kwargs.set_item("body", s)?,
+                                }
                             }
                             HandlerMap::AlreadySent => unreachable!(),
                         }
@@ -569,15 +656,8 @@ pub async fn run_rsgi(
                 }
 
                 let mapped = if snapshot.security_headers.is_some() || snapshot.cors.is_some() {
-                    let scope_bound = scope.bind(py).clone();
-                    let mapped = merge_config_response_headers(
-                        py,
-                        &snapshot.security_headers,
-                        scope_bound.clone(),
-                        mapped,
-                        true,
-                    )?;
-                    merge_config_response_headers(py, &snapshot.cors, scope_bound, mapped, false)?
+                    let scope_bound = scope.bind(py);
+                    merge_config_response_headers(py, &snapshot, scope_bound, mapped)?
                 } else {
                     mapped
                 };
@@ -1281,7 +1361,12 @@ pub async fn run_rsgi(
                             hdrs.set_item(k, v)?;
                         }
                         kwargs.set_item("headers", hdrs)?;
-                        kwargs.set_item("body", pyo3::types::PyBytes::new(py, body))?;
+                        match body {
+                            SimpleBody::Owned(v) => kwargs
+                                .set_item("body", pyo3::types::PyBytes::new(py, v.as_slice()))?,
+                            SimpleBody::PyBytes(b) => kwargs.set_item("body", b)?,
+                            SimpleBody::PyString(s) => kwargs.set_item("body", s)?,
+                        }
                     }
                     HandlerMap::AlreadySent => unreachable!(),
                 }
@@ -1296,15 +1381,8 @@ pub async fn run_rsgi(
         }
 
         let mapped = if snapshot.security_headers.is_some() || snapshot.cors.is_some() {
-            let scope_bound = scope.bind(py).clone();
-            let mapped = merge_config_response_headers(
-                py,
-                &snapshot.security_headers,
-                scope_bound.clone(),
-                mapped,
-                true,
-            )?;
-            merge_config_response_headers(py, &snapshot.cors, scope_bound, mapped, false)?
+            let scope_bound = scope.bind(py);
+            merge_config_response_headers(py, &snapshot, scope_bound, mapped)?
         } else {
             mapped
         };
@@ -1479,21 +1557,13 @@ impl SimpleBody {
             SimpleBody::PyBytes(b) => Ok(b.bind(py).as_bytes().len()),
         }
     }
-
-    fn into_vec(self, py: Python<'_>) -> PyResult<Vec<u8>> {
-        match self {
-            SimpleBody::Owned(v) => Ok(v),
-            SimpleBody::PyString(s) => Ok(s.bind(py).to_str()?.as_bytes().to_vec()),
-            SimpleBody::PyBytes(b) => Ok(b.bind(py).as_bytes().to_vec()),
-        }
-    }
 }
 
 enum HandlerMap {
     AlreadySent,
     WithHeaders {
         status: u16,
-        body: Vec<u8>,
+        body: SimpleBody,
         headers: Vec<(String, String)>,
     },
     Simple {
@@ -1521,7 +1591,13 @@ fn send_handler_map_inline(
                 status,
                 body,
                 headers,
-            } => response::send_head_with_headers_sync(py, protocol, status, &body, headers),
+            } => response::send_head_len_with_headers_sync(
+                py,
+                protocol,
+                status,
+                body.byte_len(py)?,
+                headers,
+            ),
             HandlerMap::Simple {
                 status,
                 body,
@@ -1541,7 +1617,23 @@ fn send_handler_map_inline(
                 status,
                 body,
                 headers,
-            } => response::send_with_headers_sync(py, protocol, status, &body, headers),
+            } => match body {
+                SimpleBody::PyString(s) => {
+                    let p = protocol.bind(py);
+                    let h = response::build_header_list_from_pairs(py, &headers)?;
+                    p.call_method1("response_str", (status, h, s.bind(py)))?;
+                    Ok(())
+                }
+                SimpleBody::PyBytes(b) => {
+                    let p = protocol.bind(py);
+                    let h = response::build_header_list_from_pairs(py, &headers)?;
+                    p.call_method1("response_bytes", (status, h, b.bind(py)))?;
+                    Ok(())
+                }
+                SimpleBody::Owned(v) => {
+                    response::send_with_headers_sync(py, protocol, status, &v, headers)
+                }
+            },
             HandlerMap::Simple {
                 status,
                 body,
@@ -1551,42 +1643,63 @@ fn send_handler_map_inline(
     }
 }
 
-/// `if_absent`: only add a header if no same-name (case-insensitive) header is already present
-/// (``security`` preset). `false` replaces/merges like CORS (``replace`` / duplicate header names).
-///
-/// For CORS (`if_absent == false`), skip the Python `response_header_pairs` call when the
-/// request has no ``Origin`` header (issue #108) — same outcome as an empty pair list.
+/// Merges security headers and CORS headers into outgoing response.
+/// Uses native compiled configs without Python calls if available (issue #218),
+/// or falls back to calling `response_header_pairs` on the Python config objects.
 fn merge_config_response_headers(
     py: Python<'_>,
-    config: &Option<Py<PyAny>>,
-    scope: Bound<'_, PyAny>,
+    snapshot: &HotSnapshot,
+    scope: &Bound<'_, PyAny>,
     mapped: HandlerMap,
-    if_absent: bool,
 ) -> PyResult<HandlerMap> {
-    let Some(c) = config else {
+    if matches!(mapped, HandlerMap::AlreadySent) {
         return Ok(mapped);
+    }
+    // 1. Security headers (if_absent = true)
+    let mapped = if let Some(ref sec) = snapshot.compiled_security_headers {
+        let scheme = scope
+            .getattr("scheme")
+            .ok()
+            .and_then(|s| s.extract::<String>().ok())
+            .unwrap_or_default();
+        let pairs = sec.response_header_pairs(&scheme);
+        merge_header_pairs_if_absent(mapped, &pairs)?
+    } else if let Some(ref sec_py) = snapshot.security_headers {
+        let pairs: Vec<(String, String)> = sec_py
+            .call_method1(py, "response_header_pairs", (scope,))?
+            .extract(py)?;
+        merge_header_pairs_if_absent(mapped, &pairs)?
+    } else {
+        mapped
     };
-    if !if_absent {
+
+    // 2. CORS headers (replace = true)
+    let mapped = if let Some(ref cors) = snapshot.compiled_cors {
+        let headers = scope.getattr("headers")?;
+        if let Some(origin) = header_get_lax(&headers, "origin") {
+            let pairs = cors.response_header_pairs(&origin);
+            merge_header_pairs_replace(mapped, &pairs)?
+        } else {
+            mapped
+        }
+    } else if let Some(ref cors_py) = snapshot.cors {
         let headers = scope.getattr("headers")?;
         if header_get_lax(&headers, "origin").is_none() {
-            return Ok(mapped);
+            mapped
+        } else {
+            let pairs: Vec<(String, String)> = cors_py
+                .call_method1(py, "response_header_pairs", (scope,))?
+                .extract(py)?;
+            merge_header_pairs_replace(mapped, &pairs)?
         }
-    }
-    let pairs: Vec<(String, String)> = c
-        .call_method1(py, "response_header_pairs", (&scope,))?
-        .extract(py)?;
-    if pairs.is_empty() {
-        return Ok(mapped);
-    }
-    if if_absent {
-        merge_header_pairs_if_absent(py, mapped, &pairs)
     } else {
-        merge_header_pairs_replace(py, mapped, &pairs)
-    }
+        mapped
+    };
+
+    Ok(mapped)
 }
 
 fn merge_header_pairs_replace(
-    py: Python<'_>,
     mapped: HandlerMap,
     extra: &[(String, String)],
 ) -> PyResult<HandlerMap> {
@@ -1615,7 +1728,6 @@ fn merge_header_pairs_replace(
             body,
             content_type,
         } => {
-            let body = body.into_vec(py)?;
             let mut headers = vec![("content-type".to_string(), content_type)];
             for (a, b) in extra {
                 headers.retain(|(k, _)| !k.eq_ignore_ascii_case(a));
@@ -1631,7 +1743,6 @@ fn merge_header_pairs_replace(
 }
 
 fn merge_header_pairs_if_absent(
-    py: Python<'_>,
     mapped: HandlerMap,
     extra: &[(String, String)],
 ) -> PyResult<HandlerMap> {
@@ -1661,7 +1772,6 @@ fn merge_header_pairs_if_absent(
             body,
             content_type,
         } => {
-            let body = body.into_vec(py)?;
             let mut headers = vec![("content-type".to_string(), content_type)];
             for (a, b) in extra {
                 if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case(a)) {
@@ -1742,7 +1852,7 @@ fn structured_from_status_body(
     }
     Ok(HandlerMap::WithHeaders {
         status,
-        body,
+        body: SimpleBody::Owned(body),
         headers: pairs,
     })
 }

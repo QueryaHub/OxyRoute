@@ -171,9 +171,12 @@ pub struct AppState {
     pub exception_handlers: ExceptionHandlerList,
     /// Optional Python CORS config (e.g. :class:`oxyroute.cors.CORSConfig`) for response headers.
     pub cors: Option<Py<PyAny>>,
+    pub compiled_cors: Option<Arc<crate::cors::CompiledCorsConfig>>,
     /// Optional :class:`oxyroute.security_headers.SecurityHeadersConfig` (or compatible
     /// ``response_header_pairs``) merged if those header names are not already set.
     pub security_headers: Option<Py<PyAny>>,
+    pub compiled_security_headers:
+        Option<Arc<crate::security_headers::CompiledSecurityHeadersConfig>>,
     /// Global connection pool for the Postgres database.
     pub db_pool: Option<sqlx::PgPool>,
     /// Bitmask of allowed HTTP methods per registered path template.
@@ -207,7 +210,9 @@ impl AppState {
             websocket_routes: Arc::clone(&websocket_routes),
             compiled: None,
             cors: None,
+            compiled_cors: None,
             security_headers: None,
+            compiled_security_headers: None,
             request_middleware: Arc::clone(&request_middleware),
             response_middleware: Arc::clone(&response_middleware),
             exception_handlers: Arc::clone(&exception_handlers),
@@ -231,7 +236,9 @@ impl AppState {
             response_middleware,
             exception_handlers,
             cors: None,
+            compiled_cors: None,
             security_headers: None,
+            compiled_security_headers: None,
             db_pool: None,
             path_method_masks: Mutex::new(std::collections::HashMap::new()),
             snapshot,
@@ -249,7 +256,9 @@ impl AppState {
                 websocket_routes: Arc::clone(&self.websocket_routes),
                 compiled: self.compiled.as_ref().map(Arc::clone),
                 cors: self.cors.clone(),
+                compiled_cors: self.compiled_cors.clone(),
                 security_headers: self.security_headers.clone(),
+                compiled_security_headers: self.compiled_security_headers.clone(),
                 request_middleware: Arc::clone(&self.request_middleware),
                 response_middleware: Arc::clone(&self.response_middleware),
                 exception_handlers: Arc::clone(&self.exception_handlers),
@@ -290,7 +299,10 @@ pub struct FrozenState {
     pub websocket_routes: Arc<Vec<WebsocketRoute>>,
     pub compiled: Option<Arc<CompiledRouters>>,
     pub cors: Option<Py<PyAny>>,
+    pub compiled_cors: Option<Arc<crate::cors::CompiledCorsConfig>>,
     pub security_headers: Option<Py<PyAny>>,
+    pub compiled_security_headers:
+        Option<Arc<crate::security_headers::CompiledSecurityHeadersConfig>>,
     pub request_middleware: Arc<Vec<Py<PyAny>>>,
     pub response_middleware: Arc<Vec<Py<PyAny>>>,
     pub exception_handlers: ExceptionHandlerList,

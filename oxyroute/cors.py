@@ -147,13 +147,12 @@ def apply_cors(
     strictly after the CORS preflight check, use ``apply_cors(..., chain=your_middleware)``.
     """
     app.set_cors(config)
+    if chain is not None:
 
-    def _cors_middleware(scope: Any, protocol: Any) -> Response | None:
-        p = config.preflight_response(scope)
-        if p is not None:
-            return p
-        if chain is not None:
+        def _cors_middleware(scope: Any, protocol: Any) -> Response | None:
+            p = config.preflight_response(scope)
+            if p is not None:
+                return p
             return chain(scope, protocol)
-        return None
 
-    app.add_middleware(_cors_middleware, phase="request")
+        app.add_middleware(_cors_middleware, phase="request")

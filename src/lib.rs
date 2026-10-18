@@ -10,6 +10,7 @@ use serde_json::json;
 
 mod buffer_pool;
 mod config;
+mod cors;
 mod db;
 mod dependency;
 mod dispatch;
@@ -18,6 +19,7 @@ mod params;
 mod rate_limit;
 mod response;
 mod schema;
+mod security_headers;
 mod state;
 mod token;
 mod websocket;
@@ -748,8 +750,26 @@ impl App {
 
     /// Optional Python CORS config with ``response_header_pairs(scope)`` (see ``oxyroute.cors``).
     fn set_cors(&self, config: Option<Py<PyAny>>) -> PyResult<()> {
+        let compiled = if let Some(ref c) = config {
+            Python::with_gil(|py| {
+                let bound = c.bind(py);
+                if bound
+                    .get_type()
+                    .name()
+                    .map(|n| n == "CORSConfig")
+                    .unwrap_or(false)
+                {
+                    cors::CompiledCorsConfig::from_py(bound).ok().map(Arc::new)
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
         let mut st = self.state.write();
         st.cors = config;
+        st.compiled_cors = compiled;
         st.rebuild_snapshot();
         Ok(())
     }
@@ -757,8 +777,28 @@ impl App {
     /// Optional security-headers preset; ``response_header_pairs(scope)`` (see
     /// ``oxyroute.security_headers``), merged only for header names not already on the response.
     fn set_security_headers(&self, config: Option<Py<PyAny>>) -> PyResult<()> {
+        let compiled = if let Some(ref c) = config {
+            Python::with_gil(|py| {
+                let bound = c.bind(py);
+                if bound
+                    .get_type()
+                    .name()
+                    .map(|n| n == "SecurityHeadersConfig")
+                    .unwrap_or(false)
+                {
+                    security_headers::CompiledSecurityHeadersConfig::from_py(bound)
+                        .ok()
+                        .map(Arc::new)
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
         let mut st = self.state.write();
         st.security_headers = config;
+        st.compiled_security_headers = compiled;
         st.rebuild_snapshot();
         Ok(())
     }
