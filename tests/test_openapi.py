@@ -123,6 +123,9 @@ def test_docs_ui_scalar_returns_html() -> None:
         assert "text/html" in r.headers.get("content-type", "")
         assert "/openapi.json" in r.text
         assert "scalar" in r.text.lower() or "api-reference" in r.text
+        assert "@scalar/api-reference@1.75.0" in r.text
+        assert "integrity=" in r.text
+        assert 'crossorigin="anonymous"' in r.text
 
     asyncio.run(_run())
 
@@ -138,6 +141,34 @@ def test_docs_ui_swagger_via_mount_docs() -> None:
         assert r.status_code == 200
         assert "text/html" in r.headers.get("content-type", "")
         assert "swagger-ui" in r.text.lower()
+        assert "swagger-ui-dist@5.33.3" in r.text
+        assert "integrity=" in r.text
+        assert 'crossorigin="anonymous"' in r.text
+
+    asyncio.run(_run())
+
+
+def test_docs_ui_custom_asset_urls_and_sri() -> None:
+    app = App(title="CustomDocs")
+    app.mount_docs(
+        "/custom-docs",
+        ui="swagger",
+        swagger_css_url="/static/swagger.css",
+        swagger_css_sri=None,
+        swagger_js_url="/static/swagger.js",
+        swagger_js_sri="sha384-customhash123",
+    )
+
+    async def _run() -> None:
+        transport = httpx.ASGITransport(app=asgi_test_app(app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            r = await c.get("/custom-docs")
+        assert r.status_code == 200
+        assert 'href="/static/swagger.css"' in r.text
+        assert (
+            'src="/static/swagger.js" integrity="sha384-customhash123" crossorigin="anonymous"'
+            in r.text
+        )
 
     asyncio.run(_run())
 

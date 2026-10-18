@@ -31,7 +31,8 @@ def test_apply_csrf_chain_runs_after_guard_pass() -> None:
         def __init__(self) -> None:
             self.middleware = None
 
-        def set_middleware(self, mw):  # type: ignore[no-untyped-def]
+        def add_middleware(self, mw, phase="request"):  # type: ignore[no-untyped-def]
+            assert phase == "request"
             self.middleware = mw
 
     app = _AppStub()

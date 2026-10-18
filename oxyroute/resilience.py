@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+from collections import deque
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -23,6 +25,7 @@ class AdaptiveConcurrencyLimiter:
         initial_limit: int = 32,
         alpha: float = 0.1,
         smoothing: float = 0.2,
+        rtt_window_size: int = 100,
     ) -> None:
         self.app = app
         self.min_limit = max(1, min_limit)
@@ -30,21 +33,25 @@ class AdaptiveConcurrencyLimiter:
         self.current_limit: float = float(min(max(initial_limit, self.min_limit), self.max_limit))
         self.alpha = alpha
         self.smoothing = smoothing
+        self.rtt_window_size = max(10, rtt_window_size)
+        self._rtt_samples: deque[float] = deque(maxlen=self.rtt_window_size)
         self.min_rtt: float | None = None
         self.avg_rtt: float | None = None
 
         self.app.set_max_concurrency(int(self.current_limit))
 
-    def on_request_completed(self, latency_seconds: float) -> int:
+    def on_request_completed(self, latency_seconds: float, status: int = 200) -> int:
         """
         Record completed request latency and adjust concurrency limit.
+        Only 2xx responses are sampled to prevent fast rejections (e.g. 503 load-shedding
+        or 404s) from skewing min_rtt toward zero.
         Returns the updated integer concurrency limit.
         """
-        if latency_seconds <= 0.0:
+        if latency_seconds <= 0.0 or not (200 <= status < 300):
             return int(self.current_limit)
 
-        if self.min_rtt is None or latency_seconds < self.min_rtt:
-            self.min_rtt = latency_seconds
+        self._rtt_samples.append(latency_seconds)
+        self.min_rtt = min(self._rtt_samples)
 
         if self.avg_rtt is None:
             self.avg_rtt = latency_seconds
@@ -52,10 +59,9 @@ class AdaptiveConcurrencyLimiter:
             self.avg_rtt = (1.0 - self.smoothing) * self.avg_rtt + self.smoothing * latency_seconds
 
         if self.min_rtt > 0 and self.avg_rtt > 0:
-            gradient = self.min_rtt / self.avg_rtt
-            # Vegas calculation: target = limit * gradient + alpha
-            target = self.current_limit * gradient + self.alpha
-            # Smooth adjustment towards target
+            gradient = min(1.0, self.min_rtt / self.avg_rtt)
+            headroom = max(self.alpha, math.sqrt(self.current_limit))
+            target = self.current_limit * gradient + headroom
             self.current_limit = (
                 1.0 - self.smoothing
             ) * self.current_limit + self.smoothing * target
@@ -73,7 +79,7 @@ class AdaptiveConcurrencyLimiter:
         Return a callable suitable for `App(access_log_hook=limiter.as_access_log_hook())`.
         """
 
-        def _hook(scope: Any, status: int, duration_seconds: float, path_template: str) -> None:
-            self.on_request_completed(duration_seconds)
+        def _hook(scope: Any, status: int, duration_ms: float, path_template: str) -> None:
+            self.on_request_completed(duration_ms / 1000.0, status=status)
 
         return _hook

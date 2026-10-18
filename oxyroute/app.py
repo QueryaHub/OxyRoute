@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, TypeVar
 
@@ -48,9 +48,39 @@ class _ProtocolWrapper:
         self.status = status
         self._inner.response_file(status, headers, file_path)
 
+    def response_file_range(
+        self,
+        status: int,
+        headers: list[tuple[str, str]],
+        file_path: str,
+        offset: int,
+        count: int,
+    ) -> None:
+        self.status = status
+        self._inner.response_file_range(status, headers, file_path, offset, count)
+
     def response_stream(self, status: int, headers: list[tuple[str, str]]) -> Any:
         self.status = status
         return self._inner.response_stream(status, headers)
+
+    def accept(self, *args: Any, **kwargs: Any) -> Any:
+        self.status = 101
+        return self._inner.accept(*args, **kwargs)
+
+    def close(self, *args: Any, **kwargs: Any) -> Any:
+        return self._inner.close(*args, **kwargs)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self._inner(*args, **kwargs)
+
+    def __aiter__(self) -> Any:
+        return self._inner.__aiter__()
+
+    def __anext__(self) -> Any:
+        return self._inner.__anext__()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
 
 
 def _norm_dependencies(
@@ -190,6 +220,9 @@ class App:
         self.state: SimpleNamespace = SimpleNamespace()
         self._docs_ui: str | None = normalize_docs_ui(docs_ui)
         self._docs_mounted: bool = False
+        # Tracks request-middleware count so `set_middleware` can warn before it silently
+        # clobbers anything registered via `add_middleware` (issue #209).
+        self._request_mw_count: int = 0
         if (
             openapi_description is not None
             or openapi_contact is not None
@@ -254,18 +287,45 @@ class App:
         *,
         ui: str = "scalar",
         openapi_url: str = "/openapi.json",
+        scalar_js_url: str | None = None,
+        scalar_js_sri: str | None = None,
+        swagger_css_url: str | None = None,
+        swagger_css_sri: str | None = None,
+        swagger_js_url: str | None = None,
+        swagger_js_sri: str | None = None,
     ) -> None:
         """
         Register ``GET path`` serving Scalar or Swagger UI against ``openapi_url``.
 
-        UI assets load from a public CDN; set CSP ``script-src`` / ``style-src`` accordingly
-        (or disable security-header presets that block CDN scripts on the docs route).
+        UI assets load from a public CDN with pinned versions and Subresource Integrity (SRI);
+        set CSP ``script-src`` / ``style-src`` accordingly (or disable security-header presets
+        that block CDN scripts on the docs route). Custom or self-hosted asset URLs and SRIs
+        can be specified via ``scalar_js_url``, ``swagger_css_url``, ``swagger_js_url``, etc.
         """
         ui_n = normalize_docs_ui(ui)
         if ui_n is None:
             raise ValueError("ui is required")
         path = path.rstrip("/") or "/docs"
-        html = docs_html(ui=ui_n, title=self.title, openapi_url=openapi_url)
+
+        docs_kwargs: dict[str, str | None] = {
+            "ui": ui_n,
+            "title": self.title,
+            "openapi_url": openapi_url,
+        }
+        if scalar_js_url is not None:
+            docs_kwargs["scalar_js_url"] = scalar_js_url
+        if scalar_js_sri is not None:
+            docs_kwargs["scalar_js_sri"] = scalar_js_sri
+        if swagger_css_url is not None:
+            docs_kwargs["swagger_css_url"] = swagger_css_url
+        if swagger_css_sri is not None:
+            docs_kwargs["swagger_css_sri"] = swagger_css_sri
+        if swagger_js_url is not None:
+            docs_kwargs["swagger_js_url"] = swagger_js_url
+        if swagger_js_sri is not None:
+            docs_kwargs["swagger_js_sri"] = swagger_js_sri
+
+        html = docs_html(**docs_kwargs)  # type: ignore[arg-type]
         headers = {"content-type": "text/html; charset=utf-8"}
 
         def _docs() -> Response:
@@ -331,8 +391,37 @@ class App:
         (e.g. :class:`oxyroute.Response` or a ``dict`` with ``status`` / ``body`` / ``headers``);
         the response is sent and routing / body read is skipped. Runs **before** the request
         body is read (e.g. for CORS preflight).
+
+        **Replaces** the entire request-middleware stack, including anything registered via
+        :meth:`add_middleware` (or :func:`oxyroute.cors.apply_cors` / :func:`oxyroute.csrf.apply_csrf`,
+        which use :meth:`add_middleware` internally). Prefer :meth:`add_middleware` to compose
+        multiple middlewares instead of replacing what is already registered (issue #209).
         """
+        if handler is not None and self._request_mw_count > 0:
+            import warnings
+
+            warnings.warn(
+                f"set_middleware() is replacing {self._request_mw_count} already-registered "
+                "request middleware(s) (e.g. from add_middleware/apply_cors/apply_csrf). "
+                "Use add_middleware() instead to compose middlewares without clobbering them.",
+                stacklevel=2,
+            )
         self._app.set_middleware(handler)
+        self._request_mw_count = 1 if handler is not None else 0
+
+    def add_middleware(self, handler: Callable[..., Any], phase: str = "request") -> None:
+        """
+        Append ``handler`` to the middleware stack instead of replacing it.
+
+        ``phase`` is one of ``"request"`` (runs before routing, same contract as
+        :meth:`set_middleware`), ``"response"`` (runs on the outgoing response, before
+        CORS / security-header merging), or ``"both"``. Request middlewares run in
+        registration order; the first one to return a non-``None`` value short-circuits
+        the rest and is sent as the response.
+        """
+        if phase in ("request", "both"):
+            self._request_mw_count += 1
+        self._app.add_middleware(handler, phase)
 
     def set_cors(self, config: Any | None) -> None:
         """
@@ -576,7 +665,12 @@ class App:
             rate_limit_key=rate_limit_key,
         )
 
-    def websocket(self, path: str) -> Callable[[F], F]:
+    def websocket(
+        self,
+        path: str,
+        *,
+        allowed_origins: Sequence[str] | None = None,
+    ) -> Callable[[F], F]:
         """
         Register a native RSGI WebSocket handler.
 
@@ -584,12 +678,20 @@ class App:
         The handler receives a single :class:`oxyroute.WebSocket` argument; ``await``
         :meth:`oxyroute.WebSocket.accept` once before sending or receiving frames.
 
+        Parameters:
+        - ``allowed_origins``: Optional list or tuple of trusted Origin header values
+          (e.g. ``["https://app.example.com"]`` or ``["*"]``) to protect against
+          Cross-Site WebSocket Hijacking (CSWSH). If specified and the handshake's
+          ``Origin`` header is missing or disallowed, the connection is closed immediately
+          with code 1008 (Policy Violation) before the handler runs or handshake completes.
+
         Sync handlers run inline (the Rust dispatcher does not bridge them through Tokio
         twice); async handlers are awaited on Granian's loop.
         """
+        origins_list = list(allowed_origins) if allowed_origins is not None else None
 
         def wrap(handler: F) -> F:
-            self._app.add_websocket_route(path, handler)
+            self._app.add_websocket_route(path, handler, allowed_origins=origins_list)
             return handler
 
         return wrap

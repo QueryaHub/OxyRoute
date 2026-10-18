@@ -281,3 +281,91 @@ def test_websocket_graceful_shutdown_1001() -> None:
         await task
 
     asyncio.run(_test())
+
+
+def test_websocket_origin_allowed() -> None:
+    app = App()
+    recorded_origin: list[str | None] = []
+
+    @app.websocket("/ws/secure", allowed_origins=["https://trusted.example.com"])
+    async def handler(ws: WebSocket) -> None:
+        recorded_origin.append(ws.origin)
+        await ws.accept()
+        await ws.close(1000)
+
+    # Valid origin matching allowed list
+    proto = _MockProtocol()
+    scope = _WSScope(
+        path="/ws/secure",
+        headers=_Headers(pairs=[("origin", "https://trusted.example.com")]),
+    )
+    _drive(app, scope, proto)
+
+    assert proto.closed_with == 1000
+    assert recorded_origin == ["https://trusted.example.com"]
+
+
+def test_websocket_origin_rejected_when_disallowed() -> None:
+    app = App()
+    invoked = False
+
+    @app.websocket("/ws/secure", allowed_origins=["https://trusted.example.com"])
+    async def handler(ws: WebSocket) -> None:
+        nonlocal invoked
+        invoked = True
+        await ws.accept()
+
+    # Disallowed origin
+    proto = _MockProtocol()
+    scope = _WSScope(
+        path="/ws/secure",
+        headers=_Headers(pairs=[("origin", "https://evil.example.com")]),
+    )
+    _drive(app, scope, proto)
+
+    assert not invoked
+    assert proto.closed_with == 1008
+
+
+def test_websocket_origin_rejected_when_missing() -> None:
+    app = App()
+    invoked = False
+
+    @app.websocket("/ws/secure", allowed_origins=["https://trusted.example.com"])
+    async def handler(ws: WebSocket) -> None:
+        nonlocal invoked
+        invoked = True
+        await ws.accept()
+
+    # Missing origin header
+    proto = _MockProtocol()
+    scope = _WSScope(
+        path="/ws/secure",
+        headers=_Headers(pairs=[]),
+    )
+    _drive(app, scope, proto)
+
+    assert not invoked
+    assert proto.closed_with == 1008
+
+
+def test_websocket_origin_wildcard_allowed() -> None:
+    app = App()
+    invoked = False
+
+    @app.websocket("/ws/public", allowed_origins=["*"])
+    async def handler(ws: WebSocket) -> None:
+        nonlocal invoked
+        invoked = True
+        await ws.accept()
+        await ws.close(1000)
+
+    proto = _MockProtocol()
+    scope = _WSScope(
+        path="/ws/public",
+        headers=_Headers(pairs=[("origin", "https://any.site.example.org")]),
+    )
+    _drive(app, scope, proto)
+
+    assert invoked
+    assert proto.closed_with == 1000

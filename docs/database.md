@@ -60,6 +60,24 @@ The native Rust executor automatically maps and type-checks the following Python
 | `str` | `TEXT`, `VARCHAR`, `CHAR` |
 | `dict` / `list` | `JSON`, `JSONB` |
 
+### Supported Result Decoding Types
+
+Rows returned from `DBQuery` are decoded into Python `dict`s according to their Postgres column type:
+
+| Postgres Type | Decoded Python Type / Representation |
+|---|---|
+| `NULL` | `None` |
+| `BOOL` | `bool` |
+| `INT2`, `INT4`, `INT8` | `int` |
+| `FLOAT4`, `FLOAT8` | `float` |
+| `NUMERIC`, `DECIMAL` | `str` (exact decimal representation) |
+| `TEXT`, `VARCHAR`, `CHAR`, `NAME`, `CITEXT` | `str` |
+| `JSON`, `JSONB` | `dict` / `list` / primitive |
+| `UUID` | `str` (canonical UUID format) |
+| `DATE`, `TIME`, `TIMETZ` | `str` (ISO-8601 date/time) |
+| `TIMESTAMP`, `TIMESTAMPTZ` | `str` (ISO-8601 timestamp) |
+| `BYTEA` | `bytes` |
+
 ---
 
 ## Database Connection Pool Lifecycle
@@ -81,13 +99,16 @@ async def shutdown():
 
 ---
 
-## Streaming & Chunked Row Decoding
+## Batched & Chunked Row Decoding
 
 For large result sets, `DBQuery` streams row decoding directly from the PostgreSQL socket without accumulating unmanaged `PgRow` structs in Rust memory (issue #143).
 
-You can also pass `chunk_size` to group rows into batches:
+You can also pass `chunk_size` to group rows into batches (a list of row chunks `list[list[dict]]`):
 
 ```python
-# Stream rows in chunks of 500
+# Group rows in batches of 500: [[row1, ...], [row501, ...]]
 query = DBQuery("SELECT * FROM large_log_table WHERE timestamp > $1", (since,), chunk_size=500)
 ```
+
+> [!NOTE]
+> `chunk_size` groups rows into sub-lists for bulk processing in handlers. The complete list of chunks is materialized in memory when the query resolves.

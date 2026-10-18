@@ -20,6 +20,22 @@ def test_static_files():
             assert resp.headers["content-type"] == "text/plain"
 
 
+def test_static_files_numeric_filename():
+    """issue #212: a wildcard `*path` catch-all must stay `str` — a file whose name looks
+    like an int/float/bool must not be schema-lite coerced and break `.split("/")`."""
+    with TemporaryDirectory() as tmpdir:
+        with open(os.path.join(tmpdir, "42"), "w") as f:
+            f.write("the answer")
+
+        app = App()
+        app.mount("/static", StaticFiles(tmpdir))
+
+        with TestClient(app) as client:
+            resp = client.get("/static/42")
+            assert resp.status_code == 200
+            assert resp.content == b"the answer"
+
+
 def test_static_files_missing():
     with TemporaryDirectory() as tmpdir:
         app = App()

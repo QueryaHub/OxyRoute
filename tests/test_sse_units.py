@@ -68,3 +68,31 @@ def test_send_sse_fallback_path_with_list_events() -> None:
     assert ("content-type", "text/event-stream; charset=utf-8") in headers
     assert "data: hello" in body
     assert "id: 1" in body
+
+
+def test_sse_event_rejects_newlines_in_event_and_id() -> None:
+    import pytest
+    from oxyroute.sse import _format_sse_event
+
+    with pytest.raises(ValueError, match="SSE event field must not contain newline"):
+        SSEEvent(data="payload", event="bad\nevent")
+
+    with pytest.raises(ValueError, match="SSE event field must not contain newline"):
+        SSEEvent(data="payload", event="bad\revent")
+
+    with pytest.raises(ValueError, match="SSE id field must not contain newline"):
+        SSEEvent(data="payload", id="bad\nid")
+
+    with pytest.raises(ValueError, match="SSE id field must not contain newline"):
+        SSEEvent(data="payload", id="bad\rid")
+
+    # If attributes are mutated after init
+    ev = SSEEvent(data="test")
+    object.__setattr__(ev, "event", "injected\nevent")
+    with pytest.raises(ValueError, match="SSE event field must not contain newline"):
+        _format_sse_event(ev)
+
+    object.__setattr__(ev, "event", None)
+    object.__setattr__(ev, "id", "injected\nid")
+    with pytest.raises(ValueError, match="SSE id field must not contain newline"):
+        _format_sse_event(ev)

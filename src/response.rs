@@ -76,7 +76,7 @@ pub async fn send_with_headers(
     Python::with_gil(|py| {
         let p = protocol.bind(py);
         let h = build_header_list_from_pairs(py, &headers)?;
-        p.getattr("response_bytes")?.call1((status, h, body))?;
+        p.call_method1("response_bytes", (status, h, body))?;
         Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
     })
 }
@@ -89,7 +89,7 @@ async fn send_empty_with_header_pairs(
     Python::with_gil(|py| {
         let p = protocol.bind(py);
         let h = build_header_list_from_pairs(py, &headers)?;
-        p.getattr("response_empty")?.call1((status, h))?;
+        p.call_method1("response_empty", (status, h))?;
         Ok(Py::from(pyo3::types::PyNone::get(py)).into_any())
     })
 }
@@ -108,7 +108,7 @@ pub async fn send_head_simple(
     send_empty_with_header_pairs(protocol, status, headers).await
 }
 
-fn build_header_list_from_pairs<'py>(
+pub(crate) fn build_header_list_from_pairs<'py>(
     py: Python<'py>,
     pairs: &[(String, String)],
 ) -> PyResult<Bound<'py, PyList>> {
@@ -196,7 +196,7 @@ pub fn send_str_sync(
 ) -> PyResult<()> {
     let p = protocol.bind(py);
     let h = build_headers_ct(py, Some(content_type))?;
-    p.getattr("response_str")?.call1((status, h, text))?;
+    p.call_method1("response_str", (status, h, text))?;
     Ok(())
 }
 
@@ -227,7 +227,7 @@ pub fn send_pybytes_sync(
     }
     let p = protocol.bind(py);
     let h = build_headers_ct(py, Some(content_type))?;
-    p.getattr("response_bytes")?.call1((status, h, body))?;
+    p.call_method1("response_bytes", (status, h, body))?;
     Ok(())
 }
 
@@ -244,7 +244,7 @@ pub fn send_bytes_sync(
     }
     let p = protocol.bind(py);
     let h = build_headers_ct(py, Some(content_type))?;
-    p.getattr("response_bytes")?.call1((status, h, body))?;
+    p.call_method1("response_bytes", (status, h, body))?;
     Ok(())
 }
 
@@ -257,7 +257,7 @@ pub fn send_empty_sync(
 ) -> PyResult<()> {
     let p = protocol.bind(py);
     let h = build_headers_ct(py, content_type)?;
-    p.getattr("response_empty")?.call1((status, h))?;
+    p.call_method1("response_empty", (status, h))?;
     Ok(())
 }
 
@@ -272,9 +272,9 @@ pub fn send_with_headers_sync(
     let p = protocol.bind(py);
     let h = build_header_list_from_pairs(py, &headers)?;
     if body.is_empty() {
-        p.getattr("response_empty")?.call1((status, h))?;
+        p.call_method1("response_empty", (status, h))?;
     } else {
-        p.getattr("response_bytes")?.call1((status, h, body))?;
+        p.call_method1("response_bytes", (status, h, body))?;
     }
     Ok(())
 }
@@ -293,8 +293,10 @@ pub fn send_405_method_not_allowed_sync(
     let pair1 = PyTuple::new(py, [allow_key.as_any(), allow_val.as_any()])?;
     let pair2 = PyTuple::new(py, [ct_key.as_any(), ct_val.as_any()])?;
     let h = PyList::new(py, [pair1, pair2])?;
-    p.getattr("response_bytes")?
-        .call1((405u16, h, b"Method Not Allowed" as &[u8]))?;
+    p.call_method1(
+        "response_bytes",
+        (405u16, h, b"Method Not Allowed" as &[u8]),
+    )?;
     Ok(())
 }
 
@@ -324,11 +326,10 @@ pub fn send_429_rate_limited_sync(
     let pair5 = PyTuple::new(py, [retry_key.as_any(), retry_val.as_any()])?;
     let h = PyList::new(py, [pair1, pair2, pair3, pair4, pair5])?;
 
-    p.getattr("response_bytes")?.call1((
-        429u16,
-        h,
-        b"{\"detail\":\"Too Many Requests\"}" as &[u8],
-    ))?;
+    p.call_method1(
+        "response_bytes",
+        (429u16, h, b"{\"detail\":\"Too Many Requests\"}" as &[u8]),
+    )?;
     Ok(())
 }
 
@@ -360,11 +361,12 @@ pub fn send_head_simple_sync(
     let pair1 = PyTuple::new(py, [ct_key.as_any(), ct_val.as_any()])?;
     let pair2 = PyTuple::new(py, [cl_key.as_any(), cl_val.as_any()])?;
     let h = PyList::new(py, [pair1, pair2])?;
-    p.getattr("response_empty")?.call1((status, h))?;
+    p.call_method1("response_empty", (status, h))?;
     Ok(())
 }
 
 /// HEAD with arbitrary headers; strips body, sets `content-length` from `full_body.len()`.
+#[allow(dead_code)]
 pub fn send_head_with_headers_sync(
     py: Python<'_>,
     protocol: &Py<PyAny>,
@@ -373,6 +375,19 @@ pub fn send_head_with_headers_sync(
     mut headers: Vec<(String, String)>,
 ) -> PyResult<()> {
     let len = full_body.len();
+    headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-length"));
+    headers.push(("content-length".to_string(), len.to_string()));
+    send_with_headers_sync(py, protocol, status, b"", headers)
+}
+
+/// HEAD with arbitrary headers given precomputed body length; strips body, sets `content-length`.
+pub fn send_head_len_with_headers_sync(
+    py: Python<'_>,
+    protocol: &Py<PyAny>,
+    status: u16,
+    len: usize,
+    mut headers: Vec<(String, String)>,
+) -> PyResult<()> {
     headers.retain(|(k, _)| !k.eq_ignore_ascii_case("content-length"));
     headers.push(("content-length".to_string(), len.to_string()));
     send_with_headers_sync(py, protocol, status, b"", headers)

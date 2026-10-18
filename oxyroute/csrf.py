@@ -128,10 +128,11 @@ def apply_csrf(
     chain: _Middleware | None = None,
 ) -> None:
     """
-    Installs **one** :meth:`oxyroute.app.App.set_middleware` that runs :meth:`CSRFConfig.guard`
-    first, then ``chain`` (if any), then continues routing. Replaces any previous
-    pre-route callback — combine manually or use :func:`csrf_layer` inside
-    :func:`oxyroute.cors.apply_cors`.
+    Appends (via :meth:`oxyroute.app.App.add_middleware`) a request middleware that runs
+    :meth:`CSRFConfig.guard` first, then ``chain`` (if any), then continues routing. Composes
+    with anything already registered via :meth:`oxyroute.app.App.add_middleware` instead of
+    replacing it (issue #209) — combine manually, or use :func:`csrf_layer` inside
+    :func:`oxyroute.cors.apply_cors` for strict ordering relative to the CORS preflight check.
     """
 
     def _mw(scope: Any, protocol: Any) -> Response | None:
@@ -142,4 +143,4 @@ def apply_csrf(
             return chain(scope, protocol)
         return None
 
-    app.set_middleware(_mw)
+    app.add_middleware(_mw, phase="request")

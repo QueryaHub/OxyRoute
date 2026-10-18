@@ -10,10 +10,21 @@ use pyo3::prelude::*;
 
 const NUM_SHARDS: usize = 16;
 const MAX_SHARD_ENTRIES: usize = 8192;
+/// Cap on the key string itself (issue #208): keys can come from client-controlled input
+/// (e.g. a forwarded-IP header value), so without a bound a single request could grow a
+/// shard's memory footprint arbitrarily via one oversized key.
+const MAX_KEY_LEN: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RateLimitKeyStrategy {
+    /// The actual TCP peer address (``scope.client``). Cannot be spoofed by the client —
+    /// the safe default.
     Ip,
+    /// `X-Forwarded-For` / `X-Real-IP`, falling back to ``scope.client``. **Only safe behind
+    /// a trusted reverse proxy that overwrites these headers** — otherwise any client can pick
+    /// its own rate-limit bucket, or frame another client's IP, by setting the header itself
+    /// (issue #207). Opt in explicitly with ``rate_limit_key="trusted-forwarded-ip"``.
+    TrustedForwardedIp,
     Header(String),
     Global,
 }
@@ -23,6 +34,10 @@ impl RateLimitKeyStrategy {
         let trimmed = s.trim();
         if trimmed.eq_ignore_ascii_case("ip") || trimmed.eq_ignore_ascii_case("client") {
             Self::Ip
+        } else if trimmed.eq_ignore_ascii_case("trusted-forwarded-ip")
+            || trimmed.eq_ignore_ascii_case("forwarded-ip")
+        {
+            Self::TrustedForwardedIp
         } else if trimmed.eq_ignore_ascii_case("global") {
             Self::Global
         } else if let Some(hdr) = trimmed.strip_prefix("header:") {
@@ -93,6 +108,18 @@ impl RateLimitConfig {
     }
 }
 
+/// Truncate `key` to `MAX_KEY_LEN` bytes on a valid UTF-8 boundary.
+fn truncate_key(key: &str) -> &str {
+    if key.len() <= MAX_KEY_LEN {
+        return key;
+    }
+    let mut end = MAX_KEY_LEN;
+    while end > 0 && !key.is_char_boundary(end) {
+        end -= 1;
+    }
+    &key[..end]
+}
+
 #[derive(Clone, Copy, Debug)]
 struct BucketState {
     tokens: f64,
@@ -114,6 +141,10 @@ pub enum RateLimitDecision {
 
 pub struct RateLimiter {
     pub limit: u64,
+    /// Kept for introspection alongside `limit`/`refill_rate_per_sec`; the eviction path no
+    /// longer reads it directly (see issue #208 — replaced the periodic `retain` sweep with
+    /// bounded per-shard eviction).
+    #[allow(dead_code)]
     pub window_secs: f64,
     pub refill_rate_per_sec: f64,
     pub key_strategy: RateLimitKeyStrategy,
@@ -141,20 +172,29 @@ impl RateLimiter {
     }
 
     pub fn check(&self, key: &str) -> RateLimitDecision {
+        let key = truncate_key(key);
         let now = Instant::now();
         let idx = self.shard_index(key);
         let mut shard = self.shards[idx].lock();
 
-        if shard.len() > MAX_SHARD_ENTRIES {
-            let expire_cutoff = self.window_secs * 2.0;
-            shard.retain(|_, v| (now - v.last_update).as_secs_f64() < expire_cutoff);
-        }
-
         let limit_f64 = self.limit as f64;
-        let bucket = shard.entry(key.to_string()).or_insert_with(|| BucketState {
-            tokens: limit_f64,
-            last_update: now,
-        });
+        let bucket = if let Some(bucket) = shard.get_mut(key) {
+            bucket
+        } else {
+            // Bound each shard's memory strictly: if this is a new key and the shard is already
+            // at capacity, evict one existing entry first instead of letting the map grow without
+            // limit (issue #208). This keeps `check` O(1) per request even under a flood of unique
+            // keys — no full-shard scan on the hot path, unlike the previous periodic `retain`.
+            if shard.len() >= MAX_SHARD_ENTRIES {
+                if let Some(evict) = shard.keys().next().cloned() {
+                    shard.remove(&evict);
+                }
+            }
+            shard.entry(key.to_string()).or_insert_with(|| BucketState {
+                tokens: limit_f64,
+                last_update: now,
+            })
+        };
 
         let elapsed = (now - bucket.last_update).as_secs_f64();
         let refilled = (bucket.tokens + elapsed * self.refill_rate_per_sec).min(limit_f64);
@@ -192,6 +232,37 @@ impl RateLimiter {
     }
 }
 
+/// Read the peer address off ``scope.client``. Granian's RSGI scope exposes this as a
+/// ``"host:port"`` string; the ASGI bridge / test scopes expose an ASGI-style ``(host, port)``
+/// tuple. Handles both so the "safe" strategies below get the real peer, not (e.g.) the first
+/// character of a ``"host:port"`` string via a stray ``__getitem__``.
+fn scope_client_host(scope: &pyo3::Bound<'_, pyo3::PyAny>) -> Option<String> {
+    let client = scope.getattr("client").ok()?;
+    if let Ok(s) = client.extract::<String>() {
+        if s.is_empty() {
+            return None;
+        }
+        // "host:port" (IPv4) or "[::1]:port" (IPv6) — split off the trailing ":port".
+        if let Some(rest) = s.strip_prefix('[') {
+            if let Some(end) = rest.find(']') {
+                return Some(format!("[{}]", &rest[..end]));
+            }
+        }
+        return match s.rsplit_once(':') {
+            Some((host, port)) if port.chars().all(|c| c.is_ascii_digit()) => {
+                Some(host.to_string())
+            }
+            _ => Some(s),
+        };
+    }
+    if let Ok(item) = client.get_item(0) {
+        if let Ok(ip) = item.extract::<String>() {
+            return Some(ip);
+        }
+    }
+    None
+}
+
 /// Extract rate limit key from Granian / ASGI scope based on strategy.
 pub fn extract_rate_limit_key(
     scope: &pyo3::Bound<'_, pyo3::PyAny>,
@@ -208,6 +279,12 @@ pub fn extract_rate_limit_key(
             "unknown".to_string()
         }
         RateLimitKeyStrategy::Ip => {
+            if let Some(ip) = scope_client_host(scope) {
+                return ip;
+            }
+            "127.0.0.1".to_string()
+        }
+        RateLimitKeyStrategy::TrustedForwardedIp => {
             if let Ok(headers) = scope.getattr("headers") {
                 if let Some(xf) = crate::params::header_get_lax(&headers, "x-forwarded-for") {
                     if let Some(first_ip) = xf.split(',').next() {
@@ -224,12 +301,8 @@ pub fn extract_rate_limit_key(
                     }
                 }
             }
-            if let Ok(client) = scope.getattr("client") {
-                if let Ok(item) = client.get_item(0) {
-                    if let Ok(ip) = item.extract::<String>() {
-                        return ip;
-                    }
-                }
+            if let Some(ip) = scope_client_host(scope) {
+                return ip;
             }
             "127.0.0.1".to_string()
         }
@@ -307,6 +380,72 @@ mod tests {
                 assert_eq!(remaining, 1);
             }
             RateLimitDecision::Denied { .. } => panic!("should be allowed"),
+        }
+    }
+
+    #[test]
+    fn test_shard_bounded_under_unique_key_flood() {
+        // issue #208: a flood of unique keys must not grow a shard's map past
+        // MAX_SHARD_ENTRIES, and `check` must keep working (not panic/hang) throughout.
+        let config = RateLimitConfig {
+            limit: 5,
+            window_secs: 60.0,
+            key_strategy: RateLimitKeyStrategy::Ip,
+        };
+        let limiter = RateLimiter::new(config);
+
+        for i in 0..(MAX_SHARD_ENTRIES * NUM_SHARDS * 2) {
+            let key = format!("unique-key-{i}");
+            limiter.check(&key);
+        }
+
+        for shard in &limiter.shards {
+            assert!(
+                shard.lock().len() <= MAX_SHARD_ENTRIES,
+                "shard grew past MAX_SHARD_ENTRIES"
+            );
+        }
+    }
+
+    #[test]
+    fn test_key_length_is_capped() {
+        let config = RateLimitConfig {
+            limit: 5,
+            window_secs: 60.0,
+            key_strategy: RateLimitKeyStrategy::Ip,
+        };
+        let limiter = RateLimiter::new(config);
+
+        let huge_key = "x".repeat(1_000_000);
+        limiter.check(&huge_key);
+
+        let total_len: usize = limiter
+            .shards
+            .iter()
+            .flat_map(|s| s.lock().keys().map(|k| k.len()).collect::<Vec<_>>())
+            .sum();
+        assert!(total_len <= MAX_KEY_LEN);
+    }
+
+    #[test]
+    fn test_existing_key_tokens_drain_correctly() {
+        let config = RateLimitConfig {
+            limit: 3,
+            window_secs: 60.0,
+            key_strategy: RateLimitKeyStrategy::Ip,
+        };
+        let limiter = RateLimiter::new(config);
+        for expected_rem in [2, 1, 0] {
+            match limiter.check("test-user") {
+                RateLimitDecision::Allowed { remaining, .. } => {
+                    assert_eq!(remaining, expected_rem);
+                }
+                _ => panic!("expected allowed"),
+            }
+        }
+        match limiter.check("test-user") {
+            RateLimitDecision::Denied { .. } => {}
+            _ => panic!("expected denied"),
         }
     }
 }

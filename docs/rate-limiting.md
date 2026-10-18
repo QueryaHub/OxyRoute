@@ -40,9 +40,21 @@ The `rate_limit` string accepts `<count>/<window>`:
 By default, rate limiting is tracked per client IP (`rate_limit_key="ip"`). You can customize the key:
 
 ### 1. Client IP (default)
-Tracks client IP using the `client` tuple or `X-Forwarded-For` / `X-Real-IP` headers when behind reverse proxies:
+Tracks the **actual TCP peer address** (`scope.client`). This cannot be spoofed by the client,
+and is the safe default:
 ```python
 @app.get("/login", rate_limit="5/minute", rate_limit_key="ip")
+def login() -> dict[str, str]:
+    return {"status": "ok"}
+```
+
+### 1b. Forwarded IP (opt-in, only behind a trusted reverse proxy)
+`rate_limit_key="trusted-forwarded-ip"` honors `X-Forwarded-For` / `X-Real-IP` (falling back to
+the peer address if neither is present). **Only use this when every request actually passes
+through a reverse proxy that overwrites these headers** — otherwise any client can set its own
+`X-Forwarded-For` value to dodge the limit, or spoof another client's IP to get it blocked:
+```python
+@app.get("/login", rate_limit="5/minute", rate_limit_key="trusted-forwarded-ip")
 def login() -> dict[str, str]:
     return {"status": "ok"}
 ```

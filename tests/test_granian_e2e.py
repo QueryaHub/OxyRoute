@@ -161,3 +161,86 @@ def test_granian_rsgi_post_json_body() -> None:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+def test_granian_rsgi_post_json_body_with_access_log_hook() -> None:
+    d = tempfile.mkdtemp()
+    log_file = os.path.join(d, "access.log")
+    p = os.path.join(d, "e2e_rsgi_log.py")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write(
+            textwrap.dedent(
+                f"""\
+                from oxyroute import App
+
+                def log_hook(scope, status, duration_ms, template):
+                    with open(r"{log_file}", "a", encoding="utf-8") as out:
+                        out.write(f"{{status}}:{{template}}\\n")
+
+                app = App(access_log_hook=log_hook)
+
+                @app.post("/echo")
+                def echo(json: dict) -> str:
+                    return f"n:{{json.get('n', 0)}}"
+                """
+            )
+        )
+    port = _free_port()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = d
+    cmd: list[str] = [
+        sys.executable,
+        "-m",
+        "granian",
+        "e2e_rsgi_log:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        str(port),
+        "--interface",
+        "rsgi",
+        "--workers",
+        "1",
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        env=env,
+        cwd=d,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.time() + 20.0
+        last_err: str | None = None
+        while time.time() < deadline:
+            time.sleep(0.05)
+            try:
+                with httpx.Client(timeout=1.0) as c:
+                    r = c.post(f"http://127.0.0.1:{port}/echo", json={"n": 42})
+                if r.status_code == 200 and r.text == "n:42":
+                    for _ in range(50):
+                        if os.path.exists(log_file):
+                            with open(log_file, encoding="utf-8") as lf:
+                                if "200:/echo" in lf.read():
+                                    return
+                        time.sleep(0.05)
+                    with open(log_file, encoding="utf-8") as lf:
+                        lines = lf.read()
+                    assert "200:/echo" in lines
+                    return
+            except (httpx.HTTPError, OSError) as e:
+                last_err = str(e)
+            if proc.poll() is not None:
+                err = proc.stderr.read() if proc.stderr else ""
+                raise AssertionError(
+                    f"granian exited early: code={proc.returncode} stderr={err!r} last={last_err!r}"
+                )
+        err = proc.stderr.read() if proc.stderr else ""
+        raise AssertionError(f"server did not become ready. last={last_err!r} stderr={err!r}")
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()

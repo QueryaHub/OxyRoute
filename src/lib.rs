@@ -10,6 +10,7 @@ use serde_json::json;
 
 mod buffer_pool;
 mod config;
+mod cors;
 mod db;
 mod dependency;
 mod dispatch;
@@ -18,6 +19,7 @@ mod params;
 mod rate_limit;
 mod response;
 mod schema;
+mod security_headers;
 mod state;
 mod token;
 mod websocket;
@@ -31,7 +33,10 @@ pub mod microbench {
     use matchit::Router;
     use pyo3::prelude::*;
 
-    pub use crate::schema::json_to_py;
+    pub use crate::params::header_get_lax;
+    pub use crate::schema::{
+        json_bytes_to_py, json_to_py, py_to_json_bytes, py_to_json_bytes_or_fallback,
+    };
     pub use crate::state::{match_route_compiled, CompiledRouters};
 
     /// Build a compiled GET router with one static and one param route for matching benches.
@@ -86,6 +91,53 @@ fn handler_signature_kinds(
         .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("handler _w"))?
         .extract()?;
     Ok((names, w))
+}
+
+/// Names of `*name` catch-all path params in a matchit-style route template (as opposed to
+/// single-segment `:name` params). See [`state::RouteExtra::wildcard_params`].
+fn wildcard_param_names(path: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let chars: Vec<char> = path.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '*' {
+            i += 1;
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let name: String = chars[start..i].iter().collect();
+            if !name.is_empty() {
+                out.insert(name);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// All parameter names (`:name` and `*name`) declared in a matchit-style route template.
+fn all_path_param_names(path: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let chars: Vec<char> = path.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == ':' || chars[i] == '*' {
+            i += 1;
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            let name: String = chars[start..i].iter().collect();
+            if !name.is_empty() {
+                out.insert(name);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 fn parse_algorithm(s: &str) -> PyResult<jsonwebtoken::Algorithm> {
@@ -150,6 +202,8 @@ fn dependency_wants_request(py: Python<'_>, f: &Bound<'_, PyAny>) -> PyResult<bo
 #[pyclass]
 pub struct App {
     state: Arc<RwLock<AppState>>,
+    in_flight: Arc<std::sync::atomic::AtomicUsize>,
+    max_concurrency: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl App {
@@ -301,28 +355,29 @@ impl App {
     fn new(include_openapi: bool) -> Self {
         let mut s = AppState::new();
         s.include_openapi = include_openapi;
+        let in_flight = Arc::clone(&s.in_flight);
+        let max_concurrency = Arc::clone(&s.max_concurrency);
         Self {
             state: Arc::new(RwLock::new(s)),
+            in_flight,
+            max_concurrency,
         }
     }
 
     fn set_max_concurrency(&self, limit: usize) -> PyResult<()> {
-        let st = self.state.read();
-        st.max_concurrency
+        self.max_concurrency
             .store(limit, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
     fn get_max_concurrency(&self) -> PyResult<usize> {
-        let st = self.state.read();
-        Ok(st
+        Ok(self
             .max_concurrency
             .load(std::sync::atomic::Ordering::Relaxed))
     }
 
     fn get_in_flight(&self) -> PyResult<usize> {
-        let st = self.state.read();
-        Ok(st.in_flight.load(std::sync::atomic::Ordering::Relaxed))
+        Ok(self.in_flight.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Notify all active WebSocket connections with a close status code (default: 1001 Going Away).
@@ -457,13 +512,21 @@ impl App {
             .getattr(pyo3::intern!(py, "__name__"))?
             .extract()?;
         let (handler_param_names, handler_varkw) = handler_signature_kinds(py, handler.bind(py))?;
+        let path_params = all_path_param_names(&path);
+        let reserved_names = [
+            "query", "request", "scope", "proto", "protocol", "body", "form", "files", "claims",
+        ];
+        let has_reserved = handler_param_names
+            .iter()
+            .any(|n| reserved_names.contains(&n.as_str()));
+        let params_compatible =
+            !handler_varkw && !has_reserved && handler_param_names == path_params;
         let trivial_sync = !is_async
             && !require_jwt
             && !read_json_body
             && !read_form_body
             && dependencies.is_empty()
-            && !handler_varkw
-            && handler_param_names.is_empty()
+            && params_compatible
             && !has_rate_limit;
         let mut st = self.state.write();
         let routes = Arc::make_mut(&mut st.routes);
@@ -477,6 +540,7 @@ impl App {
             handler_param_names: Arc::new(handler_param_names),
             body_param_name: body_param_name.unwrap_or_else(|| "json".to_string()),
             rate_limiter,
+            wildcard_params: Arc::new(wildcard_param_names(&path)),
         });
         routes.push(state::RouteEntry {
             handler,
@@ -552,11 +616,13 @@ impl App {
     /// Register a WebSocket route. ``handler`` receives a single
     /// :class:`oxyroute._oxyroute.WebSocket` argument; sync handlers run inline, async
     /// handlers are awaited on Granian's loop. Same matchit ``/ws/:room`` syntax as HTTP routes.
+    #[pyo3(signature = (path, handler, allowed_origins=None))]
     fn add_websocket_route(
         &self,
         py: Python<'_>,
         path: String,
         handler: Py<PyAny>,
+        allowed_origins: Option<Vec<String>>,
     ) -> PyResult<()> {
         {
             let st = self.state.read();
@@ -572,7 +638,11 @@ impl App {
         let mut st = self.state.write();
         let ws_routes = Arc::make_mut(&mut st.websocket_routes);
         let idx = ws_routes.len();
-        ws_routes.push(state::WebsocketRoute { handler, is_async });
+        ws_routes.push(state::WebsocketRoute {
+            handler,
+            is_async,
+            allowed_origins,
+        });
         {
             let mut m = st.websocket.lock();
             m.insert(&path, idx)
@@ -716,8 +786,26 @@ impl App {
 
     /// Optional Python CORS config with ``response_header_pairs(scope)`` (see ``oxyroute.cors``).
     fn set_cors(&self, config: Option<Py<PyAny>>) -> PyResult<()> {
+        let compiled = if let Some(ref c) = config {
+            Python::with_gil(|py| {
+                let bound = c.bind(py);
+                if bound
+                    .get_type()
+                    .name()
+                    .map(|n| n == "CORSConfig")
+                    .unwrap_or(false)
+                {
+                    cors::CompiledCorsConfig::from_py(bound).ok().map(Arc::new)
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
         let mut st = self.state.write();
         st.cors = config;
+        st.compiled_cors = compiled;
         st.rebuild_snapshot();
         Ok(())
     }
@@ -725,8 +813,28 @@ impl App {
     /// Optional security-headers preset; ``response_header_pairs(scope)`` (see
     /// ``oxyroute.security_headers``), merged only for header names not already on the response.
     fn set_security_headers(&self, config: Option<Py<PyAny>>) -> PyResult<()> {
+        let compiled = if let Some(ref c) = config {
+            Python::with_gil(|py| {
+                let bound = c.bind(py);
+                if bound
+                    .get_type()
+                    .name()
+                    .map(|n| n == "SecurityHeadersConfig")
+                    .unwrap_or(false)
+                {
+                    security_headers::CompiledSecurityHeadersConfig::from_py(bound)
+                        .ok()
+                        .map(Arc::new)
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
         let mut st = self.state.write();
         st.security_headers = config;
+        st.compiled_security_headers = compiled;
         st.rebuild_snapshot();
         Ok(())
     }
@@ -748,9 +856,14 @@ impl App {
                 .map_err(|e| {
                     pyo3::exceptions::PyRuntimeError::new_err(format!("DB connect error: {}", e))
                 })?;
-            let mut st = state.write();
-            st.db_pool = Some(pool);
-            st.rebuild_snapshot();
+            // GIL before the write lock (see the comment on `ensure_compiled_snapshot` in
+            // dispatch.rs / issue #205): this future runs on a tokio worker thread without
+            // the GIL, and `rebuild_snapshot` needs it to clone `Py<PyAny>` handles.
+            Python::with_gil(|_py| {
+                let mut st = state.write();
+                st.db_pool = Some(pool);
+                st.rebuild_snapshot();
+            });
             Ok(())
         })
     }
@@ -759,12 +872,12 @@ impl App {
     fn close_database<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let state = self.state.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let pool = {
+            let pool = Python::with_gil(|_py| {
                 let mut st = state.write();
                 let p = st.db_pool.take();
                 st.rebuild_snapshot();
                 p
-            };
+            });
             if let Some(p) = pool {
                 p.close().await;
             }
@@ -778,18 +891,16 @@ impl App {
         scope: &Bound<'py, PyAny>,
         protocol: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        let (in_flight, max_c) = {
-            let st = this.state.read();
-            (
-                Arc::clone(&st.in_flight),
-                st.max_concurrency
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            )
-        };
+        let max_c = this
+            .max_concurrency
+            .load(std::sync::atomic::Ordering::Relaxed);
         if max_c > 0 {
-            let current = in_flight.fetch_add(1, std::sync::atomic::Ordering::Acquire);
+            let current = this
+                .in_flight
+                .fetch_add(1, std::sync::atomic::Ordering::Acquire);
             if current >= max_c {
-                in_flight.fetch_sub(1, std::sync::atomic::Ordering::Release);
+                this.in_flight
+                    .fetch_sub(1, std::sync::atomic::Ordering::Release);
                 let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
                 let headers = vec![
                     (
@@ -808,11 +919,15 @@ impl App {
                 return Ok(py.None().into_bound(py));
             }
         } else {
-            in_flight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            this.in_flight
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        let guard = InFlightGuard(in_flight);
+        let guard = InFlightGuard(Arc::clone(&this.in_flight));
 
-        if let Some(obj) = try_rsgi_sync_short_circuit(py, &this.state, scope, protocol)? {
+        let snapshot = this.state.read().hot_snapshot();
+
+        if let Some(obj) = try_rsgi_sync_short_circuit(py, &this.state, &snapshot, scope, protocol)?
+        {
             drop(guard);
             return Ok(obj.into_bound(py));
         }
@@ -821,7 +936,7 @@ impl App {
         let protocol_py: Py<PyAny> = protocol.as_any().clone().unbind();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let _guard = guard;
-            run_rsgi(state, scope_py, protocol_py).await
+            run_rsgi(state, snapshot, scope_py, protocol_py).await
         })
     }
 
