@@ -48,9 +48,39 @@ class _ProtocolWrapper:
         self.status = status
         self._inner.response_file(status, headers, file_path)
 
+    def response_file_range(
+        self,
+        status: int,
+        headers: list[tuple[str, str]],
+        file_path: str,
+        offset: int,
+        count: int,
+    ) -> None:
+        self.status = status
+        self._inner.response_file_range(status, headers, file_path, offset, count)
+
     def response_stream(self, status: int, headers: list[tuple[str, str]]) -> Any:
         self.status = status
         return self._inner.response_stream(status, headers)
+
+    def accept(self, *args: Any, **kwargs: Any) -> Any:
+        self.status = 101
+        return self._inner.accept(*args, **kwargs)
+
+    def close(self, *args: Any, **kwargs: Any) -> Any:
+        return self._inner.close(*args, **kwargs)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self._inner(*args, **kwargs)
+
+    def __aiter__(self) -> Any:
+        return self._inner.__aiter__()
+
+    def __anext__(self) -> Any:
+        return self._inner.__anext__()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
 
 
 def _norm_dependencies(
