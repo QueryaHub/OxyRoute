@@ -30,7 +30,9 @@ pub fn extract_cookie_value(raw: &str, name: &str) -> Option<String> {
         if part.is_empty() {
             continue;
         }
-        let (k, v) = part.split_once('=')?;
+        let Some((k, v)) = part.split_once('=') else {
+            continue;
+        };
         if k.trim() != name {
             continue;
         }
@@ -307,5 +309,17 @@ mod tests {
         assert_eq!(extract_bearer(Some("Bearer")), None);
         assert_eq!(extract_bearer(Some("")), None);
         assert_eq!(extract_bearer(None), None);
+    }
+
+    #[test]
+    fn extract_cookie_malformed_pairs_ignored() {
+        assert_eq!(
+            extract_cookie_value(
+                "stray_flag; malformed; ; token=valid; flag2; another=foo",
+                "token"
+            )
+            .as_deref(),
+            Some("valid")
+        );
     }
 }
