@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::RwLock;
 
@@ -26,6 +27,19 @@ mod websocket;
 
 use dispatch::{run_rsgi, try_rsgi_sync_short_circuit};
 use state::AppState;
+
+/// Convert a Python float of seconds to a `Duration`, rejecting values that would panic
+/// (negative, NaN, infinite or too large).
+fn secs_to_duration(name: &str, value: f64) -> PyResult<Duration> {
+    if !value.is_finite() || value < 0.0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "{name} must be a finite number >= 0, got {value}"
+        )));
+    }
+    Duration::try_from_secs_f64(value).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(format!("{name} is too large: {value}"))
+    })
+}
 
 /// Hidden Criterion / microbench surface (issue #110). Not part of the stable Python API.
 #[doc(hidden)]
@@ -840,17 +854,37 @@ impl App {
     }
 
     /// Connect to a PostgreSQL database and store the pool in `AppState`.
-    #[pyo3(signature = (url, max_connections=10))]
+    #[pyo3(signature = (
+        url,
+        max_connections=10,
+        *,
+        min_connections=1,
+        acquire_timeout_secs=3.0,
+        idle_timeout_secs=600.0,
+        max_lifetime_secs=1800.0
+    ))]
+    #[allow(clippy::too_many_arguments)]
     fn setup_database<'py>(
         &self,
         py: Python<'py>,
         url: String,
         max_connections: u32,
+        min_connections: u32,
+        acquire_timeout_secs: f64,
+        idle_timeout_secs: f64,
+        max_lifetime_secs: f64,
     ) -> PyResult<Bound<'py, PyAny>> {
+        let acquire_timeout = secs_to_duration("acquire_timeout_secs", acquire_timeout_secs)?;
+        let idle_timeout = secs_to_duration("idle_timeout_secs", idle_timeout_secs)?;
+        let max_lifetime = secs_to_duration("max_lifetime_secs", max_lifetime_secs)?;
         let state = self.state.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let pool = sqlx::postgres::PgPoolOptions::new()
                 .max_connections(max_connections)
+                .min_connections(min_connections)
+                .acquire_timeout(acquire_timeout)
+                .idle_timeout(idle_timeout)
+                .max_lifetime(max_lifetime)
                 .connect(&url)
                 .await
                 .map_err(|e| {

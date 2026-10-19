@@ -90,6 +90,10 @@ async def startup():
     await app.setup_database(
         "postgresql://user:password@localhost:5432/dbname",
         max_connections=20,
+        min_connections=2,        # connections kept open
+        acquire_timeout_secs=10,  # give up waiting for a free connection after 10 s
+        idle_timeout_secs=300,    # close connections idle for 5 minutes
+        max_lifetime_secs=1800,   # recycle connections after 30 minutes
     )
 
 @app.on_shutdown
